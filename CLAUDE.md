@@ -36,7 +36,18 @@
 - **Новини/звіти:** GDELT + офіційні RSS центробанків і статслужб
 
 ## Як запустити локально
-(заповнити, коли з'явиться перший робочий scaffold)
+```bash
+cp .env.example .env         # заповнити FRED_API_KEY, DB_*, TELEGRAM_*
+docker compose up -d --build # піднімає TimescaleDB + контейнер застосунку
+                              # (усі Python-залежності вже встановлені в образі,
+                              # venv на хості не потрібен)
+
+docker compose exec app python data-ingestion/apply_schema.py   # (пере)застосувати схему
+docker compose exec app python data-ingestion/run_collect.py --metric cpi
+docker compose exec app python reporting/telegram_notify.py --metric cpi
+docker compose exec app pytest
+```
+Після зміни requirements.txt перезібрати образ: `docker compose up -d --build`.
 
 ## Структура репозиторію
 ```
