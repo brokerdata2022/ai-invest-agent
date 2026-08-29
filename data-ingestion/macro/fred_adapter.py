@@ -27,6 +27,14 @@ METRICS: dict[str, str] = {
     "cpi": "CPIAUCSL",                 # CPI, усі товари, US city average, SA
     "fed_funds_rate": "DFF",           # Effective Federal Funds Rate, щоденна
     "unemployment_rate": "UNRATE",     # Рівень безробіття, US, SA
+    "core_cpi": "CPILFESL",            # CPI без їжі й енергії, US city average, SA
+    "pce_price_index": "PCEPI",        # PCE Price Index — орієнтир інфляції ФРС
+    "nonfarm_payrolls": "PAYEMS",      # Non-Farm Payrolls — найбільш ринково-чутливий звіт США
+    "treasury_10y": "DGS10",           # 10-Year Treasury Constant Maturity Rate, щоденна
+    "treasury_2y": "DGS2",             # 2-Year Treasury Constant Maturity Rate, щоденна
+    "initial_jobless_claims": "ICSA",  # Initial Jobless Claims, щотижнева, SA
+    "real_gdp": "GDPC1",               # Real GDP, квартальна, SAAR
+    "retail_sales": "RSAFS",           # Advance Retail Sales, місячна, SA
 }
 
 # FRED позначає відсутнє значення символом "." — не 0 і не null.

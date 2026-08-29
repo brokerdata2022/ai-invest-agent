@@ -21,8 +21,11 @@
 і побачити результат у БД. Нічого розумного ще не робимо.
 
 ## Фаза 1 — Збір даних (ширина, не глибина)
-- [ ] Макро-дані: 3-5 ключових показників (інфляція, ставки, безробіття, ввп —
-      залежно від ринків, які цікавлять)
+- [x] Макро-дані: 3-5 ключових показників (інфляція, ставки, безробіття, ввп —
+      залежно від ринків, які цікавлять) — CPI, Core CPI, PCE Price Index,
+      Fed Funds Rate, 10Y/2Y Treasury Yield, Unemployment Rate, Non-Farm
+      Payrolls, Initial Jobless Claims, Real GDP, Retail Sales (усі через
+      macro/fred_adapter.py:METRICS)
 - [ ] Дані компаній: звіти (earnings), базові фінансові метрики
 - [ ] Новини: підключення джерела + фільтрація за релевантністю
 - [ ] Календар релізів (коли виходять наступні дані) — це критично для
@@ -89,10 +92,26 @@
   показників для Фази 1+ (макро США/єврозона, компанії, ринок,
   крипто, новини, календар релізів), з позначками що вже зібрано /
   адаптер готовий / ще в плані.
-  **Наступна сесія починає звідси:** розширити
-  macro/fred_adapter.py:METRICS показниками, позначеними "у плані
-  Фази 1" в docs/metrics-catalog.md (Core CPI `CPILFESL`, PCE Price
-  Index `PCEPI`, Non-Farm Payrolls `PAYEMS` — не потребують нового
-  адаптера, тільки нові записи у словнику METRICS і рядки в run_collect
-  тестах/фікстурах за потреби). Далі — окремий адаптер для companies/
-  (SEC EDGAR) або news/ (GDELT), залежно що обереш.
+- 2026-08-29 (сесія 3): Розширено macro/fred_adapter.py:METRICS трьома
+  показниками з плану Фази 1 — Core CPI (`core_cpi` → `CPILFESL`),
+  PCE Price Index (`pce_price_index` → `PCEPI`), Non-Farm Payrolls
+  (`nonfarm_payrolls` → `PAYEMS`). Новий адаптер не знадобився —
+  run_collect.py, тести (test_all_declared_metrics_have_series_id) і
+  Docker-запуск підхоплюють нові metric_id автоматично. Синхронізовано
+  METRIC_LABELS у reporting/telegram_notify.py та статуси в
+  docs/metrics-catalog.md. Усі 13 тестів проходять.
+- 2026-08-29 (сесія 3, продовження): Тим самим способом додано решту
+  показників зі списку макро-США: 10Y/2Y Treasury Yield
+  (`treasury_10y`/`treasury_2y` → `DGS10`/`DGS2` — база для спреду
+  10Y-2Y, індикатор рецесії, сам спред рахуватиме analysis/ у Фазі 2),
+  Initial Jobless Claims (`initial_jobless_claims` → `ICSA`), Real GDP
+  (`real_gdp` → `GDPC1`), Retail Sales (`retail_sales` → `RSAFS`).
+  Синхронізовано METRIC_LABELS і docs/metrics-catalog.md. Усі 13
+  тестів проходять локально (юніт, на фікстурах — без реального
+  виклику FRED API). **Живий прогін (реальний FRED API → TimescaleDB →
+  Telegram) для нових metric_id ще не робився — потребує .env з
+  FRED_API_KEY на машині користувача, наступний крок перед комітом.**
+  **Наступна сесія починає звідси:** після підтвердження живого
+  прогону користувачем — перший новий адаптер поза FRED: `companies/`
+  (SEC EDGAR) або `news/` (GDELT). Обидва вже описані в
+  data-ingestion/CLAUDE.md (таблиця джерел) і docs/decisions.md.

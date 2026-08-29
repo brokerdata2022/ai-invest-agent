@@ -38,6 +38,14 @@ METRIC_LABELS = {
     "cpi": "CPI (інфляція, США)",
     "fed_funds_rate": "Fed Funds Rate",
     "unemployment_rate": "Рівень безробіття (США)",
+    "core_cpi": "Core CPI (без їжі/енергії, США)",
+    "pce_price_index": "PCE Price Index (орієнтир ФРС)",
+    "nonfarm_payrolls": "Non-Farm Payrolls (США)",
+    "treasury_10y": "10Y Treasury Yield (США)",
+    "treasury_2y": "2Y Treasury Yield (США)",
+    "initial_jobless_claims": "Initial Jobless Claims (США)",
+    "real_gdp": "Real GDP (США)",
+    "retail_sales": "Retail Sales (США)",
 }
 
 

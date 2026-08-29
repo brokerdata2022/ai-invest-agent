@@ -17,16 +17,16 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 | Показник | FRED series_id | Частота | Статус |
 |---|---|---|---|
 | CPI (інфляція) | `CPIAUCSL` | місячна | ✅ зібрано (Фаза 0) |
-| Core CPI (без їжі/енергії) | `CPILFESL` | місячна | у плані Фази 1 |
-| PCE Price Index (орієнтир ФРС) | `PCEPI` | місячна | у плані Фази 1 |
+| Core CPI (без їжі/енергії) | `CPILFESL` | місячна | ✅ адаптер готовий (metric_id `core_cpi`) |
+| PCE Price Index (орієнтир ФРС) | `PCEPI` | місячна | ✅ адаптер готовий (metric_id `pce_price_index`) |
 | Fed Funds Rate | `DFF` | щоденна | ✅ адаптер готовий (metric_id `fed_funds_rate`) |
-| 10Y Treasury Yield | `DGS10` | щоденна | у плані |
-| 2Y Treasury Yield | `DGS2` | щоденна | у плані (разом з 10Y — спред 10Y-2Y, індикатор рецесії) |
+| 10Y Treasury Yield | `DGS10` | щоденна | ✅ адаптер готовий (metric_id `treasury_10y`) |
+| 2Y Treasury Yield | `DGS2` | щоденна | ✅ адаптер готовий (metric_id `treasury_2y`, разом з 10Y — спред 10Y-2Y, індикатор рецесії) |
 | Unemployment Rate | `UNRATE` | місячна | ✅ адаптер готовий (metric_id `unemployment_rate`) |
-| Non-Farm Payrolls | `PAYEMS` | місячна | у плані Фази 1 — найбільш ринково-чутливий звіт США |
-| Initial Jobless Claims | `ICSA` | щотижнева | у плані |
-| Real GDP | `GDPC1` | квартальна | у плані |
-| Retail Sales | `RSAFS` | місячна | у плані |
+| Non-Farm Payrolls | `PAYEMS` | місячна | ✅ адаптер готовий (metric_id `nonfarm_payrolls`) |
+| Initial Jobless Claims | `ICSA` | щотижнева | ✅ адаптер готовий (metric_id `initial_jobless_claims`) |
+| Real GDP | `GDPC1` | квартальна | ✅ адаптер готовий (metric_id `real_gdp`) |
+| Retail Sales | `RSAFS` | місячна | ✅ адаптер готовий (metric_id `retail_sales`) |
 | Housing Starts | `HOUST` | місячна | опційно |
 | Mortgage Rates (30Y Fixed) | `MORTGAGE30US` | щотижнева | опційно |
 
@@ -71,7 +71,9 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 бо вона впливає на схему `release_log` (вже є заготовка в `db/schema.sql`).
 
 ---
-**Наступний крок (Фаза 1, старт):** розширити `macro/fred_adapter.py:METRICS`
-показниками, позначеними "у плані Фази 1" вище (Core CPI, PCE Price
-Index, Non-Farm Payrolls) — вони не потребують нового адаптера, тільки
-нові записи в існуючому словнику `METRICS`.
+**Наступний крок (Фаза 1):** усі ключові макропоказники США з цього
+списку (крім опційних Housing Starts / Mortgage Rates) вже в
+`macro/fred_adapter.py:METRICS`. Далі природний наступний крок — перший
+новий адаптер поза FRED: `companies/` (SEC EDGAR, звіти й фундаментал)
+або `news/` (GDELT, новинний потік) — обидва потребують нової логіки
+парсингу (не просто новий запис у словнику), тож це вже інша сесія.
