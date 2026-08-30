@@ -24,8 +24,9 @@
 - [x] Макро-дані: 3-5 ключових показників (інфляція, ставки, безробіття, ввп —
       залежно від ринків, які цікавлять) — CPI, Core CPI, PCE Price Index,
       Fed Funds Rate, 10Y/2Y Treasury Yield, Unemployment Rate, Non-Farm
-      Payrolls, Initial Jobless Claims, Real GDP, Retail Sales (усі через
-      macro/fred_adapter.py:METRICS)
+      Payrolls, Initial Jobless Claims, Real GDP, Retail Sales, Housing
+      Starts, 30Y Mortgage Rate (macro/fred_adapter.py) + HICP, Deposit
+      Facility Rate, Unemployment Rate для єврозони (macro/ecb_adapter.py)
 - [ ] Дані компаній: звіти (earnings), базові фінансові метрики
 - [ ] Новини: підключення джерела + фільтрація за релевантністю
 - [ ] Календар релізів (коли виходять наступні дані) — це критично для
@@ -108,10 +109,95 @@
   (`real_gdp` → `GDPC1`), Retail Sales (`retail_sales` → `RSAFS`).
   Синхронізовано METRIC_LABELS і docs/metrics-catalog.md. Усі 13
   тестів проходять локально (юніт, на фікстурах — без реального
-  виклику FRED API). **Живий прогін (реальний FRED API → TimescaleDB →
-  Telegram) для нових metric_id ще не робився — потребує .env з
-  FRED_API_KEY на машині користувача, наступний крок перед комітом.**
+  виклику FRED API).
+- 2026-08-29 (сесія 3, завершення US-макро): Додано останні два
+  опційні показники — Housing Starts (`housing_starts` → `HOUST`),
+  30Y Fixed Mortgage Rate (`mortgage_rate_30y` → `MORTGAGE30US`).
+  Макро — США тепер повністю закрито: 13 показників у
+  macro/fred_adapter.py:METRICS. Живий прогін усіх нових metric_id
+  проти реального FRED API/TimescaleDB/Telegram підтверджено
+  користувачем локально — усе ОК.
+- 2026-08-29 (сесія 4): Перший новий адаптер поза FRED —
+  `macro/ecb_adapter.py` (ECB Data Portal, колишній SDW). Формат
+  `csvdata` замість SDMX-JSON (простіший normalize()). Три показники
+  єврозони: `eurozone_hicp` (ICP/M.U2.N.000000.4.ANR, аналог CPI),
+  `eurozone_deposit_rate` (FM/D.U2.EUR.4F.KR.DFR.LEV, аналог Fed Funds
+  Rate), `eurozone_unemployment_rate` (STS/M.I8.S.UNEH.RTT000.4.000).
+  API-ключ не потрібен (на відміну від FRED). Серії ідентифікуються
+  парою flowRef+seriesKey (не одним series_id, як у FRED) —
+  METRICS тут dict[str, tuple[str, str]]. run_collect.py узагальнено
+  до реєстру ADAPTERS (fred/ecb) з автовизначенням джерела за
+  metric_id; той самий підхід у reporting/telegram_notify.py
+  (_METRIC_SOURCE) — виправлено баг: --source мав default="fred"
+  жорстко, що зламало б sourced-запити для ecb-метрик. requests уже
+  був у requirements.txt — нової залежності й ребілду образу не
+  знадобилось. Додано docs/metrics-catalog.md розділ "Макро — Азія"
+  (у плані, джерела по країнах ще не досліджені — Японія/e-Stat,BOJ;
+  Китай/NBS,PBOC; Індія/MOSPI,RBI). Юніт-тести (7 нових для ECB) усі
+  проходять локально на фікстурі `tests/fixtures/ecb_hicp_response.csv`
+  — **живий прогін проти реального ECB API ще не робився**, потрібен
+  наступний крок перед комітом (ECB не потребує .env-ключа, тож
+  досить `docker compose exec app python data-ingestion/run_collect.py
+  --metric eurozone_hicp`).
   **Наступна сесія починає звідси:** після підтвердження живого
-  прогону користувачем — перший новий адаптер поза FRED: `companies/`
-  (SEC EDGAR) або `news/` (GDELT). Обидва вже описані в
-  data-ingestion/CLAUDE.md (таблиця джерел) і docs/decisions.md.
+  прогону ECB користувачем — Макро — Азія (спершу дослідження джерел
+  по кожній країні окремо через web_search, як робилось для ECB, бо
+  єдиного порталу з SDMX API для всієї Азії немає) або перший
+  адаптер поза макро: `companies/` (SEC EDGAR) чи `news/` (GDELT).
+- 2026-08-29 (сесія 4, виправлення після живого тесту): Живий прогін
+  eurozone_hicp/eurozone_deposit_rate виявив дві помилки:
+  1) забув додати рядок `('ecb', ...)` у seed `sources` у
+     db/schema.sql — FK violation при INSERT у raw_observations.
+     Виправлено (apply_schema.py безпечно перезапускати — ON CONFLICT
+     DO NOTHING). **Урок на майбутнє: кожне нове джерело (не тільки
+     новий metric_id) вимагає рядка в sources — інакше 1-й же live
+     insert падає з ForeignKeyViolation, юніт-тести цього не ловлять,
+     бо не торкаються БД.**
+  2) `eurozone_unemployment_rate` мав неправильний series key —
+     `STS.M.I8.S.UNEH.RTT000.4.000` (застарілий, датасет STS
+     перейменовано/перенесено) повертав 404. Правильний, перевірений
+     через web_search проти реальних цифр Eurostat (6.1-6.3% за
+     2025-2026): `LFSI.M.U2.S.UNEHRT.TOTAL0.15_74.T` (dataflow LFSI —
+     Labour Force Survey Indicators). **Урок: для ECB (на відміну від
+     FRED, де series_id перевірявся по факту роботи) варто
+     верифікувати кожен series key живим запитом (напр. web_fetch)
+     ДО того, як віддавати користувачу на live-тест, а не покладатись
+     на непрямі джерела (R-пакети/статті) без перевірки актуальності.**
+  Обидві правки — тільки локальні дані/код, ще не підтверджені живим
+  прогоном користувача. **Наступна сесія починає звідси:** дочекатись
+  підтвердження (`apply_schema.py` + всі 3 eurozone_* metric_id), тоді
+  Макро — Азія або companies/news.
+- 2026-08-29 (сесія 4, підтверджено): Живий прогін після виправлень —
+  `apply_schema.py` (sources отримав `ecb`), усі 20 тестів, і всі 3
+  eurozone_* metric_id (hicp, deposit_rate, unemployment_rate) успішно
+  записались у raw_observations. Макро — єврозона повністю закрито.
+  **Наступна сесія починає звідси:** Макро — Азія (дослідження джерел
+  по кожній країні окремо, немає єдиного SDMX-порталу як FRED/ECB —
+  Японія/e-Stat,BOJ; Китай/NBS,PBOC; Індія/MOSPI,RBI) або перший
+  адаптер поза макро: `companies/` (SEC EDGAR) чи `news/` (GDELT).
+- 2026-08-30 (сесія 5): Користувач повідомив, що `eurozone_hicp`
+  повертав застарілі дані (грудень 2025, при тому що реально
+  опубліковано вже за липень 2026). Причина — не баг коду: ECB
+  офіційно закрив датасет `ICP` 4 лютого 2026 (методологічна реформа
+  Eurostat — COICOP v2, база 2025=100, Болгарія в складі єврозони з
+  1 січня 2026) і замінив його новим датасетом `HICP` з іншим кодом
+  інституції в ключі серії (`4` → `4D0`). Запит до старого flowRef не
+  падав з помилкою — просто мовчки не отримував нових спостережень.
+  Виправлено: `eurozone_hicp` тепер `HICP.M.U2.N.000000.4D0.ANR`
+  (перевірено живим пошуком проти офіційних цифр Eurostat). Повний
+  урок і чому "перевірено живим запитом раніше" цього разу не
+  врятувало — docs/decisions.md, запис 2026-08-30.
+  Також: (1) прибрано зайву дубльовану теку `analysis ` (з пробілом
+  у назві, точна копія `analysis/CLAUDE.md`) — артефакт помилки в
+  одному з попередніх архівів; (2) написано повний README.md з нуля
+  (раніше — тільки заголовок): вимоги, покрокове розгортання на
+  новому ПК/сервері, щоденні команди, перевірка БД напряму, повне
+  перезбирання з `docker compose down -v` (з попередженням і
+  командою для дампу перед видаленням volume), усунення проблем.
+  Live-тест виправленого eurozone_hicp користувачем ще не підтверджено
+  — заплановано разом із повним перезбиранням Docker (`down -v` +
+  `up -d --build`), бо користувач підозрює проблему з застарілим
+  станом Docker-БД (не підтверджено діагностикою, але це безпечна дія).
+  **Наступна сесія починає звідси:** дочекатись підтвердження після
+  перезбирання (усі 3 eurozone_* + US-метрики мають зʼявитись у БД
+  заново), тоді Макро — Азія або companies/news.

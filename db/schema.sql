@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS release_log (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Перше зареєстроване джерело.
+-- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
-    ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)')
+    ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),
+    ('ecb', 'macro', 'official_primary', 'ECB Data Portal (колишній SDW), єврозона')
 ON CONFLICT (name) DO NOTHING;

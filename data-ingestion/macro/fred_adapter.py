@@ -35,6 +35,8 @@ METRICS: dict[str, str] = {
     "initial_jobless_claims": "ICSA",  # Initial Jobless Claims, щотижнева, SA
     "real_gdp": "GDPC1",               # Real GDP, квартальна, SAAR
     "retail_sales": "RSAFS",           # Advance Retail Sales, місячна, SA
+    "housing_starts": "HOUST",         # Housing Starts, місячна, SAAR
+    "mortgage_rate_30y": "MORTGAGE30US",  # 30-Year Fixed Rate Mortgage Average, щотижнева
 }
 
 # FRED позначає відсутнє значення символом "." — не 0 і не null.

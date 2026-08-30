@@ -27,16 +27,36 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 | Initial Jobless Claims | `ICSA` | щотижнева | ✅ адаптер готовий (metric_id `initial_jobless_claims`) |
 | Real GDP | `GDPC1` | квартальна | ✅ адаптер готовий (metric_id `real_gdp`) |
 | Retail Sales | `RSAFS` | місячна | ✅ адаптер готовий (metric_id `retail_sales`) |
-| Housing Starts | `HOUST` | місячна | опційно |
-| Mortgage Rates (30Y Fixed) | `MORTGAGE30US` | щотижнева | опційно |
+| Housing Starts | `HOUST` | місячна | ✅ адаптер готовий (metric_id `housing_starts`) |
+| Mortgage Rates (30Y Fixed) | `MORTGAGE30US` | щотижнева | ✅ адаптер готовий (metric_id `mortgage_rate_30y`) |
 
-## Макро — єврозона (джерело: ECB SDW, окремий адаптер — ще не написаний)
+## Макро — єврозона (джерело: ECB Data Portal, адаптер уже є — `macro/ecb_adapter.py`)
 
-| Показник | Аналог до США |
-|---|---|
-| HICP | CPI |
-| Deposit Facility Rate | Fed Funds Rate |
-| Unemployment Rate | Unemployment Rate |
+| Показник | ECB flowRef.seriesKey | Частота | Статус |
+|---|---|---|---|
+| HICP (аналог CPI) | `HICP.M.U2.N.000000.4D0.ANR` | місячна | ✅ адаптер готовий (metric_id `eurozone_hicp`; датасет `ICP` закрито ECB 4 лют. 2026, замінено на `HICP`) |
+| Deposit Facility Rate (аналог Fed Funds Rate) | `FM.D.U2.EUR.4F.KR.DFR.LEV` | щоденна | ✅ адаптер готовий (metric_id `eurozone_deposit_rate`) |
+| Unemployment Rate | `LFSI.M.U2.S.UNEHRT.TOTAL0.15_74.T` | місячна | ✅ адаптер готовий (metric_id `eurozone_unemployment_rate`) |
+
+## Макро — Азія (джерело — TBD, окремий адаптер, у плані)
+
+Другий за важливістю регіон після США й єврозони. Точні джерела ще
+не досліджені (на відміну від FRED/ECB, єдиного офіційного порталу з
+SDMX/REST API для всієї Азії немає — імовірно, окремо по країнах).
+Орієнтир для наступної сесії:
+
+| Показник | Країна | Ймовірне джерело | Статус |
+|---|---|---|---|
+| CPI (інфляція) | Японія | e-Stat (Statistics Japan) або BOJ | у плані |
+| Policy Rate | Японія | Bank of Japan (BOJ) Time-Series Data Search | у плані |
+| CPI (інфляція) | Китай | NBS (National Bureau of Statistics) | у плані |
+| Policy Rate (LPR) | Китай | PBOC (People's Bank of China) | у плані |
+| CPI (інфляція) | Індія | MOSPI / RBI | у плані |
+| Policy Rate (Repo Rate) | Індія | RBI (Reserve Bank of India) | у плані |
+
+Перед написанням адаптера — окрема сесія на дослідження API кожної
+країни (формат відповіді, потреба в ключі, ліміти), за тим самим
+принципом, що й для ECB: `web_search` для series_id/API перед кодом.
 
 ## Випереджаючі індикатори (джерело — TBD, не в FRED напряму)
 
@@ -71,9 +91,8 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 бо вона впливає на схему `release_log` (вже є заготовка в `db/schema.sql`).
 
 ---
-**Наступний крок (Фаза 1):** усі ключові макропоказники США з цього
-списку (крім опційних Housing Starts / Mortgage Rates) вже в
-`macro/fred_adapter.py:METRICS`. Далі природний наступний крок — перший
-новий адаптер поза FRED: `companies/` (SEC EDGAR, звіти й фундаментал)
-або `news/` (GDELT, новинний потік) — обидва потребують нової логіки
-парсингу (не просто новий запис у словнику), тож це вже інша сесія.
+**Наступний крок (Фаза 1):** Макро — США і Макро — єврозона повністю
+закрито (13 + 3 показники, `macro/fred_adapter.py` +
+`macro/ecb_adapter.py`). Далі — Макро — Азія (потребує дослідження
+джерел по кожній країні окремо, на відміну від FRED/ECB) або перший
+адаптер поза макро: `companies/` (SEC EDGAR) чи `news/` (GDELT).

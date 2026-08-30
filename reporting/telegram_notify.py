@@ -46,6 +46,25 @@ METRIC_LABELS = {
     "initial_jobless_claims": "Initial Jobless Claims (США)",
     "real_gdp": "Real GDP (США)",
     "retail_sales": "Retail Sales (США)",
+    "housing_starts": "Housing Starts (США)",
+    "mortgage_rate_30y": "30Y Fixed Mortgage Rate (США)",
+    "eurozone_hicp": "HICP (інфляція, єврозона)",
+    "eurozone_deposit_rate": "Deposit Facility Rate (єврозона)",
+    "eurozone_unemployment_rate": "Рівень безробіття (єврозона)",
+}
+
+# metric_id → джерело, для автовизначення --source, якщо не задано явно.
+# Дублює розподіл із data-ingestion/run_collect.py:ADAPTERS — тримаємо
+# тут окремо (без прямого імпорту), бо reporting/ і data-ingestion/ —
+# незалежні контейнери/деплойменти (див. reporting/CLAUDE.md).
+_METRIC_SOURCE = {
+    "cpi": "fred", "fed_funds_rate": "fred", "unemployment_rate": "fred",
+    "core_cpi": "fred", "pce_price_index": "fred", "nonfarm_payrolls": "fred",
+    "treasury_10y": "fred", "treasury_2y": "fred", "initial_jobless_claims": "fred",
+    "real_gdp": "fred", "retail_sales": "fred", "housing_starts": "fred",
+    "mortgage_rate_30y": "fred",
+    "eurozone_hicp": "ecb", "eurozone_deposit_rate": "ecb",
+    "eurozone_unemployment_rate": "ecb",
 }
 
 
@@ -72,8 +91,20 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metric", required=True, help="metric_id, напр. cpi")
-    parser.add_argument("--source", default="fred", help="за замовчуванням fred")
+    parser.add_argument(
+        "--source", default=None,
+        help="за замовчуванням визначається автоматично за --metric",
+    )
     args = parser.parse_args()
+
+    source = args.source or _METRIC_SOURCE.get(args.metric)
+    if source is None:
+        logger.error(
+            "Невідомий metric_id %r і --source не задано явно. "
+            "Додайте metric_id у _METRIC_SOURCE або вкажіть --source.",
+            args.metric,
+        )
+        sys.exit(1)
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -85,7 +116,7 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        row = fetch_latest(conn, source=args.source, metric_id=args.metric)
+        row = fetch_latest(conn, source=source, metric_id=args.metric)
     finally:
         conn.close()
 
@@ -93,7 +124,7 @@ def main() -> None:
         logger.warning(
             "Немає даних для %s/%s — спершу запустіть "
             "data-ingestion/run_collect.py --metric %s",
-            args.source, args.metric, args.metric,
+            source, args.metric, args.metric,
         )
         sys.exit(1)
 
