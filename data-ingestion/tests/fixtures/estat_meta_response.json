@@ -7,6 +7,15 @@
       "CLASS_INF": {
         "CLASS_OBJ": [
           {
+            "@id": "tab",
+            "@name": "表章項目",
+            "CLASS": [
+              {"@code": "01", "@name": "指数", "@level": "1"},
+              {"@code": "02", "@name": "前年同月比", "@level": "1"},
+              {"@code": "03", "@name": "前月比", "@level": "1"}
+            ]
+          },
+          {
             "@id": "cat01",
             "@name": "類・品目",
             "CLASS": [

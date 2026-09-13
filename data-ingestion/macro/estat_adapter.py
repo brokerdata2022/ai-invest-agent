@@ -16,19 +16,27 @@ docs/decisions.md, запис про базову ревізію Японія CP
 
 ЧОМУ ДВА МЕРЕЖЕВІ ВИКЛИКИ В fetch(): на відміну від FRED/ECB/BOJ, де
 код серії відомий заздалегідь, e-Stat ідентифікує зріз даних кодами
-класифікації (area = регіон, cat01 = стаття витрат), які видаються
-разом із самими даними як метадані (CLASS_INF), а не документовані
-окремо у зручному вигляді. Тому:
+класифікації, які видаються разом із самими даними як метадані
+(CLASS_INF), а не документовані окремо у зручному вигляді. Тому:
   1) невеликий запит (limit=1, metaGetFlg=Y) — тільки щоб отримати
-     CLASS_INF і по ньому знайти код "全国" (національний) в area та
-     код "総合" (усі товари) в cat01;
-  2) основний запит уже з конкретними cdArea/cdCat01 — компактна
-     відповідь тільки з потрібним рядом.
-Це захищає від жорсткого хардкоду кодів класифікації, які не вдалось
-підтвердити заздалегідь (мережа пісочниці Claude не мала доступу до
-e-stat.go.jp) — і які теоретично можуть відрізнятись між
-statsDataId. Перед першим комітом обов'язково звірити результат
-живим запитом (той самий протокол, що й для BOJ/ECB).
+     CLASS_INF і по ньому резолвити код кожного виміру таблиці (area,
+     cat01, tab, ...) окрім time;
+  2) основний запит уже з конкретними cdArea/cdCat01/cdTab/... —
+     компактна відповідь тільки з потрібним рядом.
+
+ВИПРАВЛЕНО 2026-09-13 (живі дані): перша версія резолвила тільки
+area/cat01 і ігнорувала вимір `tab`. Виявилось, що ця таблиця CPI
+публікує кілька рядків на кожен місяць під різними кодами `tab` —
+сам індекс (~101.5) окремо від %-змін м/м і р/р (~0.5, ~1.9) — як
+ОКРЕМІ значення в тій самій таблиці, не варіанти того самого числа.
+Без фільтрації за tab усі три потрапляли під один metric_id і
+перезаписували одне одного як фальшиві "ревізії" в raw_observations.
+Деталі — docs/decisions.md. Тепер `_resolve_dimensions()` резолвить
+УСІ виміри з кількома можливими значеннями (не тільки area/cat01),
+використовуючи `_DIMENSION_PREFERENCES` для людинозрозумілого вибору
+потрібного варіанту; невідомий вимір з кількома значеннями, для якого
+немає запису в `_DIMENSION_PREFERENCES`, явно кидає ValueError
+замість мовчазного змішування даних.
 """
 
 import logging
@@ -57,6 +65,20 @@ METRICS: dict[str, str] = {
 # відрізнятись між таблицями/базовими роками.
 _NATIONAL_AREA_NAME = "全国"
 _ALL_ITEMS_CAT_NAME = "総合"
+_INDEX_TAB_NAME = "指数"  # сам рівень індексу, а не %-зміни (前年同月比/前月比)
+
+# Для кожного виміру CLASS_INF (крім "time", якого не резолвимо тут),
+# у якого таблиця пропонує БІЛЬШЕ ОДНОГО значення, потрібне явно
+# вказане людинозрозуміле ім'я потрібного варіанту — інакше e-Stat
+# поверне ВСІ варіанти під одним metric_id, і вони перезапишуть одне
+# одного як фальшиві "ревізії" (саме так виявили баг 2026-09-13).
+# Якщо з'явиться новий вимір із кількома значеннями, якого тут нема —
+# _resolve_dimensions() свідомо кине ValueError, а не вгадуватиме.
+_DIMENSION_PREFERENCES: dict[str, str] = {
+    "area": _NATIONAL_AREA_NAME,
+    "cat01": _ALL_ITEMS_CAT_NAME,
+    "tab": _INDEX_TAB_NAME,
+}
 
 _TIME_PATTERNS = (
     re.compile(r"(\d{4})年(\d{1,2})月"),  # "2026年07月" → місячний
@@ -140,9 +162,17 @@ class EstatAdapter(BaseAdapter):
         self.stats_data_id = METRICS[metric_id]
         self.session = session or requests.Session()
 
-    def _resolve_area_and_cat01(self) -> tuple[str, str]:
-        """Крок 1: невеликий запит лише за метаданими, щоб знайти коди
-        "全国" (area) і "総合" (cat01) для цього statsDataId."""
+    def _resolve_dimensions(self) -> dict[str, str]:
+        """Крок 1: невеликий запит лише за метаданими; резолвить код
+        КОЖНОГО виміру класифікації цієї таблиці, крім "time".
+
+        Вимір з рівно одним можливим значенням — беремо його без
+        додаткових питань (немає неоднозначності). Вимір з кількома
+        значеннями — резолвимо через `_DIMENSION_PREFERENCES`; якщо
+        такого виміру там нема, кидаємо ValueError з переліком
+        доступних назв замість мовчазного змішування різних величин
+        під одним metric_id (див. докстрінг модуля, випадок 2026-09-13
+        з виміром `tab`)."""
         params = {
             "appId": self.app_id,
             "statsDataId": self.stats_data_id,
@@ -156,20 +186,63 @@ class EstatAdapter(BaseAdapter):
 
         stats_data = payload.get("GET_STATS_DATA", {}).get("STATISTICAL_DATA", {})
         class_inf = stats_data.get("CLASS_INF", {})
+        class_objs = class_inf.get("CLASS_OBJ") if isinstance(class_inf, dict) else None
+        if isinstance(class_objs, dict):
+            class_objs = [class_objs]
+        class_objs = class_objs or []
 
-        area_code = _find_class_code(class_inf, "area", _NATIONAL_AREA_NAME)
-        cat01_code = _find_class_code(class_inf, "cat01", _ALL_ITEMS_CAT_NAME)
+        resolved: dict[str, str] = {}
+        for obj in class_objs:
+            dim_id = obj.get("@id")
+            if not dim_id or dim_id == "time":
+                continue
 
-        if not area_code or not cat01_code:
+            entries = obj.get("CLASS")
+            if isinstance(entries, dict):
+                entries = [entries]
+            entries = entries or []
+            if not entries:
+                continue
+
+            if len(entries) == 1:
+                # Єдине можливе значення — неоднозначності нема.
+                resolved[dim_id] = entries[0].get("@code")
+                continue
+
+            preferred_name = _DIMENSION_PREFERENCES.get(dim_id)
+            if preferred_name is None:
+                available = [e.get("@name") for e in entries]
+                raise ValueError(
+                    f"Таблиця e-Stat statsDataId={self.stats_data_id} має "
+                    f"кілька значень виміру '{dim_id}' {available!r}, але "
+                    f"немає визначеного пріоритету в _DIMENSION_PREFERENCES "
+                    f"(estat_adapter.py). Без явного вибору e-Stat поверне "
+                    f"ВСІ варіанти під одним metric_id і вони переплутаються "
+                    f"між собою. Додайте "
+                    f"_DIMENSION_PREFERENCES['{dim_id}'] = '<точна назва "
+                    f"потрібного варіанту з переліку вище>' і повторіть."
+                )
+
+            code = _find_class_code(class_inf, dim_id, preferred_name)
+            if code is None:
+                available = [e.get("@name") for e in entries]
+                raise ValueError(
+                    f"Не вдалось знайти код '{preferred_name}' у вимірі "
+                    f"'{dim_id}' для statsDataId={self.stats_data_id} "
+                    f"(доступні назви: {available!r})."
+                )
+            resolved[dim_id] = code
+
+        missing_required = [d for d in ("area", "cat01") if d not in resolved]
+        if missing_required:
             raise ValueError(
-                f"Не вдалось знайти код area='{_NATIONAL_AREA_NAME}' і/або "
-                f"cat01='{_ALL_ITEMS_CAT_NAME}' у метаданих e-Stat для "
-                f"statsDataId={self.stats_data_id} (area_code={area_code!r}, "
-                f"cat01_code={cat01_code!r}). Структура класифікації цієї "
-                f"таблиці могла відрізнятись від очікуваної — перевірте "
-                f"вручну через getMetaInfo."
+                f"Очікувані виміри {missing_required!r} відсутні у "
+                f"метаданих e-Stat для statsDataId={self.stats_data_id} "
+                f"(знайдено виміри: {sorted(resolved)!r}). Структура "
+                f"класифікації цієї таблиці могла відрізнятись від "
+                f"очікуваної — перевірте вручну через getMetaInfo."
             )
-        return area_code, cat01_code
+        return resolved
 
     def fetch(
         self,
@@ -177,16 +250,18 @@ class EstatAdapter(BaseAdapter):
         observation_start: Optional[str] = None,
         observation_end: Optional[str] = None,
     ) -> Any:
-        area_code, cat01_code = self._resolve_area_and_cat01()
+        dimensions = self._resolve_dimensions()
 
         params: dict[str, Any] = {
             "appId": self.app_id,
             "statsDataId": self.stats_data_id,
-            "cdArea": area_code,
-            "cdCat01": cat01_code,
             "metaGetFlg": "Y",  # лишаємо Y — normalize() використовує CLASS_INF для дат
             "cntGetFlg": "N",
         }
+        for dim_id, code in dimensions.items():
+            # e-Stat param naming: cd<Dim> у CamelCase, напр. area→cdArea,
+            # cat01→cdCat01, tab→cdTab.
+            params[f"cd{dim_id[0].upper()}{dim_id[1:]}"] = code
         # e-Stat не має limit "останні N" так само зручно, як FRED
         # (limit тут — "перші N рядків результату", не "останні") —
         # тому свідомо не передаємо limit сюди; фільтрація за limit
@@ -198,7 +273,6 @@ class EstatAdapter(BaseAdapter):
 
     def normalize(self, raw_response: Any, limit: Optional[int] = None) -> list[NormalizedRecord]:
         fetched_at = datetime.now(timezone.utc)
-        records: list[NormalizedRecord] = []
 
         stats_data = raw_response.get("GET_STATS_DATA", {}).get("STATISTICAL_DATA", {})
         class_inf = stats_data.get("CLASS_INF", {})
@@ -213,7 +287,17 @@ class EstatAdapter(BaseAdapter):
                 "(statsDataId=%s) — перевірте параметри запиту.",
                 self.metric_id, self.stats_data_id,
             )
-            return records
+            return []
+
+        # dict, а не list: захист від дублікатів на ту саму дату. Якщо
+        # _resolve_dimensions() колись пропустить якийсь вимір із
+        # кількома значеннями (напр. новий tab-код, доданий e-Stat
+        # пізніше), фільтрація на рівні запиту не спрацює — і без цієї
+        # перевірки різні величини (індекс/%-зміна) знову тихо
+        # перезаписували б одна одну як фальшиві "ревізії", як це вже
+        # сталось 2026-09-13 (див. докстрінг модуля).
+        by_date: dict[date, NormalizedRecord] = {}
+        conflicts: dict[date, list[Decimal]] = {}
 
         for entry in values:
             raw_value = entry.get("$")
@@ -239,19 +323,31 @@ class EstatAdapter(BaseAdapter):
                 )
                 continue
 
-            records.append(
-                NormalizedRecord(
-                    source=self.source,
-                    metric_id=self.metric_id,
-                    value=value,
-                    observed_at=observed_at,
-                    fetched_at=fetched_at,
-                    revision=None,
-                    raw_payload=dict(entry),
-                )
+            existing = by_date.get(observed_at)
+            if existing is not None and existing.value != value:
+                conflicts.setdefault(observed_at, [existing.value]).append(value)
+                continue  # залишаємо перше значення, друге ігноруємо
+
+            by_date[observed_at] = NormalizedRecord(
+                source=self.source,
+                metric_id=self.metric_id,
+                value=value,
+                observed_at=observed_at,
+                fetched_at=fetched_at,
+                revision=None,
+                raw_payload=dict(entry),
             )
 
-        records.sort(key=lambda r: r.observed_at)
+        if conflicts:
+            logger.warning(
+                "e-Stat %s: за одну дату знайдено кілька різних значень "
+                "(%s) — залишено перше, решту проігноровано. Це означає, "
+                "що _resolve_dimensions() недостатньо звузила запит; "
+                "перевірте виміри статистичної таблиці вручну.",
+                self.metric_id, conflicts,
+            )
+
+        records = sorted(by_date.values(), key=lambda r: r.observed_at)
         if limit:
             records = records[-limit:]
         return records
