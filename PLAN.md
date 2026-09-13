@@ -201,3 +201,35 @@
   **Наступна сесія починає звідси:** дочекатись підтвердження після
   перезбирання (усі 3 eurozone_* + US-метрики мають зʼявитись у БД
   заново), тоді Макро — Азія або companies/news.
+- 2026-08-30 (сесія 6-7): Macro — Японія. Дослідив джерела: Policy
+  Rate через Bank of Japan Time-Series API (без ключа) —
+  `macro/boj_adapter.py` (metric_id `japan_policy_rate`, db=FM01,
+  код STRDCLUCON). CPI через e-Stat (потрібен `ESTAT_APP_ID`).
+  Користувач підтвердив живий прогін `japan_policy_rate` (5 записів
+  у raw_observations). Користувач прямо вказав: Китай і Індію не
+  розглядаємо взагалі (остаточне рішення, не тимчасове відкладення,
+  зафіксовано в docs/decisions.md). Додано `usdjpy_fx_rate` для
+  carry trade (FRED, DEXJPUS — свідомо не через BOJ FM08, щоб не
+  тримати дві неперевірені структури відповіді одночасно).
+  Користувач додав `ESTAT_APP_ID` у .env → написано
+  `macro/estat_adapter.py` (metric_id `japan_cpi`, statsDataId
+  0004052037, база 2025=100). На відміну від FRED/ECB/BOJ, e-Stat
+  вимагає резолюції кодів area="全国"/cat01="総合" через метадані
+  API (двоетапний fetch — деталі й причина в docs/decisions.md),
+  бо ці коди ніде не задокументовані у зручному вигляді наперед.
+  15 нових тестів на фікстурах (estat), 7 (boj) — усі проходять.
+  **Живий тест e-Stat ще не робився** (мережа пісочниці Claude не
+  має доступу до e-stat.go.jp) — `_resolve_area_and_cat01()` кине
+  зрозумілу ValueError, якщо коди не знайдені, замість тихого
+  провалу.
+  Також додано `data-ingestion/collect_all.py` — перезбір усіх
+  метрик за один запуск (потрібно було, бо БД спорожніла після
+  `docker compose down -v` з сесії 5).
+  **Наступна сесія починає звідси:** (1) `docker compose exec app
+  python data-ingestion/apply_schema.py` (додасть джерела boj/estat
+  у sources); (2) `docker compose exec app python
+  data-ingestion/collect_all.py` — перезбере все одразу, включно з
+  japan_cpi; (3) якщо `japan_cpi` впаде з ValueError від
+  `_resolve_area_and_cat01` — надіслати текст помилки, виправлю
+  адресно. Коли Японія повністю закрита — companies/ (SEC EDGAR) або
+  news/ (GDELT), наступні за PLAN.md.

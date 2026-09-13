@@ -37,6 +37,7 @@ METRICS: dict[str, str] = {
     "retail_sales": "RSAFS",           # Advance Retail Sales, місячна, SA
     "housing_starts": "HOUST",         # Housing Starts, місячна, SAAR
     "mortgage_rate_30y": "MORTGAGE30US",  # 30-Year Fixed Rate Mortgage Average, щотижнева
+    "usdjpy_fx_rate": "DEXJPUS",        # USD/JPY, щоденна (Fed H.10) — для carry trade разом з fed_funds_rate/japan_policy_rate
 }
 
 # FRED позначає відсутнє значення символом "." — не 0 і не null.

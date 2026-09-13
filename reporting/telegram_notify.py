@@ -48,9 +48,12 @@ METRIC_LABELS = {
     "retail_sales": "Retail Sales (США)",
     "housing_starts": "Housing Starts (США)",
     "mortgage_rate_30y": "30Y Fixed Mortgage Rate (США)",
+    "usdjpy_fx_rate": "USD/JPY (курс, для carry trade)",
     "eurozone_hicp": "HICP (інфляція, єврозона)",
     "eurozone_deposit_rate": "Deposit Facility Rate (єврозона)",
     "eurozone_unemployment_rate": "Рівень безробіття (єврозона)",
+    "japan_policy_rate": "Policy Rate (Uncollateralized O/N Call Rate, Японія)",
+    "japan_cpi": "CPI (інфляція, Японія)",
 }
 
 # metric_id → джерело, для автовизначення --source, якщо не задано явно.
@@ -62,9 +65,11 @@ _METRIC_SOURCE = {
     "core_cpi": "fred", "pce_price_index": "fred", "nonfarm_payrolls": "fred",
     "treasury_10y": "fred", "treasury_2y": "fred", "initial_jobless_claims": "fred",
     "real_gdp": "fred", "retail_sales": "fred", "housing_starts": "fred",
-    "mortgage_rate_30y": "fred",
+    "mortgage_rate_30y": "fred", "usdjpy_fx_rate": "fred",
     "eurozone_hicp": "ecb", "eurozone_deposit_rate": "ecb",
     "eurozone_unemployment_rate": "ecb",
+    "japan_policy_rate": "boj",
+    "japan_cpi": "estat",
 }
 
 

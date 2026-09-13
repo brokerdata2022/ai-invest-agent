@@ -22,7 +22,9 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.db import get_connection, insert_observations  # noqa: E402
+from macro.boj_adapter import BojAdapter, METRICS as BOJ_METRICS  # noqa: E402
 from macro.ecb_adapter import EcbAdapter, METRICS as ECB_METRICS  # noqa: E402
+from macro.estat_adapter import EstatAdapter, METRICS as ESTAT_METRICS  # noqa: E402
 from macro.fred_adapter import FredAdapter, METRICS as FRED_METRICS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -34,6 +36,8 @@ logger = logging.getLogger(__name__)
 ADAPTERS = {
     "fred": {"class": FredAdapter, "metrics": FRED_METRICS, "needs_api_key": "FRED_API_KEY"},
     "ecb": {"class": EcbAdapter, "metrics": ECB_METRICS, "needs_api_key": None},
+    "boj": {"class": BojAdapter, "metrics": BOJ_METRICS, "needs_api_key": None},
+    "estat": {"class": EstatAdapter, "metrics": ESTAT_METRICS, "needs_api_key": "ESTAT_APP_ID"},
 }
 
 

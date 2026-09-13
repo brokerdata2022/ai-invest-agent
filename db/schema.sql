@@ -65,5 +65,7 @@ CREATE TABLE IF NOT EXISTS release_log (
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),
-    ('ecb', 'macro', 'official_primary', 'ECB Data Portal (колишній SDW), єврозона')
+    ('ecb', 'macro', 'official_primary', 'ECB Data Portal (колишній SDW), єврозона'),
+    ('boj', 'macro', 'official_primary', 'Bank of Japan Time-Series Data Search API, Японія'),
+    ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія')
 ON CONFLICT (name) DO NOTHING;

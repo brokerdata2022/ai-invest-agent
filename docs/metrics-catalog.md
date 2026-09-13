@@ -29,6 +29,7 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 | Retail Sales | `RSAFS` | місячна | ✅ адаптер готовий (metric_id `retail_sales`) |
 | Housing Starts | `HOUST` | місячна | ✅ адаптер готовий (metric_id `housing_starts`) |
 | Mortgage Rates (30Y Fixed) | `MORTGAGE30US` | щотижнева | ✅ адаптер готовий (metric_id `mortgage_rate_30y`) |
+| USD/JPY (для carry trade разом з fed_funds_rate/japan_policy_rate) | `DEXJPUS` | щоденна | ✅ адаптер готовий (metric_id `usdjpy_fx_rate`; Fed H.10 release, не OECD MEI — та серія й далі оновлюється, на відміну від застарілих OECD-серій Японії, див. нижче) |
 
 ## Макро — єврозона (джерело: ECB Data Portal, адаптер уже є — `macro/ecb_adapter.py`)
 
@@ -38,25 +39,25 @@ MoM/YoY % зміни, порівняння факт/консенсус, трен
 | Deposit Facility Rate (аналог Fed Funds Rate) | `FM.D.U2.EUR.4F.KR.DFR.LEV` | щоденна | ✅ адаптер готовий (metric_id `eurozone_deposit_rate`) |
 | Unemployment Rate | `LFSI.M.U2.S.UNEHRT.TOTAL0.15_74.T` | місячна | ✅ адаптер готовий (metric_id `eurozone_unemployment_rate`) |
 
-## Макро — Азія (джерело — TBD, окремий адаптер, у плані)
+## Макро — Японія (Китай/Індія свідомо не розглядаємо — рішення користувача 2026-08-30, немає офіційного API, див. `docs/decisions.md`)
 
-Другий за важливістю регіон після США й єврозони. Точні джерела ще
-не досліджені (на відміну від FRED/ECB, єдиного офіційного порталу з
-SDMX/REST API для всієї Азії немає — імовірно, окремо по країнах).
-Орієнтир для наступної сесії:
-
-| Показник | Країна | Ймовірне джерело | Статус |
+| Показник | Джерело | Деталі доступу | Статус |
 |---|---|---|---|
-| CPI (інфляція) | Японія | e-Stat (Statistics Japan) або BOJ | у плані |
-| Policy Rate | Японія | Bank of Japan (BOJ) Time-Series Data Search | у плані |
-| CPI (інфляція) | Китай | NBS (National Bureau of Statistics) | у плані |
-| Policy Rate (LPR) | Китай | PBOC (People's Bank of China) | у плані |
-| CPI (інфляція) | Індія | MOSPI / RBI | у плані |
-| Policy Rate (Repo Rate) | Індія | RBI (Reserve Bank of India) | у плані |
+| Policy Rate (Uncollateralized O/N Call Rate) | Bank of Japan Time-Series Data Search API | Без ключа. `db=FM01`, код серії `STRDCLUCON`. `macro/boj_adapter.py`, metric_id `japan_policy_rate`. | ✅ адаптер готовий, **живий прогін підтверджено користувачем 2026-08-30** (5 записів у raw_observations) |
+| CPI (інфляція) | e-Stat (政府統計の総合窓口) API v3.0, `getStatsData` | Потрібен `appId` (`ESTAT_APP_ID` в .env) — **користувач уже додав ключ**. Статистична таблиця: 2025年基準消費者物価指数 (база 2025=100, чинна з 21.08.2026), `statsDataId=0004052037`. `macro/estat_adapter.py`, metric_id `japan_cpi`. Коди area="全国"/cat01="総合" не хардкодяться — адаптер резолвить їх сам через метадані CLASS_INF при кожному запиті (двоетапний fetch: спершу метадані, тоді дані). | ✅ адаптер готовий, 15 юніт-тестів на фікстурах проходять — **живий прогін ще не робився** (мережа пісочниці Claude не має доступу до e-stat.go.jp), обов'язково перевірити першим запуском через Docker |
+| USD/JPY (для carry trade) | FRED, `DEXJPUS` (Fed H.10, не OECD MEI) | Через уже наявний `macro/fred_adapter.py`. metric_id `usdjpy_fx_rate`. | ✅ адаптер готовий (свідомо через FRED, а не BOJ FM08 — щоб не тримати дві неперевірені структури відповіді одночасно) |
 
-Перед написанням адаптера — окрема сесія на дослідження API кожної
-країни (формат відповіді, потреба в ключі, ліміти), за тим самим
-принципом, що й для ECB: `web_search` для series_id/API перед кодом.
+Carry trade Японія/США: `fed_funds_rate` (FRED) − `japan_policy_rate`
+(BOJ) = диференціал ставок; `usdjpy_fx_rate` (FRED) — сам курс. Сам
+диференціал — розрахунок, належить `analysis/` (Фаза 2), тут лише
+збір трьох сирих компонентів.
+
+**Наступний крок:** живий тест `japan_cpi` через Docker — якщо
+структура відповіді e-Stat відрізняється від очікуваної
+(`_resolve_area_and_cat01` кине ValueError з описом, що саме не
+знайдено), надішліть повідомлення про помилку чи сирий JSON, і
+`normalize()`/`_resolve_area_and_cat01()` буде виправлено за тим же
+протоколом, що й для ECB/BOJ.
 
 ## Випереджаючі індикатори (джерело — TBD, не в FRED напряму)
 
@@ -91,8 +92,8 @@ SDMX/REST API для всієї Азії немає — імовірно, окр
 бо вона впливає на схему `release_log` (вже є заготовка в `db/schema.sql`).
 
 ---
-**Наступний крок (Фаза 1):** Макро — США і Макро — єврозона повністю
-закрито (13 + 3 показники, `macro/fred_adapter.py` +
-`macro/ecb_adapter.py`). Далі — Макро — Азія (потребує дослідження
-джерел по кожній країні окремо, на відміну від FRED/ECB) або перший
-адаптер поза макро: `companies/` (SEC EDGAR) чи `news/` (GDELT).
+**Наступний крок (Фаза 1):** Макро — США (14, включно з USD/JPY),
+єврозона (3) і Японія (Policy Rate + CPI, CPI чекає живого тесту)
+покриті кодом. Після підтвердження `japan_cpi` — перший адаптер поза
+макро: `companies/` (SEC EDGAR) чи `news/` (GDELT). Китай/Індія —
+поза планом (рішення користувача 2026-08-30).
