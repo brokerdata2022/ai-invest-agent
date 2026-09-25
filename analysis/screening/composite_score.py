@@ -83,19 +83,6 @@ def percentile_ranks(values: list[Decimal]) -> list[Decimal]:
     return result
 
 
-def _get_attr(obj, candidates: list[str]):
-    """Бере перший наявний атрибут зі списку кандидатів назв.
-
-    Використовується для стійкості до незначної розбіжності назв полів
-    у TierAResult/TierBResult (ці dataclass-и визначені в tier_a.py/
-    tier_b.py, а не тут).
-    """
-    for name in candidates:
-        if hasattr(obj, name):
-            return getattr(obj, name)
-    return None
-
-
 def run_composite_score(
     tier_a_results=None, tier_b_results=None, tier_c_results=None
 ) -> list[CompositeResult]:
@@ -124,31 +111,18 @@ def run_composite_score(
             skipped.append(c.ticker)
             continue
 
-        revenue_growth = _get_attr(b, ["revenue_yoy", "revenue_growth_yoy", "revenue_growth"])
-        eps_growth = _get_attr(b, ["eps_yoy", "eps_growth_yoy", "eps_growth"])
-        avg_dollar_volume = _get_attr(
-            a, ["avg_dollar_volume", "avg_volume", "dollar_volume"]
-        )
+        # TierAResult.avg_dollar_volume і TierBResult.revenue_yoy/eps_yoy --
+        # звичайні (не Optional) поля, завжди присутні. TierCResult.pe --
+        # Optional[Decimal] типово, але для passed=True тикера завжди
+        # обчислений (інакше він би не пройшов поріг MIN_PE..MAX_PE) --
+        # перевірка залишена як страховка на випадок зміни tier_c.py.
+        revenue_growth = b.revenue_yoy
+        eps_growth = b.eps_yoy
+        avg_dollar_volume = a.avg_dollar_volume
         pe = c.pe
 
-        if None in (revenue_growth, eps_growth, avg_dollar_volume, pe):
-            missing = [
-                name
-                for name, val in [
-                    ("revenue_growth", revenue_growth),
-                    ("eps_growth", eps_growth),
-                    ("avg_dollar_volume", avg_dollar_volume),
-                    ("pe", pe),
-                ]
-                if val is None
-            ]
-            logger.warning(
-                "%s: не знайдено поля %s (доступні поля TierAResult=%s, TierBResult=%s) -- пропускаю",
-                c.ticker,
-                missing,
-                [k for k in vars(a).keys()],
-                [k for k in vars(b).keys()],
-            )
+        if pe is None:
+            logger.warning("%s: pe відсутній у пройденого Tier C результату -- пропускаю", c.ticker)
             skipped.append(c.ticker)
             continue
 
