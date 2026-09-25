@@ -117,6 +117,16 @@ docker compose exec app python analysis/screening/composite_score.py --top 10
 # Надіслати останнє зібране значення показника в Telegram
 docker compose exec app python reporting/telegram_notify.py --metric cpi
 
+# Зібрати новини (GDELT) для потоку watchlist → raw_news
+docker compose exec app python data-ingestion/run_collect_news.py --stream watchlist
+
+# DeepSeek-аналіз зібраних новин (raw_news → news_analysis, потребує
+# DEEPSEEK_API_KEY)
+docker compose exec app python analysis/news_analysis/run_news_analysis.py --stream watchlist
+
+# Надіслати в Telegram релевантні висновки з news_analysis
+docker compose exec app python reporting/news_notify.py --stream watchlist --limit 5
+
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
 ```

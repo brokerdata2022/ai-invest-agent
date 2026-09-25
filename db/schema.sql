@@ -62,6 +62,57 @@ CREATE TABLE IF NOT EXISTS release_log (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Сирі новини (окремо від raw_observations — там value NUMERIC,
+-- новина текстова, туди не лягає, докладніше docs/decisions.md
+-- 2026-09-25 "news/ — обсяг, межа шарів і схема БД"). Дедуп по
+-- (source, external_id), append-only (без UPDATE/DELETE, rule 6).
+-- НЕ hypertable: тут немає revision/DISTINCT ON-патерну, що
+-- виправдовував partitioning для raw_observations.
+CREATE TABLE IF NOT EXISTS raw_news (
+    id           BIGSERIAL PRIMARY KEY,
+    source       TEXT NOT NULL REFERENCES sources(name),
+    external_id  TEXT NOT NULL,       -- дедуп-ключ джерела (URL/guid)
+    stream       TEXT NOT NULL,       -- watchlist | general | geopolitical
+    title        TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    published_at TIMESTAMPTZ NOT NULL,-- коли статтю опубліковано (аналог observed_at)
+    fetched_at   TIMESTAMPTZ NOT NULL,-- коли ми її фактично забрали
+    raw_payload  JSONB,               -- необроблена відповідь джерела для цього запису (аудит)
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_news_stream_published
+    ON raw_news (stream, published_at DESC);
+
+-- Лог кожного LLM-виклику (rule 5 з CLAUDE.md: промпт + відповідь +
+-- timestamp + джерело — обов'язково для аудиту постфактум).
+CREATE TABLE IF NOT EXISTS llm_call_log (
+    id          BIGSERIAL PRIMARY KEY,
+    provider    TEXT NOT NULL,        -- deepseek | anthropic
+    purpose     TEXT NOT NULL,        -- напр. news_relevance_filter
+    prompt      TEXT NOT NULL,
+    response    TEXT NOT NULL,
+    source_ref  TEXT,                 -- напр. id/URL статті, на яку був виклик
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Структурований висновок LLM-аналізу однієї новини (формат полів —
+-- analysis/CLAUDE.md "Формат виходу LLM-аналізу"). asset_id — NULL
+-- для geopolitical/general новин, що не стосуються конкретного активу.
+CREATE TABLE IF NOT EXISTS news_analysis (
+    id           BIGSERIAL PRIMARY KEY,
+    raw_news_id  BIGINT NOT NULL REFERENCES raw_news(id),
+    asset_id     TEXT,
+    is_relevant  BOOLEAN NOT NULL,
+    summary      TEXT,
+    direction    TEXT,                -- up | down | neutral | unclear
+    confidence   NUMERIC,
+    reasoning    TEXT,
+    llm_call_id  BIGINT REFERENCES llm_call_log(id),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),
@@ -69,7 +120,8 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('boj', 'macro', 'official_primary', 'Bank of Japan Time-Series Data Search API, Японія'),
     ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія'),
     ('twelvedata', 'quotes', 'aggregator', 'Twelve Data — щоденні ціна/обсяг акцій, безкоштовна реєстрація без капчі (Stooq відкинуто через бот-захист, Alpaca — гео-блок; docs/decisions.md 2026-09-20)'),
-    ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent')
+    ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent'),
+    ('gdelt', 'news', 'aggregator', 'GDELT DOC 2.0 API — глобальний агрегатор новин, query-фільтр на рівні запиту (watchlist/general/geopolitical потоки), без ключа')
 ON CONFLICT (name) DO NOTHING;
 
 -- Views для читабельного перегляду. raw_observations лишається
