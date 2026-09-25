@@ -4,16 +4,12 @@ SQL (_series) не тестується тут, живий прогін кори
 як і для кожного попереднього кроку.
 """
 
-import os
-import sys
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
-from screening.tier_b import (  # noqa: E402
+from screening.tier_b import (
     all_positive_last_n,
     yoy_growth,
     passes_tier_b,

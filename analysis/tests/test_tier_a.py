@@ -7,14 +7,10 @@ _tickers_with_quotes/_latest_value/_avg_dollar_volume) не тестується
 """
 
 from decimal import Decimal
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
-from screening.tier_a import passes_tier_a, MIN_PRICE, MIN_MARKET_CAP, MIN_AVG_DOLLAR_VOLUME  # noqa: E402
+from screening.tier_a import passes_tier_a, MIN_PRICE, MIN_MARKET_CAP, MIN_AVG_DOLLAR_VOLUME
 
 
 def test_passes_all_thresholds():

@@ -1,9 +1,4 @@
-import os
-import sys
 from decimal import Decimal
-
-_ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _ANALYSIS_DIR)
 
 from screening.tier_c import ttm_sum, passes_tier_c, MIN_PE, MAX_PE, MAX_PS, MAX_PEG
 
