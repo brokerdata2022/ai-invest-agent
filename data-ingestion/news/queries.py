@@ -10,8 +10,12 @@ build_watchlist_query()) — щоб не наближатись до невід�
 самий stream="watchlist" (це та сама категорія "вже відібрані
 активи"), просто двома окремими викликами collect().
 
-general/geopolitical — ще не побудовані, докладніше docs/decisions.md,
-2026-09-25.
+geopolitical — build_geopolitical_query(), фіксований курований набір
+тем (санкції/конфлікти/торгові війни/центробанки/вибори), НЕ прив'язаний
+до конкретного активу (asset_id лишається None — DeepSeek не отримує
+tracked_assets для цього потоку, analysis/news_analysis/run_news_analysis.py).
+
+general — ще не побудований, докладніше docs/decisions.md, 2026-09-25.
 """
 
 # Один пошуковий термін на актив із docs/watchlist.md — найпоширеніша
@@ -102,6 +106,29 @@ def build_stocks_query(ticker_names: dict[str, str]) -> str:
 # але не варто довіряти йому як задокументованому факту.
 MAX_QUERY_LEN = 150
 MIN_QUERY_LEN = 70
+
+
+# Курований набір геополітичних тем — контекст для ринкового аналізу
+# в цілому, НЕ прив'язаний до конкретного активу (на відміну від
+# watchlist). Багатослівні фрази навмисно (кожен термін ≥2 слова, крім
+# "OPEC" — акронім, власна назва, як "Emcor"/"Wabtec", а не звичайне
+# слово): GDELT відхиляє окремі короткі загальновживані англійські
+# слова навіть у лапках (docs/decisions.md, 2026-09-25, кейс "Uber") —
+# "sanctions"/"tariffs"/"election" самі по собі ризиковані з тієї самої
+# причини, тому обрані як частина довшої специфічної фрази.
+GEOPOLITICAL_TERMS: dict[str, str] = {
+    "sanctions": '"economic sanctions"',
+    "conflict": '"armed conflict"',
+    "trade_war": '"trade war"',
+    "tariffs": '"trade tariffs"',
+    "central_bank_policy": '"central bank"',
+    "opec": "OPEC",
+    "election": '"national election"',
+}
+
+
+def build_geopolitical_query() -> str:
+    return "(" + " OR ".join(GEOPOLITICAL_TERMS.values()) + ")"
 
 
 def batch_ticker_names(

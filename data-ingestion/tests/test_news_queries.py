@@ -1,10 +1,13 @@
 import pytest
 
 from news.queries import (
+    GEOPOLITICAL_TERMS,
+    MAX_QUERY_LEN,
     STOCK_NAME_OVERRIDES,
     WATCHLIST_ASSET_IDS,
     WATCHLIST_TERMS,
     batch_ticker_names,
+    build_geopolitical_query,
     build_stocks_query,
     build_watchlist_query,
 )
@@ -61,6 +64,33 @@ def test_build_stocks_query_override_takes_priority_over_given_name():
     # override для відомого проблемного тикера має виграти.
     query = build_stocks_query({"UBER": "Some Other Name"})
     assert query == '("Uber Technologies")'
+
+
+def test_build_geopolitical_query_includes_every_term():
+    query = build_geopolitical_query()
+    for term in GEOPOLITICAL_TERMS.values():
+        assert term in query
+
+
+def test_build_geopolitical_query_is_a_single_or_group():
+    query = build_geopolitical_query()
+    assert query.startswith("(")
+    assert query.endswith(")")
+    assert " OR " in query
+
+
+def test_build_geopolitical_query_terms_are_not_single_short_common_words():
+    # Regression за уроком "Uber" (docs/decisions.md, 2026-09-25/26):
+    # GDELT відхиляє окремі короткі загальновживані слова навіть у
+    # лапках -- кожен геополітичний термін або багатослівна фраза,
+    # або власна назва/акронім (як "OPEC"), не побутове слово.
+    for term in GEOPOLITICAL_TERMS.values():
+        bare = term.strip('"')
+        assert " " in bare or bare.isupper()
+
+
+def test_build_geopolitical_query_under_max_len():
+    assert len(build_geopolitical_query()) <= MAX_QUERY_LEN
 
 
 # Тикери/назви з реального live-прогону 2026-09-25 (Tier C), що

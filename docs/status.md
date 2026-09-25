@@ -43,20 +43,21 @@ UBER, BX, STLD, HAL, MDT, CASY (score/деталі — вивід
 `avg_dollar_volume_from_series` (117 очікується, ще не підтверджено
 живим прогоном pytest).
 
-### Новини (news/, GDELT + DeepSeek) — watchlist-потік підтверджено живо (акції + не-акційна частина)
-3 потоки (watchlist/general/geopolitical, обсяг — `docs/decisions.md`
-2026-09-25 "news/ — обсяг, межа шарів і схема БД"), реалізовано
-watchlist повністю (не-акційна частина watchlist.md + тикери зі
-скринінгу):
+### Новини (news/, GDELT + DeepSeek) — watchlist і geopolitical потоки живо підтверджені
+3 потоки (обсяг — `docs/decisions.md` 2026-09-25 "news/ — обсяг, межа
+шарів і схема БД"): watchlist (акції зі скринінгу + не-акційна
+частина watchlist.md) і geopolitical — реалізовано й підтверджено
+живо. general — ще ні.
 
 | Крок | Модуль | Статус |
 |---|---|---|
-| Збір (GDELT, watchlist.md) | `data-ingestion/run_collect_news.py` + `news/queries.py` | ✅ живо, 75 статей у `raw_news` (2026-09-25) |
+| Збір (GDELT, watchlist.md) | `data-ingestion/run_collect_news.py --stream watchlist` | ✅ живо, 75 статей у `raw_news` (2026-09-25) |
 | Збір (GDELT, тикери зі скринінгу) | `analysis/news_analysis/collect_stock_news.py` | ✅ живо, 150 статей у `raw_news` (2026-09-25) — query ділиться на групи (`batch_ticker_names`, GDELT відхиляє і занадто довгий, і окремі "надто загальновживані" слова типу "Uber" — `STOCK_NAME_OVERRIDES`) |
-| Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо, 25/25 статей оброблено (2 прогони, 2026-09-25), `asset_id` коректно заповнюється (xauusd/wti_crude/brent_crude/btc/usdjpy) |
+| Збір (GDELT, geopolitical) | `data-ingestion/run_collect_news.py --stream geopolitical` | ✅ живо, 72 статті у `raw_news` (2026-09-26), з першої спроби, без "too short/too long" |
+| Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо: watchlist 25/25 (2026-09-25, `asset_id` коректно заповнюється), geopolitical 72/72 (2026-09-26, `asset_id=None` за задумом, багатомовні джерела без проблем) |
 | Сповіщення (Telegram) | `reporting/news_notify.py` | ✅ живо, 4 релевантні з 5 надіслано в Telegram (2026-09-25) |
 
-**Не зроблено:** general/geopolitical потоки, RSS-адаптер.
+**Не зроблено:** general-потік, RSS-адаптер.
 
 **Відкрите (не блокує):** GDELT — спільний вихідний IP dev-мережі
 часто впирається в `429` (задокументований ліміт GDELT — 1 запит/5с,
@@ -68,11 +69,10 @@ external_id` робить повтор безпечним, нічого не д�
 ## Що не зроблено (по фазах PLAN.md)
 
 - **Фаза 1:** календар релізів (для Фази 3) — не побудовано. news/
-  (GDELT) — watchlist-потік (акції зі скринінгу + не-акційна частина
-  watchlist.md) живо підтверджено вище; general/geopolitical потоки,
-  RSS-адаптер — ще ні.
+  (GDELT) — watchlist і geopolitical потоки живо підтверджено вище;
+  general-потік, RSS-адаптер — ще ні.
 - **Фаза 2:** ринкові очікування, порівняння факт/очікування — не
-  почато. LLM-аналіз новин — перший робочий зріз є (watchlist-потік,
+  почато. LLM-аналіз новин — робочий зріз є (watchlist + geopolitical,
   вище), детерміноване порівняння факт/очікування — окреме, ще не
   почате (screening-трек вище — паралельна робота, інший вид аналізу)
 - **Фаза 3:** моніторинг/тригери — не почато
@@ -92,10 +92,10 @@ external_id` робить повтор безпечним, нічого не д�
 ## Наступний змістовний крок
 
 news/ watchlist-потік (акції зі скринінгу + не-акційна частина
-watchlist.md) живо підтверджено повністю — збір (2 джерела), аналіз
-з коректним `asset_id`, Telegram-сповіщення (вище). Далі — на вибір
+watchlist.md) і geopolitical-потік живо підтверджено повністю — збір
+(3 джерела), аналіз, Telegram-сповіщення (вище). Далі — на вибір
 користувача, не техпріоритет:
-1. **Розширити news/** — general/geopolitical потоки, RSS-адаптер.
+1. **Розширити news/** — general-потік, RSS-адаптер.
 2. **monitoring/** — календар релізів + тригери на нові дані (Фаза 1
    хвіст + Фаза 3 старт), поки не почато.
 3. **Оркестрація** (Celery/Prefect/Airflow чи cron) — автоматичний
