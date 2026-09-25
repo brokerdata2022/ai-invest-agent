@@ -127,6 +127,9 @@ docker compose exec app python analysis/news_analysis/collect_stock_news.py
 # Зібрати геополітичні новини (GDELT) → raw_news/geopolitical
 docker compose exec app python data-ingestion/run_collect_news.py --stream geopolitical
 
+# Зібрати загальний ринковий потік (GDELT) → raw_news/general
+docker compose exec app python data-ingestion/run_collect_news.py --stream general
+
 # DeepSeek-аналіз зібраних новин (raw_news → news_analysis, потребує
 # DEEPSEEK_API_KEY)
 docker compose exec app python analysis/news_analysis/run_news_analysis.py --stream watchlist

@@ -1,12 +1,14 @@
 import pytest
 
 from news.queries import (
+    GENERAL_TERMS,
     GEOPOLITICAL_TERMS,
     MAX_QUERY_LEN,
     STOCK_NAME_OVERRIDES,
     WATCHLIST_ASSET_IDS,
     WATCHLIST_TERMS,
     batch_ticker_names,
+    build_general_query,
     build_geopolitical_query,
     build_stocks_query,
     build_watchlist_query,
@@ -91,6 +93,29 @@ def test_build_geopolitical_query_terms_are_not_single_short_common_words():
 
 def test_build_geopolitical_query_under_max_len():
     assert len(build_geopolitical_query()) <= MAX_QUERY_LEN
+
+
+def test_build_general_query_includes_every_term():
+    query = build_general_query()
+    for term in GENERAL_TERMS.values():
+        assert term in query
+
+
+def test_build_general_query_is_a_single_or_group():
+    query = build_general_query()
+    assert query.startswith("(")
+    assert query.endswith(")")
+    assert " OR " in query
+
+
+def test_build_general_query_terms_are_not_single_short_common_words():
+    for term in GENERAL_TERMS.values():
+        bare = term.strip('"')
+        assert " " in bare or bare.isupper()
+
+
+def test_build_general_query_under_max_len():
+    assert len(build_general_query()) <= MAX_QUERY_LEN
 
 
 # Тикери/назви з реального live-прогону 2026-09-25 (Tier C), що

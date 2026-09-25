@@ -15,7 +15,10 @@ geopolitical — build_geopolitical_query(), фіксований курован
 до конкретного активу (asset_id лишається None — DeepSeek не отримує
 tracked_assets для цього потоку, analysis/news_analysis/run_news_analysis.py).
 
-general — ще не побудований, докладніше docs/decisions.md, 2026-09-25.
+general — build_general_query(), широкий фінансовий контекст (без
+прив'язки до конкретного активу, як і geopolitical) — "чи взагалі
+щось відбувається на ринку, що варте уваги" (докладніше
+docs/decisions.md, 2026-09-25 "news/ — обсяг...").
 """
 
 # Один пошуковий термін на актив із docs/watchlist.md — найпоширеніша
@@ -129,6 +132,28 @@ GEOPOLITICAL_TERMS: dict[str, str] = {
 
 def build_geopolitical_query() -> str:
     return "(" + " OR ".join(GEOPOLITICAL_TERMS.values()) + ")"
+
+
+# Курований набір широких ринкових тем — не прив'язаних до
+# конкретного активу з watchlist, і не геополітичних (ті вже покриті
+# GEOPOLITICAL_TERMS вище) — загальний "чи щось значуще відбувається
+# на ринку" контекст. Той самий принцип, що й GEOPOLITICAL_TERMS:
+# кожен термін — багатослівна фраза або акронім ("IPO"), не окреме
+# коротке загальновживане слово (урок "Uber", docs/decisions.md,
+# 2026-09-25/26).
+GENERAL_TERMS: dict[str, str] = {
+    "rally": '"stock market rally"',
+    "selloff": '"market selloff"',
+    "earnings": '"earnings season"',
+    "ipo": "IPO",
+    "ma_deal": '"merger acquisition"',
+    "volatility": '"market volatility"',
+    "recession": '"recession fears"',
+}
+
+
+def build_general_query() -> str:
+    return "(" + " OR ".join(GENERAL_TERMS.values()) + ")"
 
 
 def batch_ticker_names(
