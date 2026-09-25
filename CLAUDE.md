@@ -120,6 +120,10 @@ docker compose exec app python reporting/telegram_notify.py --metric cpi
 # Зібрати новини (GDELT) для потоку watchlist → raw_news
 docker compose exec app python data-ingestion/run_collect_news.py --stream watchlist
 
+# Зібрати новини (GDELT) для тикерів, що пройшли скринінг (Tier C) →
+# теж raw_news/watchlist, окремий query від команди вище
+docker compose exec app python analysis/news_analysis/collect_stock_news.py
+
 # DeepSeek-аналіз зібраних новин (raw_news → news_analysis, потребує
 # DEEPSEEK_API_KEY)
 docker compose exec app python analysis/news_analysis/run_news_analysis.py --stream watchlist

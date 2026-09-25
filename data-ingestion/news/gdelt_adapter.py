@@ -26,6 +26,11 @@ from common.news_adapter import BaseNewsAdapter, NewsRecord, STREAMS
 
 logger = logging.getLogger(__name__)
 
+
+class GdeltError(RuntimeError):
+    pass
+
+
 GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
 # Формат часу статей у відповіді GDELT DOC API ("seendate").
@@ -68,7 +73,9 @@ class GdeltAdapter(BaseNewsAdapter):
         attempts = len(_RETRY_DELAYS) + 1
         for attempt in range(attempts):
             response = self.session.get(GDELT_DOC_URL, params=params, timeout=30)
-            if response.status_code == 429 and attempt < attempts - 1:
+            is_last_attempt = attempt == attempts - 1
+
+            if response.status_code == 429 and not is_last_attempt:
                 delay = _RETRY_DELAYS[attempt]
                 logger.warning(
                     "GDELT 429 (ліміт запитів), повтор через %ds (спроба %d/%d)",
@@ -76,8 +83,28 @@ class GdeltAdapter(BaseNewsAdapter):
                 )
                 self.sleep(delay)
                 continue
+
             response.raise_for_status()
-            return response.json()
+
+            # GDELT інколи віддає 200 з порожнім/не-JSON тілом (напр.
+            # занадто довгий/складний query) — той самий retry-бюджет,
+            # що й для 429, а не голий JSONDecodeError користувачу.
+            try:
+                return response.json()
+            except ValueError:
+                if not is_last_attempt:
+                    delay = _RETRY_DELAYS[attempt]
+                    logger.warning(
+                        "GDELT повернув не-JSON відповідь (перші 200 символів: %r), "
+                        "повтор через %ds (спроба %d/%d)",
+                        response.text[:200], delay, attempt + 1, attempts,
+                    )
+                    self.sleep(delay)
+                    continue
+                raise GdeltError(
+                    f"GDELT повернув не-JSON відповідь після {attempts} спроб "
+                    f"(query можливо занадто довгий/складний): {response.text[:500]!r}"
+                ) from None
 
     def normalize(self, raw_response: Any) -> list[NewsRecord]:
         fetched_at = datetime.now(timezone.utc)

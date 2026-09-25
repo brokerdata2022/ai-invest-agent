@@ -43,29 +43,34 @@ UBER, BX, STLD, HAL, MDT, CASY (score/деталі — вивід
 `avg_dollar_volume_from_series` (117 очікується, ще не підтверджено
 живим прогоном pytest).
 
-### Новини (news/, GDELT + DeepSeek) — watchlist-потік підтверджено живо
+### Новини (news/, GDELT + DeepSeek) — watchlist-потік підтверджено живо (акції + не-акційна частина)
 3 потоки (watchlist/general/geopolitical, обсяг — `docs/decisions.md`
-2026-09-25 "news/ — обсяг, межа шарів і схема БД"), поки реалізовано
-тільки watchlist, і тільки не-акційна частина (`docs/watchlist.md`):
+2026-09-25 "news/ — обсяг, межа шарів і схема БД"), реалізовано
+watchlist повністю (не-акційна частина watchlist.md + тикери зі
+скринінгу):
 
 | Крок | Модуль | Статус |
 |---|---|---|
-| Збір (GDELT) | `data-ingestion/news/gdelt_adapter.py` + `queries.py` | ✅ живо, 75 статей у `raw_news` (2026-09-25) |
-| Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо, коректний структурований JSON на 5/5 статей |
+| Збір (GDELT, watchlist.md) | `data-ingestion/run_collect_news.py` + `news/queries.py` | ✅ живо, 75 статей у `raw_news` (2026-09-25) |
+| Збір (GDELT, тикери зі скринінгу) | `analysis/news_analysis/collect_stock_news.py` | ✅ живо, 150 статей у `raw_news` (2026-09-25) — query ділиться на групи (`batch_ticker_names`, GDELT відхиляє і занадто довгий, і окремі "надто загальновживані" слова типу "Uber" — `STOCK_NAME_OVERRIDES`) |
+| Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо, 25/25 статей оброблено (2 прогони, 2026-09-25), `asset_id` коректно заповнюється (xauusd/wti_crude/brent_crude/btc/usdjpy) |
 | Сповіщення (Telegram) | `reporting/news_notify.py` | ✅ живо, 4 релевантні з 5 надіслано в Telegram (2026-09-25) |
 
-**Не зроблено:** query для акцій зі скринінгу (watchlist-потік для
-S&P 500 тикерів), general/geopolitical потоки (RSS-адаптер), і
-`--tracked-assets` для watchlist ще не проставляється автоматично зі
-списку `docs/watchlist.md` — тому `asset_id` у `news_analysis` поки
-завжди `None` (DeepSeek не має з чим зіставляти).
+**Не зроблено:** general/geopolitical потоки, RSS-адаптер.
+
+**Відкрите (не блокує):** GDELT — спільний вихідний IP dev-мережі
+часто впирається в `429` (задокументований ліміт GDELT — 1 запит/5с,
+але на практиці стійкіше) — адаптер має retry-with-backoff, але при
+дуже інтенсивному використанні сесії окремі групи запитів можуть
+провалюватись і вимагати повторного запуску (дедуп по `source+
+external_id` робить повтор безпечним, нічого не дублюється).
 
 ## Що не зроблено (по фазах PLAN.md)
 
 - **Фаза 1:** календар релізів (для Фази 3) — не побудовано. news/
-  (GDELT) — watchlist-потік (не-акційна частина) живо підтверджено
-  вище; акції зі скринінгу, general/geopolitical потоки, RSS-адаптер
-  — ще ні.
+  (GDELT) — watchlist-потік (акції зі скринінгу + не-акційна частина
+  watchlist.md) живо підтверджено вище; general/geopolitical потоки,
+  RSS-адаптер — ще ні.
 - **Фаза 2:** ринкові очікування, порівняння факт/очікування — не
   почато. LLM-аналіз новин — перший робочий зріз є (watchlist-потік,
   вище), детерміноване порівняння факт/очікування — окреме, ще не
@@ -86,10 +91,14 @@ S&P 500 тикерів), general/geopolitical потоки (RSS-адаптер),
 
 ## Наступний змістовний крок
 
-news/ у процесі (watchlist-потік живо підтверджено, вище). Далі —
-на вибір користувача, не техпріоритет:
-1. **Розширити news/** — query для акцій зі скринінгу, `--tracked-assets`
-   з `docs/watchlist.md` (щоб `asset_id` не був завжди `None`),
-   general/geopolitical потоки, RSS-адаптер.
+news/ watchlist-потік (акції зі скринінгу + не-акційна частина
+watchlist.md) живо підтверджено повністю — збір (2 джерела), аналіз
+з коректним `asset_id`, Telegram-сповіщення (вище). Далі — на вибір
+користувача, не техпріоритет:
+1. **Розширити news/** — general/geopolitical потоки, RSS-адаптер.
 2. **monitoring/** — календар релізів + тригери на нові дані (Фаза 1
    хвіст + Фаза 3 старт), поки не почато.
+3. **Оркестрація** (Celery/Prefect/Airflow чи cron) — автоматичний
+   розклад для всіх скриптів збору/аналізу замість ручного запуску;
+   явно відкладено до завершення news/ (рішення користувача,
+   2026-09-25).

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from news.gdelt_adapter import GdeltAdapter
+from news.gdelt_adapter import GdeltAdapter, GdeltError
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -81,15 +81,18 @@ def test_stream_is_stored_on_every_record():
 
 
 class _FakeResponse:
-    def __init__(self, status_code, payload=None):
+    def __init__(self, status_code, payload=None, text=""):
         self.status_code = status_code
         self._payload = payload
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
 
     def json(self):
+        if self._payload is None:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         return self._payload
 
 
@@ -130,4 +133,34 @@ def test_fetch_raises_after_exhausting_retries():
     )
 
     with pytest.raises(RuntimeError):
+        adapter.fetch()
+
+
+def test_fetch_retries_on_non_json_response_then_succeeds():
+    # GDELT інколи віддає 200 з порожнім/не-JSON тілом (напр. занадто
+    # довгий query) — той самий retry-бюджет, що й для 429.
+    session = _FakeSession(
+        [
+            _FakeResponse(200, payload=None, text=""),
+            _FakeResponse(200, {"articles": []}),
+        ]
+    )
+    sleeps = []
+    adapter = GdeltAdapter(
+        stream="watchlist", query="bitcoin", session=session, sleep=sleeps.append
+    )
+
+    result = adapter.fetch()
+
+    assert result == {"articles": []}
+    assert sleeps == [5]
+
+
+def test_fetch_raises_gdelt_error_after_exhausting_retries_on_non_json():
+    session = _FakeSession([_FakeResponse(200, payload=None, text="")] * 4)
+    adapter = GdeltAdapter(
+        stream="watchlist", query="bitcoin", session=session, sleep=lambda _: None
+    )
+
+    with pytest.raises(GdeltError):
         adapter.fetch()
