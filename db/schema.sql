@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 -- див. .claude/skills/add-data-source).
 CREATE TABLE IF NOT EXISTS sources (
     name        TEXT PRIMARY KEY,
-    category    TEXT NOT NULL,        -- macro | companies | crypto | forex | commodities | news
+    category    TEXT NOT NULL,        -- macro | companies | quotes | crypto | forex | commodities | news
     source_type TEXT NOT NULL,        -- official_primary | aggregator | unofficial
     notes       TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -67,5 +67,30 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),
     ('ecb', 'macro', 'official_primary', 'ECB Data Portal (колишній SDW), єврозона'),
     ('boj', 'macro', 'official_primary', 'Bank of Japan Time-Series Data Search API, Японія'),
-    ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія')
+    ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія'),
+    ('twelvedata', 'quotes', 'aggregator', 'Twelve Data — щоденні ціна/обсяг акцій, безкоштовна реєстрація без капчі (Stooq відкинуто через бот-захист, Alpaca — гео-блок; docs/decisions.md 2026-09-20)'),
+    ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent')
 ON CONFLICT (name) DO NOTHING;
+
+-- Views для читабельного перегляду. raw_observations лишається
+-- append-only джерелом істини (жодних UPDATE/DELETE) — views тільки
+-- читають і не змінюють дані, це суто зручність перегляду, не заміна
+-- окремих таблиць (docs/decisions.md, 2026-09-21).
+
+-- Часовий ряд одного показника без "шуму" старих ревізій — для
+-- кожної (source, metric_id, observed_at) лишається тільки запис з
+-- найвищим revision (останнє відоме значення на цю дату).
+CREATE OR REPLACE VIEW v_observations_latest_revision AS
+SELECT DISTINCT ON (source, metric_id, observed_at)
+    source, metric_id, value, observed_at, fetched_at, revision
+FROM raw_observations
+ORDER BY source, metric_id, observed_at, revision DESC;
+
+-- Поточне значення кожного показника одним рядком (найсвіжіша дата,
+-- найвища ревізія на неї) — "що зараз", а не весь часовий ряд.
+-- Приклад: SELECT * FROM v_current_values WHERE metric_id LIKE 'aapl%';
+CREATE OR REPLACE VIEW v_current_values AS
+SELECT DISTINCT ON (source, metric_id)
+    source, metric_id, value, observed_at, fetched_at, revision
+FROM raw_observations
+ORDER BY source, metric_id, observed_at DESC, revision DESC;
