@@ -9,10 +9,13 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+.pytest_cache/
+. pytest_cache/
 
 # IDE
 .vscode/
 .idea/
+*.kate-swp
 
 # OS
 .DS_Store
@@ -21,3 +24,6 @@ venv/
 data/raw/
 *.db
 *.sqlite3
+
+# Локальні дампи БД — не джерело істини, db/schema.sql та raw_observations нею є
+backup.sql
