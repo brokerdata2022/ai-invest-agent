@@ -570,3 +570,16 @@
   дивним — деталі (`revenue_yoy`/`eps_yoy`/etc. в `details`) підкажуть
   де саме. Після Tier B — Tier C (valuation, P/E/P/S/PEG), потім
   composite score → фінальний топ-10.
+- 2026-09-25 (сесія 22): Tier C (`analysis/screening/tier_c.py`) —
+  valuation-фільтр (P/E, P/S, PEG), TTM з 4 останніх кварталів, PEG
+  переиспользує `eps_yoy` з Tier B. 19 тестів, живий прогін: 16/35
+  пройшли. Composite score (`analysis/screening/composite_score.py`) —
+  фінальне ранжування пройшли-Tier-C тикерів за формулою з
+  `docs/screening-criteria.md`, 7 тестів `percentile_ranks()`. Разом
+  analysis/ — 46/46. Уся воронка скринінгу (Tier A → B → C → ранжування)
+  реалізована й живо підтверджена.
+  **Далі:** відкриті другорядні питання (watchlist.md пріоритет 2,
+  крипто-монети BTC/ETH, WTI vs Brent, shares_outstanding пробіл
+  ~63-110 компаній) — не блокуючі. Наступний змістовний крок поза
+  скринінгом: news/ (GDELT) або monitoring/ (календар релізів,
+  Фаза 1 і Фаза 3 з PLAN.md).
