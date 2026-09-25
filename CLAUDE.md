@@ -14,30 +14,36 @@
   і реляційних даних одночасно — не тримаємо дві окремі СУБД)
 - працюємо сесійно, з підключенням git, через vscode з необхідними розширеннями, локально тестуємо та запускаємо через Docker
 - Оркестрація фонових задач (збір даних за розкладом): TBD (Celery/Prefect/
-  Airflow — залежить від масштабу, вирішити в Фазі 1)
+  Airflow — залежить від масштабу). Фаза 1 (збір даних) практично
+  завершена (докладніше — docs/status.md) — час вирішити це перед
+  Фазою 3 (моніторинг/тригери), яка на це спирається.
 - LLM-виклики (аналіз новин, генерація звітів): через DeepSeek API уся робота,  Anthropic API фінальний висновок аналіз
 
 ## Джерела даних (пріоритет: безкоштовні + першоджерела)
 Повний список і причини вибору кожного — у docs/decisions.md.
-Коротко:
-- **Макро-дані:** FRED (США), ECB SDW (єврозона), офіційні статслужби
-  для інших регіонів
+Коротко (✅ = адаптер уже реалізовано й підтверджено живо):
+- **Макро-дані:** ✅ FRED (США), ✅ ECB Data Portal (єврозона), ✅ BOJ +
+  e-Stat (Японія). Китай/Індія свідомо не розглядаються (рішення
+  користувача, docs/decisions.md 2026-08-30)
 - **Календар релізів з рівнем впливу:** офіційні графіки публікацій
   (BLS/BEA/Fed) + власний статичний список "що вважається
   high/medium impact" (немає офіційного API з готовою розміткою впливу)
-- **Акції:** SEC EDGAR (звіти/фундаментал, першоджерело) + yfinance
-  (ціни, неофіційне джерело — див. застереження в
-  data-ingestion/CLAUDE.md) + Finnhub як резерв
+  — ще не побудовано
+- **Акції:** ✅ SEC EDGAR (звіти/фундаментал, першоджерело,
+  companies/sec_edgar_adapter.py) + ✅ Twelve Data (ціни/обсяг,
+  неофіційне джерело — quotes/twelvedata_adapter.py; Stooq і Alpaca
+  розглядались і відкинуті, деталі — docs/decisions.md 2026-09-14/20)
 - **Крипта:** CoinGecko (агрегатор) + Binance public API (першоджерело
-  біржових даних)
-- **Форекс:** ECB reference rates (першоджерело, щоденні) + yfinance
-  для частішого оновлення
-- **Товари:** yfinance (ф'ючерсні тікери)
-- **Новини/звіти:** GDELT + офіційні RSS центробанків і статслужб
+  біржових даних) — заплановано, адаптер ще не написаний
+- **Форекс:** ECB reference rates (першоджерело, щоденні) — заплановано
+- **Товари:** заплановано (джерело ще не обрано)
+- **Новини/звіти:** GDELT + офіційні RSS центробанків і статслужб —
+  заплановано; активи для відстеження визначені в docs/watchlist.md
 
 ## Як запустити локально
 ```bash
-cp .env.example .env         # заповнити FRED_API_KEY, DB_*, TELEGRAM_*
+cp .env.example .env         # заповнити FRED_API_KEY, SEC_EDGAR_USER_AGENT,
+                              # TWELVEDATA_API_KEY, DB_*, TELEGRAM_*
 docker compose up -d --build # піднімає TimescaleDB + контейнер застосунку
                               # (усі Python-залежності вже встановлені в образі,
                               # venv на хості не потрібен)
@@ -52,10 +58,17 @@ docker compose exec app pytest
 ## Структура репозиторію
 ```
 data-ingestion/   — усе, що стосується ЗБОРУ сирих даних (без аналізу)
+  macro/            — FRED, ECB, BOJ, e-Stat адаптери
+  companies/        — SEC EDGAR (фундаментал акцій)
+  quotes/           — Twelve Data (ціни/обсяг акцій)
+  common/           — спільний інтерфейс адаптера, підключення до БД
 analysis/         — обробка зібраних даних: прогнози, порівняння з очікуваннями
+  screening/        — скринінг акцій S&P 500 (Tier A/B/C + composite score)
 monitoring/       — відстеження календаря релізів, тригери на нові дані
 reporting/         — генерація коротких звітів і списків активів
+db/               — db/schema.sql — схема БД (raw_observations, sources, release_log)
 docs/             — архітектурні рішення, дизайн-документи
+  docs/archive/     — повні (нестиснуті) версії журналів рішень/сесій
 ```
 Кожна з цих папок має власний CLAUDE.md з деталями саме цього домену.
 Дивись docs/architecture.md для повної картини потоку даних.
@@ -80,10 +93,34 @@ docs/             — архітектурні рішення, дизайн-до
    змінилось/зникло — тільки архівувати. Історичні дані — це те, на чому
    тримається якість майбутніх прогнозів.
 
-## Команди (заповнити коли з'явиться код)
-```
-# npm run test / pytest / etc.
+## Команди
+```bash
+# Застосувати/оновити схему БД
+docker compose exec app python data-ingestion/apply_schema.py
+
+# Зібрати один макропоказник (metric_id — список у docs/metrics-catalog.md)
+docker compose exec app python data-ingestion/run_collect.py --metric cpi
+
+# Зібрати дані по тикеру (котирування чи фундаментал)
+docker compose exec app python data-ingestion/run_collect.py --source twelvedata --ticker AAPL
+docker compose exec app python data-ingestion/run_collect.py --source sec_edgar --ticker AAPL
+
+# Масовий збір по всьому S&P 500 (companies/ — SEC EDGAR фундаментал)
+docker compose exec app python data-ingestion/collect_companies_universe.py
+
+# Скринінг акцій — воронка Tier A → B → C → ранжування
+docker compose exec app python analysis/screening/tier_a.py
+docker compose exec app python analysis/screening/tier_b.py
+docker compose exec app python analysis/screening/tier_c.py
+docker compose exec app python analysis/screening/composite_score.py --top 10
+
+# Надіслати останнє зібране значення показника в Telegram
+docker compose exec app python reporting/telegram_notify.py --metric cpi
+
+# Прогнати всі тести (data-ingestion + reporting + analysis)
+docker compose exec app pytest -q
 ```
 
 ## Статус проєкту
-Дивись PLAN.md для поточної фази й списку фіч.
+docs/status.md — що працює живо (з цифрами), що не зроблено, наступний
+крок. PLAN.md — фази й чекбокси. docs/decisions.md — журнал рішень.
