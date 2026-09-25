@@ -19,8 +19,10 @@ PEG НЕ рахує зростання EPS повторно, бо воно вж�
 
 Джерело серій (eps_diluted, revenue) -- ті самі, що вже зібрані
 sec_edgar-адаптером і використані в tier_b.py; для їх читання
-використовується _series() з screening.tier_b (та сама SQL-функція,
-без дублювання логіки читання з БД).
+використовується batch_series() з screening._batch_db (ОДИН запит на
+весь список тикерів, а не по одному на тикер -- фікс N+1, 2026-09-25,
+docs/decisions.md; той самий модуль уже використовують tier_a.py й
+tier_b.py).
 """
 
 import logging
@@ -131,21 +133,29 @@ def run_tier_c(tier_a_results=None, tier_b_results=None) -> list[TierCResult]:
     """
     from common.db import get_connection
     from screening.tier_a import run_tier_a
-    from screening.tier_b import run_tier_b, _series
+    from screening.tier_b import run_tier_b
+    from screening._batch_db import batch_series
 
     if tier_a_results is None:
         tier_a_results = run_tier_a()
     if tier_b_results is None:
-        # run_tier_b() сам викликає run_tier_a() всередині (як і tier_b.py
-        # не приймає параметрів ззовні) -- tier_a_results, обчислений вище,
-        # тут використовується лише для зіставлення price/market_cap нижче.
-        tier_b_results = run_tier_b()
+        # tier_a_results (вище) передається як готовий список тикерів,
+        # щоб run_tier_b() не перераховував Tier A ще раз із нуля --
+        # той самий фікс редундантного перерахунку, що й у
+        # composite_score.py (docs/decisions.md, 2026-09-25).
+        tier_b_results = run_tier_b(tier_a_tickers=[r.ticker for r in tier_a_results])
 
     tier_a_by_ticker = {r.ticker: r for r in tier_a_results}
 
     results: list[TierCResult] = []
     conn = get_connection()
     try:
+        tickers = [b.ticker.lower() for b in tier_b_results]
+        # 2 batched-запити на ВЕСЬ список тикерів замість 2*N окремих
+        # (docs/decisions.md, 2026-09-25).
+        eps_by = batch_series(conn, "sec_edgar", [f"{t}_eps_diluted" for t in tickers])
+        revenue_by = batch_series(conn, "sec_edgar", [f"{t}_revenue" for t in tickers])
+
         for b in tier_b_results:
             ticker = b.ticker
             a = tier_a_by_ticker.get(ticker)
@@ -153,8 +163,8 @@ def run_tier_c(tier_a_results=None, tier_b_results=None) -> list[TierCResult]:
                 logger.warning("Тикер %s є в Tier B, але відсутній у Tier A -- пропускаю", ticker)
                 continue
 
-            eps_series = _series(conn, "sec_edgar", f"{ticker.lower()}_eps_diluted")
-            revenue_series = _series(conn, "sec_edgar", f"{ticker.lower()}_revenue")
+            eps_series = eps_by.get(f"{ticker.lower()}_eps_diluted", [])
+            revenue_series = revenue_by.get(f"{ticker.lower()}_revenue", [])
 
             eps_ttm = ttm_sum(eps_series)
             revenue_ttm = ttm_sum(revenue_series)

@@ -93,7 +93,11 @@ def run_composite_score(
     if tier_a_results is None:
         tier_a_results = run_tier_a()
     if tier_b_results is None:
-        tier_b_results = run_tier_b()
+        # tier_a_results (вище) передається як готовий список тикерів,
+        # щоб run_tier_b() не перераховував Tier A ще раз із нуля --
+        # без цього повний прогін composite_score() рахував Tier A ДВІЧІ
+        # (docs/decisions.md, 2026-09-25).
+        tier_b_results = run_tier_b(tier_a_tickers=[r.ticker for r in tier_a_results])
     if tier_c_results is None:
         tier_c_results = run_tier_c(tier_a_results=tier_a_results, tier_b_results=tier_b_results)
 

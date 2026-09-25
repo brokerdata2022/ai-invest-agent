@@ -20,6 +20,12 @@ data-ingestion/collect_companies_universe.py (SEC EDGAR) мають бути
 shares_outstanding просто пропускаються з попередженням, а не
 падають (див. _run у логах).
 
+SQL-шар — batch-запити (screening._batch_db), не N+1 запит на тикер
+(виправлено 2026-09-25 — до цього живий прогін на ~491 тикер займав
+~9-10 хв через накладні витрати DISTINCT ON-views над TimescaleDB
+hypertable з дрібним chunk-інтервалом на кожен окремий запит;
+docs/decisions.md).
+
 Використання:
     python analysis/screening/tier_a.py
 """
@@ -31,11 +37,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-sys.path.insert(
-    0,
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data-ingestion"),
-)
+_ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ANALYSIS_DIR)  # для "from screening._batch_db import ..."
+sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 from common.db import get_connection  # noqa: E402
+from screening._batch_db import batch_latest_values, batch_series  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -66,6 +72,22 @@ def passes_tier_a(price: Decimal, market_cap: Decimal, avg_dollar_volume: Option
     )
 
 
+def avg_dollar_volume_from_series(
+    closes: list[tuple], volumes: list[tuple]
+) -> Optional[Decimal]:
+    """Чиста функція: середній доларовий обсяг із уже вибраних серій
+    close/volume (кожна — [(observed_at, value), ...], до LOOKBACK_DAYS
+    записів). Еквівалент SQL `AVG(close*volume)` по датах, спільних для
+    обох серій (був INNER JOIN ON observed_at у попередній,
+    по-тикерній версії запиту) — тепер рахується в Python, бо обидві
+    серії вже вибрані ОДНИМ batched-запитом на всі тикери одразу."""
+    volume_by_date = {observed_at: value for observed_at, value in volumes}
+    products = [close * volume_by_date[d] for d, close in closes if d in volume_by_date]
+    if not products:
+        return None
+    return sum(products) / Decimal(len(products))
+
+
 def _tickers_with_quotes(conn) -> list[str]:
     suffix = "_close"
     with conn.cursor() as cur:
@@ -77,52 +99,28 @@ def _tickers_with_quotes(conn) -> list[str]:
         return sorted(row[0][: -len(suffix)] for row in cur.fetchall())
 
 
-def _latest_value(conn, source: str, metric_id: str) -> Optional[Decimal]:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT value FROM v_current_values WHERE source = %s AND metric_id = %s",
-            (source, metric_id),
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
-
-
-def _avg_dollar_volume(conn, ticker: str) -> Optional[Decimal]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            WITH closes AS (
-                SELECT observed_at, value AS close
-                FROM v_observations_latest_revision
-                WHERE source = 'twelvedata' AND metric_id = %s
-                ORDER BY observed_at DESC LIMIT %s
-            ),
-            volumes AS (
-                SELECT observed_at, value AS volume
-                FROM v_observations_latest_revision
-                WHERE source = 'twelvedata' AND metric_id = %s
-                ORDER BY observed_at DESC LIMIT %s
-            )
-            SELECT AVG(c.close * v.volume)
-            FROM closes c JOIN volumes v ON v.observed_at = c.observed_at
-            """,
-            (f"{ticker}_close", LOOKBACK_DAYS, f"{ticker}_volume", LOOKBACK_DAYS),
-        )
-        row = cur.fetchone()
-        return row[0] if row and row[0] is not None else None
-
-
 def run_tier_a() -> list[TierAResult]:
     conn = get_connection()
     try:
         tickers = _tickers_with_quotes(conn)
         logger.info("Тикерів з котируваннями (Twelve Data): %d", len(tickers))
 
+        close_ids = [f"{t}_close" for t in tickers]
+        volume_ids = [f"{t}_volume" for t in tickers]
+        shares_ids = [f"{t}_shares_outstanding" for t in tickers]
+
+        # 4 batched-запити на ВЕСЬ список тикерів замість 3*N окремих —
+        # це і є фікс N+1 (docs/decisions.md, 2026-09-25).
+        prices = batch_latest_values(conn, "twelvedata", close_ids)
+        shares_by_ticker = batch_latest_values(conn, "sec_edgar", shares_ids)
+        closes_by_ticker = batch_series(conn, "twelvedata", close_ids, limit_per_metric=LOOKBACK_DAYS)
+        volumes_by_ticker = batch_series(conn, "twelvedata", volume_ids, limit_per_metric=LOOKBACK_DAYS)
+
         passed: list[TierAResult] = []
         skipped_no_shares = []
         for ticker in tickers:
-            price = _latest_value(conn, "twelvedata", f"{ticker}_close")
-            shares = _latest_value(conn, "sec_edgar", f"{ticker}_shares_outstanding")
+            price = prices.get(f"{ticker}_close")
+            shares = shares_by_ticker.get(f"{ticker}_shares_outstanding")
             if price is None:
                 continue
             if shares is None:
@@ -130,7 +128,10 @@ def run_tier_a() -> list[TierAResult]:
                 continue
 
             market_cap = price * shares
-            avg_dollar_volume = _avg_dollar_volume(conn, ticker)
+            avg_dollar_volume = avg_dollar_volume_from_series(
+                closes_by_ticker.get(f"{ticker}_close", []),
+                volumes_by_ticker.get(f"{ticker}_volume", []),
+            )
 
             if passes_tier_a(price, market_cap, avg_dollar_volume):
                 passed.append(TierAResult(

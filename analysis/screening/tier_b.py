@@ -16,6 +16,10 @@ data-ingestion/collect_companies_universe.py). Як і tier_a.py — не
   дилюції, не мінімум зростання)
 - Liabilities / Assets < 0.6 (останній звітний період)
 
+SQL-шар — batch-запити (screening._batch_db), не N+1 запит на тикер
+(виправлено 2026-09-25, той самий фікс, що й у tier_a.py;
+docs/decisions.md).
+
 Використання:
     python analysis/screening/tier_b.py
 """
@@ -33,6 +37,7 @@ sys.path.insert(0, _ANALYSIS_DIR)  # для "from screening.tier_a import ..."
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 from common.db import get_connection  # noqa: E402
 from screening.tier_a import run_tier_a  # noqa: E402
+from screening._batch_db import batch_series  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -126,6 +131,10 @@ def passes_tier_b(
 
 
 def _series(conn, source: str, metric_id: str) -> list[tuple]:
+    """Часовий ряд ОДНОГО metric_id — лишається для зворотної
+    сумісності (tier_c.py й досі імпортує _series для одиничних
+    викликів поза run_tier_b()); сам run_tier_b() тепер користується
+    batch_series() нижче, не цією функцією, у своєму основному циклі."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT observed_at, value FROM v_observations_latest_revision "
@@ -145,14 +154,24 @@ def run_tier_b(tier_a_tickers: Optional[list[str]] = None) -> list[TierBResult]:
 
         logger.info("Tier B: перевіряю %d тикерів, що пройшли Tier A", len(tier_a_tickers))
 
+        # 6 batched-запитів на ВЕСЬ список тикерів замість 6*N окремих
+        # (docs/decisions.md, 2026-09-25) — по одному на кожен концепт
+        # SEC EDGAR, а не по одному на (тикер, концепт).
+        net_income_by = batch_series(conn, "sec_edgar", [f"{t}_net_income" for t in tier_a_tickers])
+        revenue_by = batch_series(conn, "sec_edgar", [f"{t}_revenue" for t in tier_a_tickers])
+        eps_by = batch_series(conn, "sec_edgar", [f"{t}_eps_diluted" for t in tier_a_tickers])
+        shares_by = batch_series(conn, "sec_edgar", [f"{t}_shares_outstanding" for t in tier_a_tickers])
+        liabilities_by = batch_series(conn, "sec_edgar", [f"{t}_liabilities" for t in tier_a_tickers])
+        assets_by = batch_series(conn, "sec_edgar", [f"{t}_assets" for t in tier_a_tickers])
+
         passed: list[TierBResult] = []
         for ticker in tier_a_tickers:
-            net_income = _series(conn, "sec_edgar", f"{ticker}_net_income")
-            revenue = _series(conn, "sec_edgar", f"{ticker}_revenue")
-            eps = _series(conn, "sec_edgar", f"{ticker}_eps_diluted")
-            shares = _series(conn, "sec_edgar", f"{ticker}_shares_outstanding")
-            liabilities_series = _series(conn, "sec_edgar", f"{ticker}_liabilities")
-            assets_series = _series(conn, "sec_edgar", f"{ticker}_assets")
+            net_income = net_income_by.get(f"{ticker}_net_income", [])
+            revenue = revenue_by.get(f"{ticker}_revenue", [])
+            eps = eps_by.get(f"{ticker}_eps_diluted", [])
+            shares = shares_by.get(f"{ticker}_shares_outstanding", [])
+            liabilities_series = liabilities_by.get(f"{ticker}_liabilities", [])
+            assets_series = assets_by.get(f"{ticker}_assets", [])
             liabilities = liabilities_series[0][1] if liabilities_series else None
             assets = assets_series[0][1] if assets_series else None
 
