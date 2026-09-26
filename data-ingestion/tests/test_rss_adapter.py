@@ -1,7 +1,7 @@
 """
 Тести RssAdapter на збережених прикладах відповіді (реальна структура
-Fed/ECB RSS, перевірена живими запитами 2026-09-26) — жодних реальних
-мережевих викликів (див. .claude/skills/add-data-source, п.3).
+Fed/ECB/BOJ RSS, перевірена живими запитами 2026-09-26) — жодних
+реальних мережевих викликів (див. .claude/skills/add-data-source, п.3).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -43,6 +43,20 @@ def ecb_adapter():
         source="ecb_rss",
         stream="geopolitical",
         feed_url="https://www.ecb.europa.eu/rss/press.xml",
+    )
+
+
+@pytest.fixture
+def boj_response():
+    return _fixture("boj_rss_response.xml")
+
+
+@pytest.fixture
+def boj_adapter():
+    return RssAdapter(
+        source="boj_rss",
+        stream="geopolitical",
+        feed_url="https://www.boj.or.jp/en/rss/whatsnew.xml",
     )
 
 
@@ -93,6 +107,33 @@ def test_normalize_ecb_parses_offset_pubdate(ecb_adapter, ecb_response):
     # +0200 -- не GMT/UTC як у Fed, той самий парсер має впоратись.
     assert records[0].published_at == datetime(
         2026, 9, 24, 14, 0, 0, tzinfo=timezone(timedelta(hours=2))
+    )
+
+
+def test_normalize_boj_produces_expected_records(boj_adapter, boj_response):
+    records = boj_adapter.normalize(boj_response)
+    assert len(records) == 2
+
+    first = records[0]
+    assert first.source == "boj_rss"
+    assert first.title == "Conduct of Funds-Supplying Operations against Pooled Collateral"
+    assert first.url == "http://www.boj.or.jp/en/mopo/mpmdeci/mpr_2026/mpr260925a.pdf"
+
+
+def test_normalize_boj_handles_empty_description_tag(boj_adapter, boj_response):
+    # BOJ-фід має <description></description> (тег є, завжди порожній,
+    # на відміну від ECB, де тега взагалі нема) -- обидва варіанти
+    # мають нормалізуватись до description=None у raw_payload.
+    records = boj_adapter.normalize(boj_response)
+    assert records[0].raw_payload["description"] is None
+
+
+def test_normalize_boj_parses_jst_offset_pubdate(boj_adapter, boj_response):
+    # +0900 (JST) -- третій відмінний часовий зсув після Fed (GMT) і
+    # ECB (+0200), той самий парсер має впоратись без змін коду.
+    records = boj_adapter.normalize(boj_response)
+    assert records[0].published_at == datetime(
+        2026, 9, 25, 17, 0, 0, tzinfo=timezone(timedelta(hours=9))
     )
 
 

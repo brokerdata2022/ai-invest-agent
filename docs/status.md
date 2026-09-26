@@ -55,12 +55,14 @@ UBER, BX, STLD, HAL, MDT, CASY (score/деталі — вивід
 | Збір (GDELT, тикери зі скринінгу) | `analysis/news_analysis/collect_stock_news.py` | ✅ живо, 150 статей у `raw_news` (2026-09-25) — query ділиться на групи (`batch_ticker_names`, GDELT відхиляє і занадто довгий, і окремі "надто загальновживані" слова типу "Uber" — `STOCK_NAME_OVERRIDES`) |
 | Збір (GDELT, geopolitical) | `data-ingestion/run_collect_news.py --stream geopolitical` | ✅ живо, 72 статті у `raw_news` (2026-09-26) |
 | Збір (GDELT, general) | `data-ingestion/run_collect_news.py --stream general` | ✅ живо, 74 статті у `raw_news` (2026-09-26) |
-| Збір (RSS, Fed+ECB) | `data-ingestion/run_collect_rss.py` | ✅ живо, 20+15 записів у `raw_news`/geopolitical (2026-09-26) — `.content` замість `.text` (UTF-8 BOM у Fed без charset у заголовку ламав `.text`) |
+| Збір (RSS, Fed+ECB+BOJ) | `data-ingestion/run_collect_rss.py` | ✅ живо, 20+15+46 записів (2026-09-26) — `.content` замість `.text` (UTF-8 BOM у Fed без charset у заголовку ламав `.text`) |
 | Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо: watchlist 25/25 (`asset_id` коректно заповнюється), geopolitical 72+35/107 (GDELT+RSS), general 74/74 (`asset_id=None` за задумом для geopolitical/general) — багатомовні джерела без проблем |
 | Сповіщення (Telegram) | `reporting/news_notify.py` | ✅ живо, 4 релевантні з 5 надіслано в Telegram (2026-09-25) |
+| Ціни watchlist-активів | `macro/fred_adapter.py` (WTI/Brent/EUR-USD/кава) + `quotes/twelvedata_adapter.py` (золото) | ✅ живо, 5 з 6 (срібло — заблоковано платним тарифом Twelve Data) |
+| Агрегація | `analysis/news_analysis/aggregate.py` — кластеризація дублікатів + зведення по активу | ✅ живо |
 
-**Не зроблено:** BOJ чи інші центробанки в RSS-реєстрі (жодного URL
-ще не перевірено живим запитом).
+**Збір даних по news/ — закрито (рішення користувача, 2026-09-26).**
+Синтез (Anthropic API) і щоденний дайджест — відкладені до Фази 2.
 
 **Якість (виправлено 2026-09-26, за фідбеком користувача):**
 GDELT-запити не обмежувались за часом — місяцями старі статті
@@ -120,14 +122,16 @@ external_id` робить повтор безпечним, нічого не д�
 
 ## Наступний змістовний крок
 
-news/ повністю готовий і живо підтверджений — 3 потоки, 2 механізми
-збору (GDELT + RSS), аналіз, Telegram-сповіщення (вище). Далі — на
-вибір користувача, не техпріоритет:
+**Збір даних по news/ закрито (рішення користувача, 2026-09-26)** — 3
+потоки, 2 механізми збору (GDELT + RSS Fed/ECB/BOJ), класифікація,
+агрегація, ціни watchlist-активів. Синтез (Anthropic) і щоденний
+дайджест — свідомо відкладені до Фази 2 (`docs/news-purpose.md`).
+Далі — на вибір користувача, не техпріоритет:
 1. **monitoring/** — календар релізів + тригери на нові дані (Фаза 1
    хвіст + Фаза 3 старт), поки не почато.
 2. **Оркестрація** (Celery/Prefect/Airflow чи cron) — автоматичний
    розклад для всіх скриптів збору/аналізу замість ручного запуску;
    явно відкладено до завершення news/ (рішення користувача,
    2026-09-25) — news/ тепер готовий, це вже актуальний варіант.
-3. **Розширити RSS-реєстр** — BOJ чи інші центробанки, коли з'явиться
-   перевірений живим запитом URL.
+3. **Фаза 2** — синтез (Anthropic) + щоденний дайджест, коли до цього
+   дійде черга.

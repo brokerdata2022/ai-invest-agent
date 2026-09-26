@@ -123,7 +123,8 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent'),
     ('gdelt', 'news', 'aggregator', 'GDELT DOC 2.0 API — глобальний агрегатор новин, query-фільтр на рівні запиту (watchlist/general/geopolitical потоки), без ключа'),
     ('fed_rss', 'news', 'official_primary', 'Federal Reserve — офіційний RSS усіх прес-релізів, без ключа'),
-    ('ecb_rss', 'news', 'official_primary', 'ECB — офіційний RSS прес-релізів/промов/прес-конференцій, без ключа')
+    ('ecb_rss', 'news', 'official_primary', 'ECB — офіційний RSS прес-релізів/промов/прес-конференцій, без ключа'),
+    ('boj_rss', 'news', 'official_primary', 'Bank of Japan — офіційний RSS новин (whatsnew), без ключа')
 ON CONFLICT (name) DO NOTHING;
 
 -- Views для читабельного перегляду. raw_observations лишається
