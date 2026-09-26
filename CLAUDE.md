@@ -37,8 +37,11 @@
   біржових даних) — заплановано, адаптер ще не написаний
 - **Форекс:** ECB reference rates (першоджерело, щоденні) — заплановано
 - **Товари:** заплановано (джерело ще не обрано)
-- **Новини/звіти:** GDELT + офіційні RSS центробанків і статслужб —
-  заплановано; активи для відстеження визначені в docs/watchlist.md
+- **Новини/звіти:** ✅ GDELT (3 потоки: watchlist/geopolitical/general,
+  news/gdelt_adapter.py) + ✅ офіційні RSS Fed/ECB (news/rss_adapter.py);
+  активи для відстеження — docs/watchlist.md, **для чого нам новини й що
+  для цього ще потрібно — docs/news-purpose.md** (5 цілей, поставлено
+  2026-09-26)
 
 ## Як запустити локально
 ```bash
@@ -139,6 +142,9 @@ docker compose exec app python analysis/news_analysis/run_news_analysis.py --str
 
 # Надіслати в Telegram релевантні висновки з news_analysis
 docker compose exec app python reporting/news_notify.py --stream watchlist --limit 5
+
+# Показати агреговані новини (кластери дублікатів + зведення по активу)
+docker compose exec app python analysis/news_analysis/show_aggregated_news.py
 
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
