@@ -73,6 +73,20 @@ def test_normalize_values_and_dates(adapter, aapl_response):
     assert volume_18.value == Decimal("86433100")
 
 
+def test_normalize_strips_slash_from_forex_commodity_ticker(aapl_response):
+    # Regression: Twelve Data вимагає слеш у символі forex/commodity
+    # ("XAU/USD" — twelvedata.com/docs, перевірено 2026-09-26), але
+    # metric_id має лишатись без слеша, узгодженим з внутрішнім
+    # asset_id ("xauusd", news/queries.py:WATCHLIST_ASSET_IDS) — не
+    # форматом символу конкретного джерела.
+    gold_adapter = TwelveDataAdapter(api_key="test-key", ticker="XAU/USD")
+    assert gold_adapter.ticker == "XAU/USD"  # для запиту до API -- як є
+
+    records = gold_adapter.normalize(aapl_response)
+    metric_ids = {r.metric_id for r in records}
+    assert metric_ids == {"xauusd_close", "xauusd_volume"}
+
+
 def test_normalize_skips_empty_volume(adapter, aapl_response):
     records = adapter.normalize(aapl_response)
     day_16_metric_ids = {

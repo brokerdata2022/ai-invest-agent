@@ -26,6 +26,17 @@ docs/screening-criteria.md), тож METRICS-у стилі macro/ не буде:
 metric_id збирається динамічно як "{ticker}_{field}", напр.
 "aapl_close", "aapl_volume" — той самий підхід, що вже задокументовано
 для companies/ (SEC EDGAR) у docs/decisions.md.
+
+Також джерело цін для watchlist-металів (docs/news-purpose.md, ціль
+1): Twelve Data підтверджено підтримує форекс/commodity-символи зі
+слешем (напр. "XAU/USD", "XAG/USD" — twelvedata.com/docs, перевірено
+2026-09-26; FRED видалив LBMA gold/silver fixing у 2022, докладніше
+docs/decisions.md). Тикер зі слешем нормалізується (слеш прибирається)
+перед побудовою metric_id, щоб "XAU/USD" дав metric_id "xauusd_close",
+не "xau/usd_close" — це узгоджує його з внутрішнім asset_id
+("xauusd", news/queries.py:WATCHLIST_ASSET_IDS), а не з форматом
+символу конкретного джерела (rule "metric_id — свій внутрішній,
+стабільний", CLAUDE.md).
 """
 
 import logging
@@ -141,7 +152,7 @@ class TwelveDataAdapter(BaseAdapter):
                 records.append(
                     NormalizedRecord(
                         source=self.source,
-                        metric_id=f"{self.ticker.lower()}_{suffix}",
+                        metric_id=f"{self.ticker.lower().replace('/', '')}_{suffix}",
                         value=value,
                         observed_at=observed_at,
                         fetched_at=fetched_at,

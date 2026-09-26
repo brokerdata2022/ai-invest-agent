@@ -38,6 +38,20 @@ METRICS: dict[str, str] = {
     "housing_starts": "HOUST",         # Housing Starts, місячна, SAAR
     "mortgage_rate_30y": "MORTGAGE30US",  # 30-Year Fixed Rate Mortgage Average, щотижнева
     "usdjpy_fx_rate": "DEXJPUS",        # USD/JPY, щоденна (Fed H.10) — для carry trade разом з fed_funds_rate/japan_policy_rate
+
+    # Ціни watchlist-активів (docs/news-purpose.md, ціль 1 — потрібні,
+    # щоб зіставляти новини з рухом ціни). Перевірено живим WebFetch
+    # 2026-09-26 (не вгадано): усі три активні на fred.stlouisfed.org.
+    # Золото/срібло FRED видалив (LBMA fixing, 2022) — вони йдуть через
+    # Twelve Data (quotes/twelvedata_adapter.py, XAU/USD, XAG/USD), не
+    # сюди. metric_id тут навмисно БЕЗ суфіксу на кшталт "_rate" —
+    # узгоджений з внутрішнім asset_id (news/queries.py:WATCHLIST_ASSET_IDS),
+    # не з існуючим "usdjpy_fx_rate" вище (той — окрема, вже жива
+    # серія, перейменування зламало б безперервність зібраної історії).
+    "wti_crude": "DCOILWTICO",         # Crude Oil Prices: WTI - Cushing, Oklahoma, щоденна, $/барель
+    "brent_crude": "DCOILBRENTEU",     # Crude Oil Prices: Brent - Europe, щоденна, $/барель
+    "eurusd": "DEXUSEU",               # EUR/USD, щоденна (Fed H.10)
+    "coffee": "PCOFFOTMUSDM",          # Global price of Coffee, Other Mild Arabica, МІСЯЧНА (не денна), центи/фунт, джерело IMF
 }
 
 # FRED позначає відсутнє значення символом "." — не 0 і не null.

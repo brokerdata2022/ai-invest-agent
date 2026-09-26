@@ -858,3 +858,54 @@ wire-дублікат ("Asian shares mixed...") коректно згрупов�
 кластери з правильними summary кожна. Зведення по активу:
 wti_crude 13 кластерів (net_lean -6), xauusd 9 (net_lean +2),
 brent_crude 3 (-1), usdjpy 2 (0), btc 2 (-1).
+
+### 2026-09-26: крок 2 — ціни watchlist-активів (WTI/Brent/EUR-USD/кава через FRED, золото/срібло через Twelve Data)
+**Перевірено ЖИВИМ WebFetch на fred.stlouisfed.org перед кодом (не
+вгадано):** `DCOILWTICO` (WTI, дані до 2026-09-15), `DCOILBRENTEU`
+(Brent, до 2026-09-22), `DEXUSEU` (EUR/USD, активна), `PCOFFOTMUSDM`
+(кава, "Other Mild Arabica", МІСЯЧНА не денна, IMF) — усі додані в
+`macro/fred_adapter.py:METRICS`.
+**Знайдено ДО написання коду (не постфактум):** golden/silver LBMA
+fixing series (`GOLDAMGBD228NLBM`/`GOLDPMGBD228NLBM` та срібний
+еквівалент) — **видалені з FRED у січні 2022** (офіційне оголошення
+St. Louis Fed, "ICE Benchmark Administration Ltd (IBA) Data to Be
+Removed From FRED"). Первісне припущення в `docs/news-purpose.md`
+("ймовірно кілька рядків у fred_adapter.py") — спростовано для
+золота/срібла конкретно, підтверджено для WTI/Brent/EUR-USD/кави.
+**Рішення (золото/срібло):** Twelve Data (уже інтегроване джерело)
+підтверджено підтримує `XAU/USD`/`XAG/USD` (офіційна документація
+twelvedata.com/docs). `TwelveDataAdapter` вже приймає довільний тикер
+— жодного нового джерела/адаптера не треба, тільки один фікс:
+`metric_id` будувався прямо з тикера (`"XAU/USD"` → `"xau/usd_close"`,
+зі слешем) — тепер слеш прибирається (`"xauusd_close"`), щоб
+збігатись із внутрішнім `asset_id` (`news/queries.py:WATCHLIST_ASSET_IDS`),
+а не з форматом символу джерела (rule "metric_id — свій внутрішній,
+стабільний", CLAUDE.md).
+**Свідомо залишена невідповідність (не виправляємо):** `usdjpy_fx_rate`
+(існуюча жива FRED-серія, `DEXJPUS`) не перейменована на `usdjpy` —
+перейменування зламало б безперервність уже зібраної історії
+(`raw_observations` append-only, унікальність по metric_id). Нові
+записи (`wti_crude`/`brent_crude`/`eurusd`/`coffee`/`xauusd`/`xagusd`)
+навмисно узгоджені з `WATCHLIST_ASSET_IDS` з нуля, `usdjpy_fx_rate` —
+винятковий випадок, що передував цьому рішенню.
+**Ще НЕ підтверджено живим API-запитом користувача** (тільки
+WebFetch-перевірка існування серій на сайті FRED) — наступний крок:
+`run_collect.py --metric wti_crude` (і так само для інших трьох) +
+`run_collect.py --source twelvedata --ticker "XAU/USD"`.
+**Live-підтвердження (2026-09-26):** усі 4 нові FRED metric_id
+(`wti_crude`/`brent_crude`/`eurusd`/`coffee`) і золото через Twelve
+Data (`XAU/USD`) — підтверджено живими запитами користувача, дані
+записані в `raw_observations`.
+**Срібло (XAG/USD) — НЕ підтверджено, заблоковано тарифом, не кодом:**
+живий запит дав `404 {"message": "This symbol is available starting
+with the Grow or Venture plan"}` — Twelve Data вимагає платний план
+для срібла (золото на тому самому безкоштовному тарифі доступне).
+**Рішення користувача:** пропустити срібло поки що — 5 з 6
+watchlist-активів (WTI/Brent/EUR-USD/кава/золото) уже мають ціни,
+цього достатньо для продовження. `xagusd` лишається без цінового
+ряду, позначено як відкрите питання, не блокує решту плану.
+**usdjpy_fx_rate vs usdjpy — рішення користувача:** лишити
+metric_id `usdjpy_fx_rate` як є (не перейменовувати/не мігрувати
+історичні дані) — неузгодженість з `asset_id` `"usdjpy"` у новинах
+буде явно замапована в коді кроку 4 (зведення новин+цін), коли до
+нього дійде черга, а не виправлена міграцією даних зараз.
