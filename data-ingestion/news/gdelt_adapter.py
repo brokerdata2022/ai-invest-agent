@@ -13,6 +13,15 @@ GDELT сам документує ліміт "не частіше одного �
 пауза між запитами в companies/sec_edgar_adapter.py (docs/decisions.md,
 2026-09-23): проактивна обробка задокументованого ліміту джерела, не
 костиль на одноразову помилку.
+
+timespan (за замовчуванням "3d") обмежує пошук останніми N днями —
+без нього GDELT віддає найновіші `maxrecords` збігів БЕЗ ОБМЕЖЕННЯ
+глибини в часі: для вузьких query це означає статті кількамісячної
+давнини (живо виявлено 2026-09-26 — стаття про ставку з липня була в
+результатах у вересні, коли рішення вже давно прийняте/застаріле) —
+для мети "розуміти ПОТОЧНИЙ напрямок ринку" (docs/decisions.md,
+2026-09-25) стара стаття не просто марна, а шкідлива, якщо DeepSeek
+проаналізує її як актуальний сигнал.
 """
 
 import logging
@@ -61,13 +70,14 @@ class GdeltAdapter(BaseNewsAdapter):
         self.session = session or requests.Session()
         self.sleep = sleep
 
-    def fetch(self, maxrecords: int = 75) -> Any:
+    def fetch(self, maxrecords: int = 75, timespan: str = "3d") -> Any:
         params = {
             "query": self.query,
             "mode": "artlist",
             "format": "json",
             "maxrecords": maxrecords,
             "sort": "datedesc",
+            "timespan": timespan,
         }
 
         attempts = len(_RETRY_DELAYS) + 1

@@ -14,7 +14,8 @@ def fetch_unanalyzed(conn, stream: Optional[str] = None, limit: int = 50) -> lis
     (LEFT JOIN ... IS NULL — не викликаємо DeepSeek на ту саму статтю
     двічі)."""
     query = """
-        SELECT n.id, n.source, n.stream, n.title, n.url, n.published_at
+        SELECT n.id, n.source, n.stream, n.title, n.url, n.published_at,
+               n.raw_payload
         FROM raw_news n
         LEFT JOIN news_analysis a ON a.raw_news_id = n.id
         WHERE a.id IS NULL

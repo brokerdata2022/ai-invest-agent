@@ -102,9 +102,11 @@ class _FakeSession:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = 0
+        self.last_params = None
 
     def get(self, url, params=None, timeout=None):
         self.calls += 1
+        self.last_params = params
         return self._responses.pop(0)
 
 
@@ -164,3 +166,24 @@ def test_fetch_raises_gdelt_error_after_exhausting_retries_on_non_json():
 
     with pytest.raises(GdeltError):
         adapter.fetch()
+
+
+def test_fetch_defaults_to_3d_timespan():
+    # Regression: без обмеження часу GDELT віддавав місяцями старі
+    # статті (живо виявлено 2026-09-26 -- стаття про ставку з липня
+    # в результатах у вересні, коли рішення вже застаріле).
+    session = _FakeSession([_FakeResponse(200, {"articles": []})])
+    adapter = GdeltAdapter(stream="watchlist", query="bitcoin", session=session)
+
+    adapter.fetch()
+
+    assert session.last_params["timespan"] == "3d"
+
+
+def test_fetch_accepts_custom_timespan():
+    session = _FakeSession([_FakeResponse(200, {"articles": []})])
+    adapter = GdeltAdapter(stream="watchlist", query="bitcoin", session=session)
+
+    adapter.fetch(timespan="1w")
+
+    assert session.last_params["timespan"] == "1w"

@@ -19,6 +19,11 @@ long") — з 16 живими тикерами один об'єднаний за
 кілька менших запитів (news/queries.py:batch_ticker_names()) з паузою
 між ними (GDELT ліміт — 1 запит/5с).
 
+За замовчуванням timespan=3d (docs/decisions.md, 2026-09-26) — без
+обмеження GDELT віддає найновіші maxrecords збігів незалежно від
+давності, включно з місяцями старими статтями, марними для "поточний
+напрямок ринку".
+
 Використання:
     python collect_stock_news.py
     python collect_stock_news.py --maxrecords 100
@@ -58,6 +63,12 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--maxrecords", type=int, default=75)
+    parser.add_argument(
+        "--timespan", default="3d",
+        help="скільки часу назад шукати (GDELT-формат, напр. 3d/1w) — "
+             "без обмеження GDELT віддає найновіші maxrecords збігів "
+             "БЕЗ огляду на давність, це можуть бути місяці старі статті",
+    )
     args = parser.parse_args()
 
     tier_c_results = run_tier_c()
@@ -82,7 +93,7 @@ def main() -> None:
 
             adapter = GdeltAdapter(stream="watchlist", query=query)
             try:
-                records = adapter.collect(maxrecords=args.maxrecords)
+                records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
             except (requests.exceptions.RequestException, GdeltError):
                 # Одна невдала група (вичерпаний retry-бюджет на 429/
                 # не-JSON) не повинна губити статті вже зібраних груп —

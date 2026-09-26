@@ -10,6 +10,7 @@ import pytest
 
 from news_analysis.relevance_filter import (
     DeepSeekResponseError,
+    _extract_description,
     analyze_article,
     build_prompt,
     parse_response,
@@ -41,6 +42,35 @@ def test_build_prompt_includes_core_fields():
 def test_build_prompt_without_tracked_assets():
     prompt = build_prompt(ARTICLE, stream="geopolitical")
     assert "Відстежувані активи" not in prompt
+
+
+def test_build_prompt_includes_description_when_present():
+    # Regression: без опису DeepSeek оцінює релевантність з самого
+    # заголовка (docs/decisions.md, 2026-09-26) -- забагато шуму.
+    article = dict(ARTICLE, raw_payload={"description": "Q3 revenue beat estimates by 12%."})
+    prompt = build_prompt(article, stream="watchlist")
+    assert "Опис: Q3 revenue beat estimates by 12%." in prompt
+
+
+def test_build_prompt_omits_description_line_when_absent():
+    prompt = build_prompt(ARTICLE, stream="watchlist")
+    assert "Опис:" not in prompt
+
+
+def test_build_prompt_omits_description_line_when_gdelt_style_payload():
+    # GDELT raw_payload не має "description" взагалі -- .get() безпечний.
+    article = dict(ARTICLE, raw_payload={"domain": "example.com", "language": "English"})
+    prompt = build_prompt(article, stream="watchlist")
+    assert "Опис:" not in prompt
+
+
+def test_extract_description_handles_missing_or_non_dict_payload():
+    assert _extract_description({}) is None
+    assert _extract_description({"raw_payload": None}) is None
+    assert _extract_description({"raw_payload": "not a dict"}) is None
+    assert _extract_description({"raw_payload": {"description": None}}) is None
+    assert _extract_description({"raw_payload": {"description": "   "}}) is None
+    assert _extract_description({"raw_payload": {"description": " text "}}) == "text"
 
 
 def test_parse_response_valid():

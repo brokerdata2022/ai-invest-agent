@@ -45,13 +45,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stream", choices=sorted(QUERY_BUILDERS), default="watchlist")
     parser.add_argument("--maxrecords", type=int, default=75)
+    parser.add_argument(
+        "--timespan", default="3d",
+        help="скільки часу назад шукати (GDELT-формат, напр. 3d/1w) — "
+             "без обмеження GDELT віддає найновіші maxrecords збігів "
+             "БЕЗ огляду на давність, це можуть бути місяці старі статті",
+    )
     args = parser.parse_args()
 
     query = QUERY_BUILDERS[args.stream]()
-    logger.info("GDELT query (%s): %s", args.stream, query)
+    logger.info("GDELT query (%s, timespan=%s): %s", args.stream, args.timespan, query)
 
     adapter = GdeltAdapter(stream=args.stream, query=query)
-    records = adapter.collect(maxrecords=args.maxrecords)
+    records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
     logger.info("Отримано %d статей", len(records))
 
     if not records:

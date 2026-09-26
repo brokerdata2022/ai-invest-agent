@@ -34,23 +34,36 @@ TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _DIRECTION_EMOJI = {"up": "🟢", "down": "🔴", "neutral": "⚪", "unclear": "❓"}
 
 
-def fetch_recent_relevant(conn, stream: str = None, limit: int = 5) -> list[dict]:
-    """Останні релевантні (is_relevant=true) висновки DeepSeek, найновіші
-    перші. Без дедуплікації "вже надіслано раніше" — той самий підхід,
-    що й telegram_notify.py (завжди останній стан, не чергу подій);
-    якщо стане незручно — окреме рішення в docs/decisions.md."""
+def fetch_recent_relevant(
+    conn, stream: str = None, limit: int = 5, max_age_days: int = 7
+) -> list[dict]:
+    """Останні релевантні (is_relevant=true) висновки DeepSeek — за
+    published_at СТАТТІ (коли вона фактично вийшла), не за created_at
+    АНАЛІЗУ (коли ми її проаналізували). Це не одне й те саме: стаття
+    може пролежати в raw_news тижнями (append-only, ніколи не
+    видаляється, rule 6 CLAUDE.md) і потрапити в аналіз пізніше —
+    сортування за created_at показало б її як "останню новину", хоча
+    вона вже давно застаріла. max_age_days відсікає такий "хвіст" —
+    навіть релевантна, але місяцями стара стаття (живо виявлено
+    2026-09-26 — липнева стаття про ставку в результатах у вересні)
+    не повинна виглядати як актуальний сигнал у сповіщенні.
+
+    Без дедуплікації "вже надіслано раніше" — той самий підхід, що й
+    telegram_notify.py (завжди останній стан, не чергу подій); якщо
+    стане незручно — окреме рішення в docs/decisions.md."""
     query = """
         SELECT n.title, n.url, n.stream, n.published_at,
                a.asset_id, a.direction, a.confidence, a.summary
         FROM news_analysis a
         JOIN raw_news n ON n.id = a.raw_news_id
         WHERE a.is_relevant = true
+          AND n.published_at >= now() - (%s || ' days')::interval
     """
-    params: list = []
+    params: list = [max_age_days]
     if stream is not None:
         query += " AND n.stream = %s"
         params.append(stream)
-    query += " ORDER BY a.created_at DESC LIMIT %s"
+    query += " ORDER BY n.published_at DESC LIMIT %s"
     params.append(limit)
 
     with conn.cursor() as cur:
@@ -87,6 +100,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stream", choices=["watchlist", "general", "geopolitical"], default=None)
     parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument(
+        "--max-age-days", type=int, default=7,
+        help="не показувати статті, опубліковані раніше N днів тому",
+    )
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -99,7 +116,9 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        rows = fetch_recent_relevant(conn, stream=args.stream, limit=args.limit)
+        rows = fetch_recent_relevant(
+            conn, stream=args.stream, limit=args.limit, max_age_days=args.max_age_days
+        )
     finally:
         conn.close()
 
