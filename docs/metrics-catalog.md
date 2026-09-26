@@ -122,11 +122,31 @@ targets (Finnhub) — потребують окремого джерела по�
 - VIX — індекс волатильності ("індикатор страху")
 - Крива дохідності — вже покрито вище (DGS10/DGS2)
 
-## Крипто (джерело: CoinGecko / Binance — адаптер ще не написаний)
+## Крипто (BTC/ETH/SOL, docs/watchlist.md) — ✅ адаптери написані, 2026-09-26
 
+| metric_id | Джерело | Що |
+|---|---|---|
+| `btc_close` / `eth_close` / `sol_close` | `crypto/binance_adapter.py` | щоденний close (klines, проти USDT) |
+| `btc_volume` / `eth_volume` / `sol_volume` | `crypto/binance_adapter.py` | щоденний обсяг торгів (klines) |
+| `btc_market_cap` / `eth_market_cap` / `sol_market_cap` | `crypto/coingecko_adapter.py` | щоденний market cap (агрегатор, чого немає в даних однієї біржі) |
 
-- Ціна/об'єм топ-активів
-- Funding rates, on-chain метрики — опційно, пізніше і складніше
+`--source binance`/`--source coingecko` обов'язковий для цих
+metric_id (обидва джерела використовують ті самі btc/eth/sol —
+`_resolve_source()` у `run_collect.py` навмисно вимагає явний вибір,
+не вгадує).
+
+Funding rates, on-chain метрики — опційно, пізніше і складніше, не
+зараз.
+
+## Срібло (XAG/USD) — ✅ через CoinGecko-проксі, 2026-09-26
+
+`crypto/coingecko_adapter.py`, `metric_id` `xagusd_close`, coin_id
+`kinesis-silver` (KAG — токен Kinesis Money, 1:1 до фізичного срібла
+в алокованому сховищі). Причина проксі, не прямого джерела —
+Twelve Data (`quotes/twelvedata_adapter.py`, той самий шлях, що для
+золота `xauusd`) вимагає платний тариф для XAG/USD. Санітарна
+перевірка (gold:silver ratio) і застереження — `docs/decisions.md`,
+2026-09-26.
 
 ## Новини / сентимент (джерело: GDELT + офіційні RSS)
 

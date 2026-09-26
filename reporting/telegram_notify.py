@@ -54,6 +54,16 @@ METRIC_LABELS = {
     "eurozone_unemployment_rate": "Рівень безробіття (єврозона)",
     "japan_policy_rate": "Policy Rate (Uncollateralized O/N Call Rate, Японія)",
     "japan_cpi": "CPI (інфляція, Японія)",
+    "btc_close": "BTC/USDT (ціна закриття)",
+    "btc_volume": "BTC/USDT (обсяг торгів)",
+    "btc_market_cap": "BTC (market cap)",
+    "eth_close": "ETH/USDT (ціна закриття)",
+    "eth_volume": "ETH/USDT (обсяг торгів)",
+    "eth_market_cap": "ETH (market cap)",
+    "sol_close": "SOL/USDT (ціна закриття)",
+    "sol_volume": "SOL/USDT (обсяг торгів)",
+    "sol_market_cap": "SOL (market cap)",
+    "xagusd_close": "XAG/USD (срібло, проксі через kinesis-silver)",
 }
 
 # metric_id → джерело, для автовизначення --source, якщо не задано явно.
@@ -70,6 +80,10 @@ _METRIC_SOURCE = {
     "eurozone_unemployment_rate": "ecb",
     "japan_policy_rate": "boj",
     "japan_cpi": "estat",
+    "btc_close": "binance", "btc_volume": "binance", "btc_market_cap": "coingecko",
+    "eth_close": "binance", "eth_volume": "binance", "eth_market_cap": "coingecko",
+    "sol_close": "binance", "sol_volume": "binance", "sol_market_cap": "coingecko",
+    "xagusd_close": "coingecko",
 }
 
 

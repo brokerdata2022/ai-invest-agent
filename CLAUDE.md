@@ -33,10 +33,13 @@
   companies/sec_edgar_adapter.py) + ✅ Twelve Data (ціни/обсяг,
   неофіційне джерело — quotes/twelvedata_adapter.py; Stooq і Alpaca
   розглядались і відкинуті, деталі — docs/decisions.md 2026-09-14/20)
-- **Крипта:** CoinGecko (агрегатор) + Binance public API (першоджерело
-  біржових даних) — заплановано, адаптер ще не написаний
-- **Форекс:** ECB reference rates (першоджерело, щоденні) — заплановано
-- **Товари:** заплановано (джерело ще не обрано)
+- **Крипта:** ✅ Binance public API (ціна/обсяг, першоджерело біржі,
+  crypto/binance_adapter.py) + ✅ CoinGecko (market cap, агрегатор,
+  crypto/coingecko_adapter.py) — BTC/ETH/SOL, docs/watchlist.md
+- **Форекс/Товари поза watchlist-парами:** закрито як окрема задача
+  (рішення користувача, 2026-09-26) — розширення переліку валютних
+  пар/товарів понад watchlist (docs/watchlist.md) користувач вносить
+  сам через файл вибраних активів, не через нові адаптери на запит
 - **Новини/звіти:** ✅ GDELT (3 потоки: watchlist/geopolitical/general,
   news/gdelt_adapter.py) + ✅ офіційні RSS Fed/ECB (news/rss_adapter.py);
   активи для відстеження — docs/watchlist.md, **для чого нам новини й що

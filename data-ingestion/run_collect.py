@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.db import get_connection, insert_observations  # noqa: E402
+from crypto.binance_adapter import BinanceAdapter, METRICS as BINANCE_METRICS  # noqa: E402
+from crypto.coingecko_adapter import CoinGeckoAdapter, METRICS as COINGECKO_METRICS  # noqa: E402
 from macro.boj_adapter import BojAdapter, METRICS as BOJ_METRICS  # noqa: E402
 from macro.ecb_adapter import EcbAdapter, METRICS as ECB_METRICS  # noqa: E402
 from macro.estat_adapter import EstatAdapter, METRICS as ESTAT_METRICS  # noqa: E402
@@ -51,6 +53,15 @@ ADAPTERS = {
     "estat": {"class": EstatAdapter, "metrics": ESTAT_METRICS, "needs_api_key": "ESTAT_APP_ID", "id_kwarg": "metric_id"},
     "twelvedata": {"class": TwelveDataAdapter, "metrics": {}, "needs_api_key": "TWELVEDATA_API_KEY", "id_kwarg": "ticker"},
     "sec_edgar": {"class": SecEdgarAdapter, "metrics": {}, "needs_api_key": "SEC_EDGAR_USER_AGENT", "id_kwarg": "ticker"},
+    # binance/coingecko ділять ті самі metric_id (btc/eth/sol, закритий
+    # watchlist — docs/watchlist.md) навмисно: одна біржа (ціна/обсяг) і
+    # агрегатор (market cap) — це різні показники по тому самому активу,
+    # не альтернативні джерела того самого показника. _resolve_source()
+    # тому вимагає явний --source для --metric btc/eth/sol (немає
+    # неоднозначності: metric_id той самий рядок, --metric в CLI мапить на
+    # metric_id адаптера напряму, а не на конкретний "*_close"/"*_market_cap").
+    "binance": {"class": BinanceAdapter, "metrics": BINANCE_METRICS, "needs_api_key": None, "id_kwarg": "metric_id"},
+    "coingecko": {"class": CoinGeckoAdapter, "metrics": COINGECKO_METRICS, "needs_api_key": None, "id_kwarg": "metric_id"},
 }
 
 

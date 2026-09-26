@@ -16,6 +16,8 @@
 | e-Stat | `macro/estat_adapter.py` | CPI (Японія) | ✅ живо |
 | SEC EDGAR | `companies/sec_edgar_adapter.py` | revenue/EPS/shares/assets/liabilities, S&P 500 (500/503 компаній) | ✅ живо |
 | Twelve Data | `quotes/twelvedata_adapter.py` | ціна/обсяг акцій | ✅ живо |
+| Binance | `crypto/binance_adapter.py` | ціна/обсяг BTC/ETH/SOL (klines) | ✅ живо (2026-09-26) |
+| CoinGecko | `crypto/coingecko_adapter.py` | market cap BTC/ETH/SOL + срібло (xagusd, проксі kinesis-silver) | ✅ живо, крипто-частина; xagusd — код+тести готові, live-прогін користувача ще не підтверджено (2026-09-26) |
 
 ### Скринінг акцій (analysis/screening/) — воронка Tier A → B → C → ранжування
 Критерії — `docs/screening-criteria.md`. Universe — S&P 500 (constituents.csv).
@@ -38,10 +40,10 @@ Tier A→B→C→ранжування виконується за ~7 секун�
 UBER, BX, STLD, HAL, MDT, CASY (score/деталі — вивід
 `composite_score.py --top 10`, не зберігається в БД, тільки друкується).
 
-Тести: 113/113 до фіксу N+1 (`docker compose exec app pytest -q`) —
-67 data-ingestion/reporting + 46 analysis/screening; +4 нові на
-`avg_dollar_volume_from_series` (117 очікується, ще не підтверджено
-живим прогоном pytest).
+Тести: 225/225 живо підтверджено (`docker compose exec app pytest -q`,
+2026-09-26) — включно з +4 на `avg_dollar_volume_from_series` і новими
+тестами crypto-адаптерів (test_binance_adapter.py/
+test_coingecko_adapter.py).
 
 ### Новини (news/, GDELT + RSS + DeepSeek) — усі джерела живо підтверджені
 Обсяг — `docs/decisions.md` 2026-09-25 "news/ — обсяг, межа шарів і
@@ -58,7 +60,7 @@ UBER, BX, STLD, HAL, MDT, CASY (score/деталі — вивід
 | Збір (RSS, Fed+ECB+BOJ) | `data-ingestion/run_collect_rss.py` | ✅ живо, 20+15+46 записів (2026-09-26) — `.content` замість `.text` (UTF-8 BOM у Fed без charset у заголовку ламав `.text`) |
 | Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо: watchlist 25/25 (`asset_id` коректно заповнюється), geopolitical 72+35/107 (GDELT+RSS), general 74/74 (`asset_id=None` за задумом для geopolitical/general) — багатомовні джерела без проблем |
 | Сповіщення (Telegram) | `reporting/news_notify.py` | ✅ живо, 4 релевантні з 5 надіслано в Telegram (2026-09-25) |
-| Ціни watchlist-активів | `macro/fred_adapter.py` (WTI/Brent/EUR-USD/кава) + `quotes/twelvedata_adapter.py` (золото) | ✅ живо, 5 з 6 (срібло — заблоковано платним тарифом Twelve Data) |
+| Ціни watchlist-активів | `macro/fred_adapter.py` (WTI/Brent/EUR-USD/кава) + `quotes/twelvedata_adapter.py` (золото) + `crypto/coingecko_adapter.py` (срібло, проксі kinesis-silver) | ✅ 6/6, срібло-проксі — live-прогін ще не підтверджено (2026-09-26) |
 | Агрегація | `analysis/news_analysis/aggregate.py` — кластеризація дублікатів + зведення по активу | ✅ живо |
 
 **Збір даних по news/ — закрито (рішення користувача, 2026-09-26).**
@@ -101,15 +103,22 @@ external_id` робить повтор безпечним, нічого не д�
 
 - **Фаза 1:** календар релізів (для Фази 3) — не побудовано. news/ —
   усі потоки й обидва механізми збору (GDELT + RSS) живо підтверджено
-  вище, повністю готовий.
+  вище, повністю готовий. Крипта (BTC/ETH/SOL) — Binance + CoinGecko
+  (вище), живо підтверджено 2026-09-26. Форекс/товари поза watchlist-
+  парами — закрито як окрема задача (рішення користувача, 2026-09-26):
+  розширення переліку користувач вносить сам через файл вибраних
+  активів, нові адаптери на це не пишемо.
 - **Фаза 2:** ринкові очікування, порівняння факт/очікування — не
   почато. LLM-аналіз новин — робочий зріз є (усі 3 потоки, вище),
   детерміноване порівняння факт/очікування — окреме, ще не почате
   (screening-трек вище — паралельна робота, інший вид аналізу)
 - **Фаза 3:** моніторинг/тригери — не почато
 - **Фаза 4:** формат регулярного звіту (email/dashboard/файл) — не
-  вирішено; список активів поза акціями (крипто/форекс/товари) — тільки
-  watchlist, немає ні збору даних, ні скринінгу
+  вирішено; список активів поза акціями — крипто збір даних готовий,
+  форекс/товари поза watchlist — на розсуд користувача (файл вибраних
+  активів), скринінгу (аналог Tier A/B/C) немає ні для одного з них.
+  **На майбутнє (фінальна стадія):** редагування списку обраних активів
+  через Telegram — зафіксовано користувачем 2026-09-26, не реалізовано.
 
 ## Відкриті другорядні питання (не блокуючі)
 
@@ -122,10 +131,27 @@ external_id` робить повтор безпечним, нічого не д�
 
 ## Наступний змістовний крок
 
-**Збір даних по news/ закрито (рішення користувача, 2026-09-26)** — 3
-потоки, 2 механізми збору (GDELT + RSS Fed/ECB/BOJ), класифікація,
-агрегація, ціни watchlist-активів. Синтез (Anthropic) і щоденний
-дайджест — свідомо відкладені до Фази 2 (`docs/news-purpose.md`).
+**Крипто-адаптери (Binance + CoinGecko, BTC/ETH/SOL) готові й живо
+підтверджено 2026-09-26** (`data-ingestion/crypto/`, docs/decisions.md)
+— збір, запис у `raw_observations`, `reporting/telegram_notify.py`
+для btc/eth/sol (close/volume/market_cap) — усе перевірено користувачем
+живо. Повний `pytest -q` (225/225) підтверджено, включно з новими
+тестами.
+
+**Срібло (xagusd) розблоковано тим самим CoinGecko-адаптером
+(2026-09-26)** — `kinesis-silver` як токен-проксі 1:1 до фізичного
+срібла (Binance перевірено й відкинуто — немає жодного срібного
+символу). Код+тести готові, **live-прогін користувача проти реальної
+БД ще не підтверджено**:
+```bash
+docker compose exec app python data-ingestion/run_collect.py --source coingecko --metric xagusd
+docker compose exec db psql -U invest_agent -d invest_agent -c "SELECT * FROM raw_observations WHERE source='coingecko' AND metric_id='xagusd_close' ORDER BY observed_at DESC LIMIT 5;"
+```
+Після цього — усі 6 watchlist-активів поза акціями (docs/watchlist.md)
+матимуть ціну, Ціль 1 (docs/news-purpose.md) буде повністю закрита з
+боку даних (лишається зведення сигналу з рухом ціни — крок 3/4 плану,
+Фаза 2).
+
 Далі — на вибір користувача, не техпріоритет:
 1. **monitoring/** — календар релізів + тригери на нові дані (Фаза 1
    хвіст + Фаза 3 старт), поки не почато.
@@ -135,3 +161,7 @@ external_id` робить повтор безпечним, нічого не д�
    2026-09-25) — news/ тепер готовий, це вже актуальний варіант.
 3. **Фаза 2** — синтез (Anthropic) + щоденний дайджест, коли до цього
    дійде черга.
+
+(Форекс/товари поза watchlist-парами — закрито як окрема задача,
+рішення користувача 2026-09-26: не техпріоритет і не наш пункт —
+користувач розширює список сам через файл вибраних активів.)
