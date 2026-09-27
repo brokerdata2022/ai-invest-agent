@@ -27,6 +27,21 @@ def _log_path(job_name: str) -> Path:
     return LOG_DIR / f"{job_name}_{stamp}.log"
 
 
+def _decode(value) -> str:
+    """subprocess.TimeoutExpired.stdout/.stderr лишаються BYTES навіть
+    коли subprocess.run() викликано з text=True — text= декодує вивід
+    лише на успішному шляху (CompletedProcess), не на винятку. Живий
+    баг, знайдений 2026-09-27: quotes_universe_refresh дійсно провалився
+    по timeout, але сам except-блок падав з `TypeError: can only
+    concatenate str (not "bytes") to str` замість залогувати й надіслати
+    Telegram-алерт (notify_failure) — провал ставав повністю невидимим."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def run_job(job_name: str) -> bool:
     """Повертає True, якщо джоба виконалась успішно (subprocess exit 0
     або функція не кинула виняток)."""
@@ -47,7 +62,7 @@ def run_job(job_name: str) -> bool:
                 timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS),
             )
         except subprocess.TimeoutExpired as exc:
-            output = (exc.stdout or "") + (exc.stderr or "")
+            output = _decode(exc.stdout) + _decode(exc.stderr)
             log_path.write_text(output)
             logger.error("Джоба %s не завершилась за %s с — примусово зупинено", job_name, exc.timeout)
             notify_failure(job_name, f"timeout ({exc.timeout}с)", output)

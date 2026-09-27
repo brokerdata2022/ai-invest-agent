@@ -9,6 +9,19 @@ analysis/expectations/compare_releases.py (expectation_comparisons).
 low-показники не варті окремого сповіщення (той самий принцип, що
 "короткий звіт, не повний дамп", reporting/CLAUDE.md).
 
+Надсилає ЛИШЕ ще не надіслані порівняння (notified_at IS NULL) і
+взагалі НІЧОГО не шле в Telegram, якщо таких немає — на відміну від
+news_notify.py/synthesis_notify.py (свідомо "завжди останній стан",
+бо там майже завжди є свіжий контент кожного циклу), сюрпризи
+факт/очікування — рідкісна подія (кілька релізів на місяць), а
+notify_expectations стоїть у розкладі кожні 15 хв: без цього фільтра
+скрипт спамив би тим самим "Нових порівнянь немає" щоцикл цілодобово
+(живий баг, знайдений під час розгортання з нуля — docs/decisions.md,
+2026-09-27). Побічний ефект фільтра — природне групування: якщо
+кілька показників вийшли й пораховані в одному 15-хв циклі
+compare_expectations, вони підуть ОДНИМ повідомленням (rows тут може
+містити кілька рядків), а не окремими.
+
 Використання (після analysis/expectations/compare_releases.py):
     python expectations_notify.py --limit 5
 """
@@ -27,6 +40,11 @@ from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 from telegram_notify import METRIC_LABELS  # noqa: E402
 
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis")
+)
+from expectations._db import mark_notified  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -36,14 +54,17 @@ DEFAULT_IMPACT_LEVELS = ("high", "medium")
 def fetch_recent_comparisons(
     conn, limit: int = 5, impact_levels: tuple = DEFAULT_IMPACT_LEVELS
 ) -> list[dict]:
+    """Лише ще НЕ надіслані (notified_at IS NULL) — виклик main() відповідає
+    за mark_notified() після успішної відправки."""
     query = """
-        SELECT ec.metric_id, ec.source, ec.observed_at, ec.actual_value,
+        SELECT ec.id, ec.metric_id, ec.source, ec.observed_at, ec.actual_value,
                ec.expected_value_raw, ec.expected_value_parsed, ec.surprise,
                ec.surprise_pct, ec.comparison_method, ec.created_at,
                rl.impact_level
         FROM expectation_comparisons ec
         JOIN release_log rl ON rl.id = ec.release_log_id
         WHERE rl.impact_level = ANY(%s)
+          AND ec.notified_at IS NULL
         ORDER BY ec.created_at DESC
         LIMIT %s
     """
@@ -93,12 +114,16 @@ def main() -> None:
     conn = get_connection()
     try:
         rows = fetch_recent_comparisons(conn, limit=args.limit, impact_levels=tuple(args.impact))
+        if not rows:
+            logger.info("Нових порівнянь немає — сповіщення не надсилається")
+            return
+
+        text = format_message(rows)
+        send_telegram_message(token, chat_id, text)
+        mark_notified(conn, [row["id"] for row in rows])
+        logger.info("Надіслано в Telegram: %d порівнянь", len(rows))
     finally:
         conn.close()
-
-    text = format_message(rows)
-    send_telegram_message(token, chat_id, text)
-    logger.info("Надіслано в Telegram: %d порівнянь", len(rows))
 
 
 if __name__ == "__main__":

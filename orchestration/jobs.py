@@ -182,10 +182,21 @@ JOBS = {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "screening" / "composite_score.py"), "--top", "10"),
     },
     "companies_universe_refresh": {
+        # Весь S&P 500 (503 тикери), SEC EDGAR — живо виміряно
+        # 2026-09-27: ~26 хв, дефолтний runner.py timeout (30 хв) лишає
+        # замало запасу на природний розкид латентності API. 50 хв.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_companies_universe.py")),
+        "timeout": 3000,
     },
     "quotes_universe_refresh": {
+        # Весь S&P 500 (503 тикери), Twelve Data — ліміт 8 запитів/хв
+        # робить це НАЙПОВІЛЬНІШОЮ джобою в конвеєрі: живо виміряно
+        # 2026-09-27 — ~78 хв. Дефолтний runner.py timeout (30 хв) робив
+        # цю ЩОДЕННУ джобу приречена на TimeoutExpired щоразу (живий
+        # провал, знайдений під час розгортання з нуля) — 90 хв дає
+        # реальний запас.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_universe.py")),
+        "timeout": 5400,
     },
     "safety_net_collect_all": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py"), "--limit", "15"),

@@ -8,14 +8,27 @@
 # автоматично (docker-compose сервіс scheduler), тож це не "інший
 # шлях для ручного тесту", а справжня перевірка продакшн-автоматизації.
 #
+# Best-effort, як collect_all.py: одна джоба, що впала (напр. GDELT
+# 429 — задокументований, транзієнтний ризик спільного dev-IP,
+# docs/status.md), НЕ повинна зупиняти решту незалежних кроків
+# (ціни/SEC/RSS/DeepSeek/синтез/дайджест) — живо виявлено 2026-09-27:
+# попередня версія мала `set -e`, і провал news_collect_watchlist
+# обірвав увесь конвеєр ще до screening-кроків, які від нього не
+# залежать. Підсумок по всіх джобах — наприкінці.
+#
 # Використання:
 #   bash scripts/bootstrap_2_pipeline.sh
 
-set -e
+ok=()
+failed=()
 
 run() {
     echo "== $1 =="
-    docker compose exec app python orchestration/run_job.py "$1"
+    if docker compose exec app python orchestration/run_job.py "$1"; then
+        ok+=("$1")
+    else
+        failed+=("$1")
+    fi
 }
 
 echo "--- Скринінг (Tier A/B/C, потребує свіжий universe з кроку 1) ---"
@@ -27,9 +40,17 @@ run news_collect_stock
 run news_collect_general
 run news_collect_rss
 
-echo "--- Ціни (watchlist-товари/форекс/золото + весь S&P 500 universe) ---"
+echo "--- Ціни (watchlist-товари/форекс/золото) ---"
 run watchlist_prices
-run quotes_universe_refresh
+# quotes_universe_refresh (весь S&P 500 universe, Twelve Data) СВІДОМО
+# пропущено тут — bootstrap_1_backfill.sh щойно зробив рівно те саме
+# (collect_universe.py, той самий код) хвилини тому; другий прогін
+# ~65-80 хв через ліміт 8 запитів/хв дав би нуль нових даних, а нижче
+# по конвеєру ніщо на нього не чекає (screening уже відпрацював на
+# наявних цінах). Живо виявлено 2026-09-27 (bootstrap "з нуля" одразу
+# після backfill'у — саме той сценарій, для якого написаний README).
+# У продакшені джоба й так іде щодня о 3:00 (orchestration/schedule.py)
+# — тут вона просто не потрібна ще раз.
 
 echo "--- DeepSeek-класифікація зібраних новин ---"
 run news_analysis_watchlist
@@ -43,6 +64,17 @@ run discover_candidates
 
 echo "--- Щоденний дайджест (Ціль 5) ---"
 run daily_digest
+
+echo
+echo "--- Підсумок ---"
+echo "Успішно (${#ok[@]}): ${ok[*]:-(нічого)}"
+if [ "${#failed[@]}" -gt 0 ]; then
+    echo "Провалилось (${#failed[@]}): ${failed[*]}"
+    echo "Лог кожної — logs/<назва>_*.log. Транзієнтний збій (напр. GDELT 429)"
+    echo "безпечно перезапустити окремо:"
+    echo "  docker compose exec app python orchestration/run_job.py <назва>"
+    exit 1
+fi
 
 cat <<'EOF'
 

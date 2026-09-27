@@ -255,6 +255,15 @@ CREATE TABLE IF NOT EXISTS expectation_comparisons (
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Додано 2026-09-27: NULL = ще не надіслано в Telegram.
+-- expectations_notify.py проставляє тут now() одразу після успішної
+-- відправки — без цього notify_expectations (розклад — кожні 15 хв)
+-- повторно надсилав би ті самі "останні 5" рядків щоцикл, поки не
+-- набіжить новий реліз (живий баг, знайдений під час розгортання з
+-- нуля — docs/decisions.md, 2026-09-27). ALTER, не тільки CREATE —
+-- та сама причина, що вище: таблиця вже існувала й мала дані.
+ALTER TABLE expectation_comparisons ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
 -- Результати кожного прогону composite_score.py (analysis/screening/) —
 -- раніше тільки друкувались, ніде не зберігались (docs/status.md), тому
 -- ніщо не знало "які тикери зараз пройшли скринінг" (потрібне

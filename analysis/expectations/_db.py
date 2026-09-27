@@ -34,3 +34,17 @@ def save_comparison(conn, result) -> int:
         comparison_id = cur.fetchone()[0]
     conn.commit()
     return comparison_id
+
+
+def mark_notified(conn, comparison_ids: list[int]) -> None:
+    """Проставляє notified_at = now() — виклик reporting/expectations_notify.py
+    одразу після успішної відправки в Telegram, щоб наступний цикл
+    (кожні 15 хв) не надіслав ті самі рядки повторно."""
+    if not comparison_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE expectation_comparisons SET notified_at = now() WHERE id = ANY(%s)",
+            (comparison_ids,),
+        )
+    conn.commit()
