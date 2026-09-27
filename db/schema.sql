@@ -171,6 +171,24 @@ CREATE TABLE IF NOT EXISTS market_synthesis (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Кандидати-новачки, знайдені LLM у general-потоці новин
+-- (analysis/news_analysis/discover_candidates.py, docs/news-purpose.md
+-- "Ціль 3") — активи, яких ще немає в S&P 500 universe. Append-only
+-- журнал відкриттів; "поточний список" (10 найновіших унікальних
+-- тикерів) — DISTINCT ON (ticker) ORDER BY discovered_at DESC.
+-- Кожен рядок тут ВЖЕ пройшов верифікацію торгованості через Twelve
+-- Data (verify_tradable()) — LLM лише пропонує, підтвердження факту,
+-- що тикер реальний і ліквідний, завжди детерміноване, не на слово LLM.
+CREATE TABLE IF NOT EXISTS candidate_assets (
+    id             BIGSERIAL PRIMARY KEY,
+    ticker         TEXT NOT NULL,
+    company_name   TEXT NOT NULL,
+    reasoning      TEXT NOT NULL,
+    source_refs    JSONB NOT NULL,
+    llm_call_id    BIGINT REFERENCES llm_call_log(id),
+    discovered_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),

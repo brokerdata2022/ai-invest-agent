@@ -166,6 +166,50 @@ def save_market_synthesis(
     return synthesis_id
 
 
+def save_candidate(
+    conn,
+    ticker: str,
+    company_name: str,
+    reasoning: str,
+    source_refs: list,
+    llm_call_id: int,
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO candidate_assets
+                (ticker, company_name, reasoning, source_refs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (ticker, company_name, reasoning, json.dumps(source_refs), llm_call_id),
+        )
+        candidate_id = cur.fetchone()[0]
+    conn.commit()
+    return candidate_id
+
+
+def fetch_current_candidates(conn, limit: int = 10) -> list[dict]:
+    """Останні `limit` УНІКАЛЬНИХ тикерів (за найновішим discovered_at
+    кожного) — ротація за свіжістю, не за рангом (docs/decisions.md,
+    2026-09-27: рішення користувача покластись на LLM-відбір)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticker, company_name, reasoning, discovered_at FROM (
+                SELECT DISTINCT ON (ticker) ticker, company_name, reasoning, discovered_at
+                FROM candidate_assets
+                ORDER BY ticker, discovered_at DESC
+            ) t
+            ORDER BY discovered_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def save_analysis(
     conn, raw_news_id: int, result: NewsAnalysisResult, llm_call_id: int
 ) -> None:

@@ -122,6 +122,12 @@ JOBS = {
     "notify_market_synthesis": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "market_notify.py")),
     },
+    "discover_candidates": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "discover_candidates.py")),
+    },
+    "notify_candidates": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "candidates_notify.py")),
+    },
     "crypto_prices": {
         "callable": _crypto_prices,
     },

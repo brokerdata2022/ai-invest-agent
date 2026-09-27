@@ -89,6 +89,14 @@ SCHEDULE = {
         "trigger": {"hour": 18, "minute": 45},
         "why": "+5 хв після market_synthesis, щоб надсилати вже готовий висновок.",
     },
+    "discover_candidates": {
+        "trigger": {"hour": 19, "minute": 0},
+        "why": "Раз на добу, після market_synthesis@18:40/45 (не одночасно) — той самий принцип контролю вартості LLM, що news_synthesis/market_synthesis.",
+    },
+    "notify_candidates": {
+        "trigger": {"hour": 19, "minute": 5},
+        "why": "+5 хв після discover_candidates, щоб надсилати вже готовий список.",
+    },
     "crypto_prices": {
         "trigger": {"minute": 0},
         "why": "Крипта торгується 24/7 — щогодини, без прив'язки до релізів чи торгової сесії.",
