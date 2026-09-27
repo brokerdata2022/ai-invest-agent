@@ -121,8 +121,14 @@ JOBS = {
     "refresh_calendar": {
         "subprocess": _py(str(REPO_ROOT / "monitoring" / "refresh_calendar.py")),
     },
+    "update_forecasts": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "update_forecasts.py")),
+    },
     "compare_expectations": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "compare_releases.py")),
+    },
+    "synthesize_expectations": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "synthesize.py")),
     },
     "notify_expectations": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "expectations_notify.py")),

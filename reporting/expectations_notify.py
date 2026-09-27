@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
 Сповіщення в Telegram про сюрприз факт/очікування — уже пораховане
-analysis/expectations/compare_releases.py (expectation_comparisons).
-Тільки форматування готового результату, жодної аналітики
-(reporting/CLAUDE.md).
+analysis/expectations/compare_releases.py (expectation_comparisons) і,
+якщо встиг відпрацювати synthesize.py, доповнене причинним LLM-
+висновком (expectation_synthesis) — "вийшло X, очікувалось Y, це
+означає Z" (docs/status.md, критерій завершення Фази 2). Тільки
+форматування готового результату, жодної аналітики (reporting/CLAUDE.md).
+Синтез — LEFT JOIN: якщо ще не встиг (той самий 15-хв цикл) або LLM-
+виклик впав, повідомлення все одно йде із самими цифрами — не
+блокується на LLM-кроці.
 
 За замовчуванням — тільки impact_level high/medium (release_log):
 low-показники не варті окремого сповіщення (той самий принцип, що
@@ -60,9 +65,10 @@ def fetch_recent_comparisons(
         SELECT ec.id, ec.metric_id, ec.source, ec.observed_at, ec.actual_value,
                ec.expected_value_raw, ec.expected_value_parsed, ec.surprise,
                ec.surprise_pct, ec.comparison_method, ec.created_at,
-               rl.impact_level
+               rl.impact_level, es.summary AS synthesis_summary
         FROM expectation_comparisons ec
         JOIN release_log rl ON rl.id = ec.release_log_id
+        LEFT JOIN expectation_synthesis es ON es.comparison_id = ec.id
         WHERE rl.impact_level = ANY(%s)
           AND ec.notified_at IS NULL
         ORDER BY ec.created_at DESC
@@ -88,6 +94,8 @@ def format_message(rows: list[dict]) -> str:
             f"{float(row['expected_value_parsed']):.4g} (прогноз: {row['expected_value_raw']})"
         )
         lines.append(f"Сюрприз: {float(row['surprise']):+.4g}{pct_suffix}")
+        if row.get("synthesis_summary"):
+            lines.append(f"→ {row['synthesis_summary']}")
         lines.append("")
     return "\n".join(lines).rstrip()
 

@@ -264,6 +264,45 @@ CREATE TABLE IF NOT EXISTS expectation_comparisons (
 -- та сама причина, що вище: таблиця вже існувала й мала дані.
 ALTER TABLE expectation_comparisons ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 
+-- LLM-синтез причинного висновку поверх уже готового детермінованого
+-- сюрпризу (analysis/expectations/synthesize.py, docs/status.md
+-- "наступний крок Фази 2") — "вийшло X, очікувалось Y, це означає Z"
+-- (PLAN.md, критерій завершення Фази 2). Один рядок НА comparison_id
+-- (не append-only, як news_synthesis/market_synthesis вище) — той
+-- самий release_log-цикл не синтезується двічі, і expectation_comparisons
+-- сам уже UNIQUE по release_log_id.
+CREATE TABLE IF NOT EXISTS expectation_synthesis (
+    id             BIGSERIAL PRIMARY KEY,
+    comparison_id  BIGINT NOT NULL UNIQUE REFERENCES expectation_comparisons(id),
+    summary        TEXT NOT NULL,
+    direction      TEXT NOT NULL,     -- up | down | neutral | unclear
+    confidence     NUMERIC NOT NULL,
+    reasoning      TEXT NOT NULL,
+    source_refs    JSONB NOT NULL,
+    llm_call_id    BIGINT REFERENCES llm_call_log(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Прогнози трендової моделі (analysis/forecasting/, PLAN.md Фаза 2
+-- "базовий механізм прогнозування"). Один рядок на (source, metric_id,
+-- method, based_on_observed_at) — той самий принцип UPSERT, що
+-- news_synthesis: повторний прогін на тих самих вхідних даних оновлює
+-- рядок, не дублює. based_on_observed_at — дата останньої фактичної
+-- точки, з якої екстрапольовано (для аудиту "на чому базувався прогноз").
+CREATE TABLE IF NOT EXISTS metric_forecasts (
+    id                    BIGSERIAL PRIMARY KEY,
+    source                TEXT NOT NULL,
+    metric_id             TEXT NOT NULL,
+    method                TEXT NOT NULL,      -- напр. linear_trend
+    based_on_observed_at  DATE NOT NULL,
+    periods_ahead         INTEGER NOT NULL DEFAULT 1,
+    forecast_value        NUMERIC NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_forecasts_unique
+    ON metric_forecasts (source, metric_id, method, based_on_observed_at);
+
 -- Результати кожного прогону composite_score.py (analysis/screening/) —
 -- раніше тільки друкувались, ніде не зберігались (docs/status.md), тому
 -- ніщо не знало "які тикери зараз пройшли скринінг" (потрібне

@@ -29,13 +29,21 @@ SCHEDULE = {
         "trigger": {"day_of_week": "mon", "hour": 6, "minute": 0},
         "why": "refresh_calendar.py сам розрахований на тижневу періодичність — заводить наперед на наступний тиждень.",
     },
+    "update_forecasts": {
+        "trigger": {"minute": "1-59/15"},
+        "why": "+1 хв після check_releases (те саме 15-хв вікно) — читає ті самі 'detected' release_log-рядки, що compare_expectations (+5 хв), але статус НЕ чіпає, тому має встигнути ДО compare_expectations, поки рядки ще 'detected' (перехід у 'processed' — виключно compare_releases.py).",
+    },
     "compare_expectations": {
         "trigger": {"minute": "5-59/15"},
         "why": "+5 хв після check_releases (те саме 15-хв вікно) — дає час insert_observations() зафіксуватись, перш ніж порівнювати факт.",
     },
+    "synthesize_expectations": {
+        "trigger": {"minute": "8-59/15"},
+        "why": "+3 хв після compare_expectations — LLM-синтез причинного висновку поверх уже готового сюрпризу (detected/processed рідкісні, зазвичай 0-1 показник за цикл, 3 хв достатньо на один LLM-виклик), перед notify_expectations.",
+    },
     "notify_expectations": {
-        "trigger": {"minute": "10-59/15"},
-        "why": "+5 хв після compare_expectations — надсилає вже готові порівняння, не порожньо.",
+        "trigger": {"minute": "12-59/15"},
+        "why": "+4 хв після synthesize_expectations (+7 після compare_expectations) — надсилає вже готові порівняння разом із синтезом, якщо встиг; LEFT JOIN у expectations_notify.py не блокується, якщо ні.",
     },
     "news_collect_watchlist": {
         "trigger": {"hour": "0,6,12,18", "minute": 0},

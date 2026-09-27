@@ -5,6 +5,9 @@ analysis/news_analysis/_db.py: SQL без інтерпретації значе�
 parse_expected.py.
 """
 
+import json
+from typing import Optional
+
 
 def save_comparison(conn, result) -> int:
     """result — compare_releases.ComparisonResult."""
@@ -48,3 +51,89 @@ def mark_notified(conn, comparison_ids: list[int]) -> None:
             (comparison_ids,),
         )
     conn.commit()
+
+
+def fetch_unsynthesized_comparisons(conn, limit: int = 20) -> list[dict]:
+    """Рядки expectation_comparisons, для яких ще немає expectation_synthesis
+    (LEFT JOIN ... IS NULL — той самий патерн, що news_analysis/_db.py:
+    fetch_unanalyzed()). impact_level тягнеться з release_log — потрібен
+    LLM для контексту "наскільки взагалі важливий цей реліз"."""
+    query = """
+        SELECT ec.id AS comparison_id, ec.release_log_id, ec.source, ec.metric_id,
+               ec.observed_at, ec.actual_value, ec.expected_value_raw,
+               ec.expected_value_parsed, ec.surprise, ec.surprise_pct,
+               ec.comparison_method, rl.impact_level
+        FROM expectation_comparisons ec
+        JOIN release_log rl ON rl.id = ec.release_log_id
+        LEFT JOIN expectation_synthesis es ON es.comparison_id = ec.id
+        WHERE es.id IS NULL
+        ORDER BY ec.created_at ASC
+        LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(query, (limit,))
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def save_synthesis(
+    conn,
+    comparison_id: int,
+    result,  # SynthesisResult (synthesize.py) — качина типізація: лише
+             # .direction/.confidence/.summary/.reasoning, той самий
+             # принцип, що news_analysis/_db.py:save_synthesis().
+    source_refs: list,
+    llm_call_id: int,
+) -> int:
+    """UPSERT — той самий release_log-цикл не синтезується двічі
+    (db/schema.sql: expectation_synthesis.comparison_id UNIQUE), але
+    ретрай (ручний повторний прогін) оновлює рядок, не падає на
+    конфлікті."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO expectation_synthesis
+                (comparison_id, summary, direction, confidence, reasoning, source_refs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (comparison_id) DO UPDATE SET
+                summary = EXCLUDED.summary,
+                direction = EXCLUDED.direction,
+                confidence = EXCLUDED.confidence,
+                reasoning = EXCLUDED.reasoning,
+                source_refs = EXCLUDED.source_refs,
+                llm_call_id = EXCLUDED.llm_call_id,
+                created_at = now()
+            RETURNING id
+            """,
+            (
+                comparison_id,
+                result.summary,
+                result.direction,
+                result.confidence,
+                result.reasoning,
+                json.dumps(source_refs),
+                llm_call_id,
+            ),
+        )
+        synthesis_id = cur.fetchone()[0]
+    conn.commit()
+    return synthesis_id
+
+
+def log_llm_call(
+    conn, provider: str, purpose: str, prompt: str, response: str, source_ref: Optional[str]
+) -> int:
+    """Дубльовано з news_analysis/_db.py навмисно — кожен LLM-скрипт
+    самодостатній (той самий принцип, що synthesize.py/synthesize_market.py)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO llm_call_log (provider, purpose, prompt, response, source_ref)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (provider, purpose, prompt, response, source_ref),
+        )
+        llm_call_id = cur.fetchone()[0]
+    conn.commit()
+    return llm_call_id

@@ -31,6 +31,13 @@ run() {
     fi
 }
 
+echo "--- Календар релізів (щоб не чекати до понеділка — жива діра, знайдена 2026-09-27: без цього release_log лишається порожнім аж до першого запланованого refresh_calendar, і check_releases/compare_expectations/synthesize_expectations/notify_expectations просто нічого не роблять на свіжому розгортанні) ---"
+run refresh_calendar
+run check_releases
+run compare_expectations
+run synthesize_expectations
+run notify_expectations
+
 echo "--- Скринінг (Tier A/B/C, потребує свіжий universe з кроку 1) ---"
 run screening_composite_score
 
