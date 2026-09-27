@@ -47,17 +47,17 @@ test_coingecko_adapter.py).
 
 ### Новини (news/, GDELT + RSS + DeepSeek) — усі джерела живо підтверджені
 Обсяг — `docs/decisions.md` 2026-09-25 "news/ — обсяг, межа шарів і
-схема БД". Усі 3 потоки (watchlist/geopolitical/general) і обидва
-механізми збору (GDELT-query + офіційний RSS) реалізовані й
-підтверджені живо. news/ з початкового плану — повністю готовий.
+схема БД". 3 потоки (watchlist/geopolitical/general); geopolitical
+збирається виключно через RSS з 2026-09-27 (нижче), watchlist/general
+досі через GDELT-query. news/ з початкового плану — повністю готовий.
 
 | Крок | Модуль | Статус |
 |---|---|---|
 | Збір (GDELT, watchlist.md) | `data-ingestion/run_collect_news.py --stream watchlist` | ✅ живо, 75 статей у `raw_news` (2026-09-25) |
 | Збір (GDELT, тикери зі скринінгу) | `analysis/news_analysis/collect_stock_news.py` | ✅ живо, 150 статей у `raw_news` (2026-09-25) — query ділиться на групи (`batch_ticker_names`, GDELT відхиляє і занадто довгий, і окремі "надто загальновживані" слова типу "Uber" — `STOCK_NAME_OVERRIDES`) |
-| Збір (GDELT, geopolitical) | `data-ingestion/run_collect_news.py --stream geopolitical` | ✅ живо, 72 статті у `raw_news` (2026-09-26) |
+| ~~Збір (GDELT, geopolitical)~~ | ~~`data-ingestion/run_collect_news.py --stream geopolitical`~~ | ⚠️ **видалено 2026-09-27** — курований список фраз мовчки губив непередбачені події (живий приклад — загроза вторгнення, `docs/decisions.md`); замінено на RSS-рядок нижче |
 | Збір (GDELT, general) | `data-ingestion/run_collect_news.py --stream general` | ✅ живо, 74 статті у `raw_news` (2026-09-26) |
-| Збір (RSS, Fed+ECB+BOJ) | `data-ingestion/run_collect_rss.py` | ✅ живо, 20+15+46 записів (2026-09-26) — `.content` замість `.text` (UTF-8 BOM у Fed без charset у заголовку ламав `.text`) |
+| Збір (RSS, geopolitical: Fed+ECB+BOJ+BBC+Al Jazeera+Guardian+NPR+Sky News+DW) | `data-ingestion/run_collect_rss.py` | ✅ Fed/ECB/BOJ живо (20+15+46 записів, 2026-09-26); 6 нових широких редакційних фідів додано 2026-09-27 (`.content` замість `.text` — UTF-8 BOM у Fed без charset ламав `.text`), live-прогін нового набору користувач підтверджує сам |
 | Аналіз (DeepSeek) | `analysis/news_analysis/` (deepseek_client/relevance_filter/_db) | ✅ живо: watchlist 25/25 (`asset_id` коректно заповнюється), geopolitical 72+35/107 (GDELT+RSS), general 74/74 (`asset_id=None` за задумом для geopolitical/general) — багатомовні джерела без проблем |
 | Сповіщення (Telegram) | `reporting/news_notify.py` | ✅ живо, 4 релевантні з 5 надіслано в Telegram (2026-09-25) |
 | Ціни watchlist-активів | `macro/fred_adapter.py` (WTI/Brent/EUR-USD/кава) + `quotes/twelvedata_adapter.py` (золото) + `crypto/coingecko_adapter.py` (срібло, проксі kinesis-silver) | ✅ 6/6, срібло-проксі — live-прогін ще не підтверджено (2026-09-26) |
@@ -239,6 +239,24 @@ Live-прогін користувач підтверджує сам.
 Повторний прогін `daily_digest.py` після очищення 11 старих
 дублікатів і застосування схеми — рівно стільки повідомлень, скільки
 унікальних подій, без дублів.
+
+**Крок 7 — geopolitical-стрім: GDELT замінено на широкі RSS-фіди
+(2026-09-27):** живий приклад (новина про загрозу вторгнення на Кубу)
+показав, що курований GDELT-запит (`GEOPOLITICAL_TERMS`) мовчки губив
+непередбачені події — структурна діра саме в тій частині системи, що
+мала ловити такі події (Ціль 4). Видалено `GEOPOLITICAL_TERMS`/
+`build_geopolitical_query()`; додано 6 широких редакційних RSS-фідів
+(BBC/Al Jazeera/Guardian/NPR/Sky News/DW — усі live-перевірені HTTP
+200) до `news/rss_feeds.py`, той самий `RssAdapter`, що вже для
+Fed/ECB/BOJ. Принцип: не вгадувати тему наперед, а брати найширшу
+стрічку кількох незалежних джерел і покластись на вже реалізований
+`aggregate.py:cluster_articles()`/`source_count` як природний фільтр
+значущості й шуму. Оркестрація не змінилась — `news_collect_rss`
+(уже запланована) автоматично підхопила нові фіди, окрему GDELT-джобу
+для geopolitical видалено. Тест — `data-ingestion/tests/test_rss_feeds.py`.
+`general`-стрім (market-специфічні терміни) не чіпали — інша задача.
+Деталі всього ходу дослідження — `docs/decisions.md`. Live-прогін
+нового набору джерел користувач підтверджує сам.
 
 ### monitoring/ — календар релізів, двофазний цикл, US+EUR+JPY (2026-09-26/27)
 

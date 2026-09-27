@@ -41,10 +41,6 @@ SCHEDULE = {
         "trigger": {"hour": "0,6,12,18", "minute": 0},
         "why": "4 рази на добу — вікно збору (GDELT timespan=3d) з запасом перекриває цей інтервал, дедуп по url прибирає повтори (docs/decisions.md, 2026-09-26).",
     },
-    "news_collect_geopolitical": {
-        "trigger": {"hour": "6,18", "minute": 0},
-        "why": "Той самий 6-годинний ритм, що й watchlist — один цикл для всіх новинних потоків.",
-    },
     "news_collect_general": {
         "trigger": {"hour": "6,18", "minute": 0},
         "why": "Той самий 6-годинний ритм, що й watchlist — один цикл для всіх новинних потоків.",

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Ручний запуск збору новин (GDELT) для одного потоку — watchlist
-(docs/watchlist.md, не-акційна частина), geopolitical або general
-(докладніше news/queries.py, docs/decisions.md 2026-09-25/26). Акції
-зі скринінгу — окремий скрипт, analysis/news_analysis/collect_stock_news.py.
+(docs/watchlist.md, не-акційна частина) або general (докладніше
+news/queries.py, docs/decisions.md 2026-09-25/26). Акції зі скринінгу —
+окремий скрипт, analysis/news_analysis/collect_stock_news.py.
+
+geopolitical-стрім більше НЕ збирається через GDELT тут — замінено на
+широкі RSS-фіди (news/rss_feeds.py, run_collect_rss.py),
+docs/decisions.md 2026-09-27.
 
 Використання:
     python run_collect_news.py --stream watchlist
-    python run_collect_news.py --stream geopolitical
     python run_collect_news.py --stream general
 """
 
@@ -25,7 +28,6 @@ from common.news_db import insert_news_batch  # noqa: E402
 from news.gdelt_adapter import GdeltAdapter  # noqa: E402
 from news.queries import (  # noqa: E402
     build_general_query,
-    build_geopolitical_query,
     build_watchlist_query,
 )
 
@@ -34,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 QUERY_BUILDERS = {
     "watchlist": build_watchlist_query,
-    "geopolitical": build_geopolitical_query,
     "general": build_general_query,
 }
 

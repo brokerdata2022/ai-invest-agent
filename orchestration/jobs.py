@@ -86,9 +86,6 @@ JOBS = {
     "news_collect_watchlist": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "watchlist"),
     },
-    "news_collect_geopolitical": {
-        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "geopolitical"),
-    },
     "news_collect_general": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "general"),
     },

@@ -219,10 +219,16 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія'),
     ('twelvedata', 'quotes', 'aggregator', 'Twelve Data — щоденні ціна/обсяг акцій, безкоштовна реєстрація без капчі (Stooq відкинуто через бот-захист, Alpaca — гео-блок; docs/decisions.md 2026-09-20)'),
     ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent'),
-    ('gdelt', 'news', 'aggregator', 'GDELT DOC 2.0 API — глобальний агрегатор новин, query-фільтр на рівні запиту (watchlist/general/geopolitical потоки), без ключа'),
+    ('gdelt', 'news', 'aggregator', 'GDELT DOC 2.0 API — глобальний агрегатор новин, query-фільтр на рівні запиту (watchlist/general потоки — geopolitical перенесено на широкі RSS-фіди, docs/decisions.md 2026-09-27), без ключа'),
     ('fed_rss', 'news', 'official_primary', 'Federal Reserve — офіційний RSS усіх прес-релізів, без ключа'),
     ('ecb_rss', 'news', 'official_primary', 'ECB — офіційний RSS прес-релізів/промов/прес-конференцій, без ключа'),
     ('boj_rss', 'news', 'official_primary', 'Bank of Japan — офіційний RSS новин (whatsnew), без ключа'),
+    ('bbc_rss', 'news', 'aggregator', 'BBC News — головний RSS (усі категорії, не звужений), без ключа'),
+    ('aljazeera_rss', 'news', 'aggregator', 'Al Jazeera — RSS "all" (усі категорії), без ключа'),
+    ('guardian_rss', 'news', 'aggregator', 'The Guardian — RSS World, без ключа'),
+    ('npr_rss', 'news', 'aggregator', 'NPR — головний RSS (Top Stories), без ключа'),
+    ('skynews_rss', 'news', 'aggregator', 'Sky News — RSS World, без ключа'),
+    ('dw_rss', 'news', 'aggregator', 'Deutsche Welle — RSS "all" (англомовний), без ключа'),
     ('binance', 'crypto', 'official_primary', 'Binance public API — щоденні OHLCV-свічки (klines) BTC/ETH/SOL проти USDT, без ключа'),
     ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа')
 ON CONFLICT (name) DO NOTHING;
