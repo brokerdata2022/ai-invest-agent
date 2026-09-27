@@ -150,6 +150,27 @@ CREATE TABLE IF NOT EXISTS news_synthesis (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Синтез глобального контексту (analysis/news_analysis/synthesize_market.py,
+-- docs/news-purpose.md "Ціль 4" — risk-on/risk-off стан ринку) —
+-- geopolitical/general новини не прив'язані до активу (asset_id завжди
+-- NULL), тому окрема від news_synthesis форма: без asset_id/price_*,
+-- замість них macro_context (знімок ключових ставок/дохідностей на
+-- момент синтезу, для аудиту) і source_refs зі списком урахованих
+-- кластерів (title+source_count, не окремих статей).
+CREATE TABLE IF NOT EXISTS market_synthesis (
+    id             BIGSERIAL PRIMARY KEY,
+    window_days    INTEGER NOT NULL,
+    cluster_count  INTEGER NOT NULL,
+    macro_context  JSONB NOT NULL,
+    summary        TEXT NOT NULL,
+    direction      TEXT NOT NULL,     -- up (risk-on) | down (risk-off) | neutral | unclear
+    confidence     NUMERIC NOT NULL,
+    reasoning      TEXT NOT NULL,
+    source_refs    JSONB NOT NULL,
+    llm_call_id    BIGINT REFERENCES llm_call_log(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),

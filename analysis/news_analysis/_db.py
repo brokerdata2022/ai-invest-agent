@@ -8,15 +8,17 @@ synthesize.py.
 import json
 from typing import Optional
 
-from news_analysis.aggregate import AssetSignal
+from news_analysis.aggregate import AssetSignal, NewsCluster
 from news_analysis.prices import PriceChange
 from news_analysis.relevance_filter import NewsAnalysisResult
 
-# SynthesisResult (synthesize.py) навмисно НЕ імпортується для type hint:
-# synthesize.py імпортує цей модуль (fetch_relevant_for_aggregation/
-# log_llm_call/save_synthesis) — імпорт у зворотному напрямку дав би
-# циклічний імпорт. save_synthesis() приймає result качиною типізацією
-# (потрібні лише .direction/.confidence/.summary/.reasoning).
+# SynthesisResult (synthesize.py/synthesize_market.py) навмисно НЕ
+# імпортується для type hint: обидва модулі імпортують цей модуль
+# (fetch_relevant_for_aggregation/log_llm_call/save_synthesis/
+# save_market_synthesis) — імпорт у зворотному напрямку дав би
+# циклічний імпорт. save_synthesis()/save_market_synthesis() приймають
+# result качиною типізацією (потрібні лише .direction/.confidence/
+# .summary/.reasoning).
 
 
 def fetch_unanalyzed(conn, stream: Optional[str] = None, limit: int = 50) -> list[dict]:
@@ -121,6 +123,41 @@ def save_synthesis(
                 result.confidence,
                 result.reasoning,
                 json.dumps(signal.summaries),
+                llm_call_id,
+            ),
+        )
+        synthesis_id = cur.fetchone()[0]
+    conn.commit()
+    return synthesis_id
+
+
+def save_market_synthesis(
+    conn,
+    clusters: list[NewsCluster],
+    macro: dict,
+    window_days: int,
+    result,  # SynthesisResult (synthesize_market.py) — качина типізація, див. коментар вище
+    llm_call_id: int,
+) -> int:
+    source_refs = [{"title": c.representative_title, "source_count": c.source_count} for c in clusters]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market_synthesis
+                (window_days, cluster_count, macro_context, summary, direction,
+                 confidence, reasoning, source_refs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                window_days,
+                len(clusters),
+                json.dumps(macro),
+                result.summary,
+                result.direction,
+                result.confidence,
+                result.reasoning,
+                json.dumps(source_refs),
                 llm_call_id,
             ),
         )

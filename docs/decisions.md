@@ -1127,3 +1127,36 @@ YAGNI до реального переходу).
 активів, нові кандидати, глобальний контекст без прив'язки до активу,
 щоденний дайджест — жодна не почата цією сесією; live-прогін на
 реальних даних користувач підтверджує сам.
+**Live-прогін (2026-09-27):** підтверджено — 5 активів із новинним
+сигналом, 2 (xauusd/brent_crude) синтезовано з першої спроби, третій
+(wti_crude) впав через тимчасовий DNS-збій контейнера до
+api.deepseek.com — саме для цього є per-item обробка помилок (мірор
+`run_news_analysis.py`), решта прогону не постраждала; повторний
+запуск синтезував і його. Побічно виявлено й задокументовано
+[[project-docker-bind-mount-staleness]] (пам'ять сесії) — bind mount
+Docker Desktop інколи не встигає синхронізувати відредаговані файли,
+лікується `docker compose restart app`.
+
+### 2026-09-27: LLM-синтез новин — реалізовано для Цілі 4 (глобальний контекст, risk-on/risk-off)
+**Що:** `analysis/news_analysis/synthesize_market.py` — на відміну від
+Цілі 1 (пара актив↔ціна), тут geopolitical/general новини не прив'язані
+до активу (`asset_id` завжди NULL, рішення 2026-09-25) — замість
+`aggregate_by_asset()` новий `aggregate.py:top_clusters()` (найбільш
+підтверджені історії за `source_count`, без прив'язки до активу).
+Зводить топ-N кластерів (дефолт 8) з макро-контекстом (останнє й
+попереднє значення 7 ключових рядів — 10Y/2Y Treasury, Fed Funds Rate,
+EUR/USD, USD/JPY, ECB Deposit Rate, BOJ Policy Rate — уже живі FRED/
+ECB/BOJ дані) в один risk-on/risk-off висновок LLM.
+**Формат/провайдер:** той самий контракт, що Ціль 1 (DeepSeek зараз,
+`SYNTHESIS_LLM_PROVIDER`), `direction` тут означає risk-on(up)/
+risk-off(down), не буквальний рух ціни — задокументовано в системному
+промпті. Код (SynthesisResult/parse_response/call_llm) навмисно
+дубльований з `synthesize.py`, не винесений у спільний модуль — той
+самий принцип, що вже є між `relevance_filter.py`/`synthesize.py`
+(кожен LLM-скрипт самодостатній, без спільного фреймворку).
+**Нова таблиця** `market_synthesis` — окрема від `news_synthesis`
+(немає `asset_id`/`price_*`, замість них `macro_context` JSONB-знімок
+і `source_refs` зі списком кластерів title+source_count).
+**Оркестрація:** раз на добу, ввечері (`market_synthesis`@18:40,
+`notify_market_synthesis`@18:45 — після вечірнього циклу збору/аналізу
+geopolitical/general@18:20, охоплює новини за весь день).

@@ -11,6 +11,7 @@ from news_analysis.aggregate import (
     aggregate_by_asset,
     cluster_articles,
     normalize_title,
+    top_clusters,
 )
 
 
@@ -151,6 +152,23 @@ def test_cluster_articles_empty_input():
 
 def test_aggregate_by_asset_empty_input():
     assert aggregate_by_asset([]) == {}
+
+
+def test_top_clusters_sorted_by_source_count_desc():
+    clusters = cluster_articles(_WIRE_DUPLICATES + [_UNRELATED])
+    top = top_clusters(clusters, limit=8)
+    assert [c.source_count for c in top] == [4, 1]
+
+
+def test_top_clusters_respects_limit():
+    clusters = cluster_articles(_WIRE_DUPLICATES + [_UNRELATED])
+    top = top_clusters(clusters, limit=1)
+    assert len(top) == 1
+    assert top[0].source_count == 4
+
+
+def test_top_clusters_empty_input():
+    assert top_clusters([]) == []
 
 
 def test_aggregate_by_asset_skips_articles_without_asset_id():

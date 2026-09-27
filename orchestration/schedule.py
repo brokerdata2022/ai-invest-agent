@@ -81,6 +81,14 @@ SCHEDULE = {
         "trigger": {"hour": 6, "minute": 45},
         "why": "+5 хв після news_synthesis, щоб надсилати вже готові висновки.",
     },
+    "market_synthesis": {
+        "trigger": {"hour": 18, "minute": 40},
+        "why": "Раз на добу, ввечері (не зранку, як news_synthesis) — geopolitical/general збираються й аналізуються двічі на добу (6,18), вечірній прогін охоплює новини за весь день; +20 хв після news_analysis_geopolitical/general@18:20 дає їм час завершитись.",
+    },
+    "notify_market_synthesis": {
+        "trigger": {"hour": 18, "minute": 45},
+        "why": "+5 хв після market_synthesis, щоб надсилати вже готовий висновок.",
+    },
     "crypto_prices": {
         "trigger": {"minute": 0},
         "why": "Крипта торгується 24/7 — щогодини, без прив'язки до релізів чи торгової сесії.",

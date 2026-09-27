@@ -111,11 +111,34 @@ external_id` робить повтор безпечним, нічого не д�
 і тикери зі скринінгу без цінового джерела в `ASSET_PRICE_SOURCES` —
 пропускаються з логом, не синтезуються. Провайдер — DeepSeek
 (`SYNTHESIS_LLM_PROVIDER`, докладніше `docs/decisions.md`), Anthropic
-— свідомо відкладено (клієнт не написаний). Live-прогін (реальний
-DeepSeek-виклик) користувач підтверджує сам; тести — на
-фікстурах/monkeypatch (`analysis/tests/test_synthesize.py`,
-`reporting/tests/test_synthesis_notify.py`). Цілі 2-5
-(`docs/news-purpose.md`) синтезом ще не покриті.
+— свідомо відкладено (клієнт не написаний). **Live-прогін підтверджено
+(2026-09-27):** 5 активів із сигналом, 3 синтезовано (xauusd/
+brent_crude/wti_crude — останній з другої спроби, перша впала через
+тимчасовий DNS-збій контейнера, per-item обробка помилок відпрацювала
+як задумано), 2 пропущено без цінового джерела (usdjpy/btc);
+Telegram-сповіщення надіслано. Тести — на фікстурах/monkeypatch
+(`analysis/tests/test_synthesize.py`, `reporting/tests/test_synthesis_notify.py`).
+
+**Крок 3 — LLM-синтез глобального контексту, Ціль 4 (2026-09-27):**
+`analysis/news_analysis/synthesize_market.py` — geopolitical/general
+новини не прив'язані до активу (`asset_id` завжди NULL), тому замість
+`aggregate_by_asset()` новий `aggregate.py:top_clusters()` (топ-N
+найбільш підтверджених історій за `source_count`). Зводить їх з
+макро-контекстом (10Y/2Y Treasury, Fed Funds Rate, EUR/USD, USD/JPY,
+ECB Deposit Rate, BOJ Policy Rate — `fetch_recent()`, останнє й
+попереднє значення) в risk-on/risk-off висновок. Нова таблиця
+`market_synthesis` (окрема форма від `news_synthesis` — `macro_context`
+JSONB замість `asset_id`/`price_*`) + `reporting/market_notify.py` +
+оркестрація раз на добу ввечері (`market_synthesis`@18:40,
+`notify_market_synthesis`@18:45 — після вечірнього циклу geopolitical/
+general@18:20). Код (SynthesisResult/parse_response/call_llm) навмисно
+дубльований із `synthesize.py`, не спільний модуль — той самий
+принцип, що вже є між `relevance_filter.py`/`synthesize.py`. Тести —
+`analysis/tests/test_aggregate.py` (`top_clusters`),
+`analysis/tests/test_synthesize_market.py`,
+`reporting/tests/test_market_notify.py`. Live-прогін користувач
+підтверджує сам. Цілі 2/3/5 (`docs/news-purpose.md`) синтезом ще не
+покриті.
 
 ### monitoring/ — календар релізів, двофазний цикл, US+EUR+JPY (2026-09-26/27)
 
