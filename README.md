@@ -13,7 +13,17 @@
 
 ## Вимоги
 
-- Docker + Docker Compose ([docs.docker.com/get-docker](https://docs.docker.com/get-docker/))
+- Docker Engine + Docker Compose plugin — **нативний `docker-ce`
+  (`sudo apt install docker-ce docker-ce-cli containerd.io docker-compose-plugin`),
+  НЕ Docker Desktop** ([docs.docker.com/get-docker](https://docs.docker.com/get-docker/)).
+  Docker Desktop (навіть версія для Linux) піднімає контейнери у власній
+  легкій ВМ — bind mount (`.:/app` у `docker-compose.yml`, яким код
+  потрапляє в контейнер) синхронізується з хостом НЕ миттєво, живо
+  підтверджено 2026-09-27: редагування файлу на хості інколи не
+  доходило до контейнера без `docker compose restart app`, `apply_schema.py`
+  мовчки застосовував застарілу схему. На голому Docker Engine (як і
+  буде на будь-якому Linux-сервері розгортання) bind mount — пряме
+  спільне використання файлової системи, без цього класу проблем.
 - Git
 - Безкоштовний FRED API-ключ: <https://fred.stlouisfed.org/docs/api/api_key.html>
   (потрібен тільки для макро-даних США; для єврозони, ECB Data Portal,
