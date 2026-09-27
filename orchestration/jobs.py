@@ -77,6 +77,12 @@ JOBS = {
     "refresh_calendar": {
         "subprocess": _py(str(REPO_ROOT / "monitoring" / "refresh_calendar.py")),
     },
+    "compare_expectations": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "compare_releases.py")),
+    },
+    "notify_expectations": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "expectations_notify.py")),
+    },
     "news_collect_watchlist": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "watchlist"),
     },
@@ -103,6 +109,12 @@ JOBS = {
     },
     "news_notify_watchlist": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "news_notify.py"), "--stream", "watchlist", "--limit", "5"),
+    },
+    "news_synthesis": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize.py")),
+    },
+    "notify_synthesis": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "synthesis_notify.py")),
     },
     "crypto_prices": {
         "callable": _crypto_prices,

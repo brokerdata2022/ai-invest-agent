@@ -157,3 +157,34 @@ def mark_detected(conn, log_id: int) -> None:
         )
     conn.commit()
     logger.info("release_log: id=%s позначено detected", log_id)
+
+
+def get_detected_entries(conn) -> list[dict]:
+    """Усі рядки 'detected' — вхід для analysis/expectations/compare_releases.py
+    (порівняння факту з `expected_value`). Той самий принцип, що
+    `get_pending_entries()`: monitoring лише детектує, перехід у
+    'processed' — робота analysis/, коли вона фактично використала ці
+    дані (release_log.py docstring)."""
+    with _cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT id, source, metric_id, scheduled_at, impact_level, expected_value
+            FROM release_log
+            WHERE status = 'detected'
+            ORDER BY scheduled_at
+            """
+        )
+        return cur.fetchall()
+
+
+def mark_processed(conn, log_id: int) -> None:
+    with _cursor(conn) as cur:
+        cur.execute(
+            """
+            UPDATE release_log SET status = 'processed'
+            WHERE id = %s
+            """,
+            (log_id,),
+        )
+    conn.commit()
+    logger.info("release_log: id=%s позначено processed", log_id)

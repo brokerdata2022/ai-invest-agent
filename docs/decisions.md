@@ -1043,3 +1043,87 @@ headless-контейнера.
 **Продакшен переїде на VPS пізніше** — це звичайний docker-compose
 сервіс, тому `docker compose up -d` на VPS піднімає й scheduler без
 змін коду.
+
+### 2026-09-27: перше порівняння факт/очікування — analysis/expectations/
+**Питання (перший пункт Фази 2, PLAN.md):** звідки брати ринкові
+очікування й як їх порівнювати з фактом при виході нових даних.
+**Джерело очікувань:** уже було — `release_log.expected_value`
+(ForexFactory-фід, `monitoring/economic_calendar.py`), нового
+дослідження не знадобилось.
+**Головна складність:** для частини показників сире значення в
+`raw_observations` — РІВЕНЬ (індекс/сума), а прогноз-текст —
+m/m %/q/q % (annualized)/y/y %/абсолютна зміна — РІЗНІ величини,
+пряме віднімання дало б безглузде число. Перевірено вручну по кожному
+адаптеру (`analysis/expectations/comparison_methods.py`, коментарі при
+кожному metric_id): 5 методів приведення до спільних одиниць —
+`level_direct` (уже готова ставка/%, 9 показників), `mom_pct` (cpi/
+core_cpi/pce_price_index/retail_sales), `diff_level` (nonfarm_payrolls,
+абсолютна зміна в тисячах), `qoq_pct_annualized` (real_gdp),
+`yoy_pct` (japan_cpi — e-Stat навмисно обраний як рівень індексу, не %).
+Два показники (`nonfarm_payrolls`, `housing_starts`) додатково
+масштабуються (`RAW_UNIT_SCALE`, /1000) — форекс-текст парситься в
+повні одиниці, а FRED-ряд уже в тисячах.
+**Архітектура:** `release_log.status` тепер реально доходить до
+`processed` (раніше застрягав на `detected` — перехід навмисно
+залишений analysis/, `monitoring/CLAUDE.md`). Новий цикл:
+`check_releases.py` (detected) → `analysis/expectations/compare_releases.py`
+(рахує сюрприз, зберігає в новій `expectation_comparisons`, ставить
+processed) → `reporting/expectations_notify.py` (Telegram, тільки
+impact_level high/medium). Детерміновано, без LLM (analysis/CLAUDE.md:
+числові порівняння — звичайний код). Оркестрація — два нові джоби
+(`orchestration/jobs.py`/`schedule.py`), +5/+10 хв після `check_releases`
+у тому самому 15-хвилинному вікні.
+**Свідома спрощеність:** `yoy_pct` (тільки japan_cpi) бере "13-ту за
+лічбою точку ряду" як наближення "12 місяців тому", не перевіряє
+фактичний місяць — задокументовано відкрито, той самий стиль чесності,
+що срібло-проксі.
+**Live-прогін неможливий цієї сесії** — найближчі релізи 30 вересня/
+2 жовтня (`docs/status.md`); перевірено юніт-тестами
+(`analysis/tests/test_parse_expected.py`,
+`test_comparison_methods.py`, `test_compare_releases.py`, усі на
+фікстурах/monkeypatch, без реальної БД).
+
+### 2026-09-27: LLM-синтез новин (наступний крок Фази 2) — DeepSeek під час розробки, Anthropic перед завершенням
+**Рішення користувача:** поки пишемо й налагоджуємо LLM-синтез новин
+(`analysis/news_analysis/synthesize.py`), викликати DeepSeek — дешевше
+для ітерацій. Перемикання на Anthropic (CLAUDE.md: "фінальний висновок
+аналіз" — Anthropic API) — перед тим, як вважати фічу завершеною.
+**Як реалізувати, коли дійде черга:** провайдер — один параметр
+(`provider: "deepseek" | "anthropic"`, дефолт з env-змінної, напр.
+`SYNTHESIS_LLM_PROVIDER`), не хардкодити виклик конкретного клієнта
+всередині логіки синтезу — щоб заміна була одним рядком у .env, без
+редагування коду. `llm_call_log.provider` (db/schema.sql) уже
+розрахований на обидва значення. Anthropic-клієнт (мірор
+`analysis/news_analysis/deepseek_client.py`) ще не написаний — з'явиться
+разом із синтезом.
+
+### 2026-09-27: LLM-синтез новин — реалізовано для Цілі 1 (ціна↔новини)
+**Що:** `analysis/news_analysis/synthesize.py` — зводить готовий
+новинний сигнал (`aggregate.py:AssetSignal`, живо підтверджено) з
+ціновим рухом watchlist-активу (`prices.py:PriceChange`, код був
+готовий, ще ніким не викликався) в один причинний висновок: чи рух
+ціни пояснюється новинами (тренд), чи ні (шум/корекція) —
+`docs/news-purpose.md`, "Ціль 1".
+**Обсяг:** тільки активи з ОБОМА входами (наразі xauusd/wti_crude/
+brent_crude/eurusd/coffee/usdjpy — `ASSET_PRICE_SOURCES`). Активи з
+новинним сигналом, але без цінового джерела (xagusd/btc/eth/sol,
+тикери акцій зі скринінгу) — пропускаються з логом, не
+псевдо-синтезуються з одним входом. Свідомо не розширювали
+`prices.py`/`aggregate.py` цієї сесії.
+**Формат:** `analysis/CLAUDE.md` "Формат виходу LLM-аналізу" —
+direction/confidence/summary/reasoning від LLM; `source_refs`
+(список `signal.summaries`) приєднує код, не LLM — той самий принцип,
+що `relevance_filter.py` (ризик галюцинації того, що й так відоме).
+Нова таблиця `news_synthesis` (append-only, як `news_analysis`).
+**Провайдер:** DeepSeek зараз (`SYNTHESIS_LLM_PROVIDER=deepseek`,
+дефолт) — рішення вище. `call_llm()` кидає явний `ValueError` для
+будь-якого іншого значення (Anthropic-клієнт не написаний навмисно,
+YAGNI до реального переходу).
+**Оркестрація:** раз на добу (`news_synthesis`@6:40, `notify_synthesis`@6:45)
+— ціна оновлюється раз на добу (`watchlist_prices`@6:00), частіший
+синтез на тому самому ціновому вікні коштував би LLM-викликів без
+нової інформації.
+**Не зроблено:** Цілі 2-5 (`docs/news-purpose.md`) — фундаментал
+активів, нові кандидати, глобальний контекст без прив'язки до активу,
+щоденний дайджест — жодна не почата цією сесією; live-прогін на
+реальних даних користувач підтверджує сам.

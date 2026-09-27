@@ -123,6 +123,33 @@ CREATE TABLE IF NOT EXISTS news_analysis (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Синтез "новини + ціна" по активу за вікно (analysis/news_analysis/
+-- synthesize.py, docs/news-purpose.md "Ціль 1" — точки входу для
+-- watchlist-пар: чи рух ціни пояснюється новинами, чи це шум/корекція).
+-- Append-only, як news_analysis. Лише активи, для яких є ОБИДВА входи
+-- (новинний сигнал + ціна) — тому price_* NOT NULL, на відміну від
+-- news_analysis.asset_id, який буває NULL.
+-- source_refs — список summaries новин, на які спирався висновок
+-- (analysis/CLAUDE.md "Формат виходу LLM-аналізу"); AssetSignal не несе
+-- URL на цьому рівні агрегації, summaries — найближчий доступний бекінг.
+CREATE TABLE IF NOT EXISTS news_synthesis (
+    id                 BIGSERIAL PRIMARY KEY,
+    asset_id           TEXT NOT NULL,
+    window_days        INTEGER NOT NULL,
+    cluster_count      INTEGER NOT NULL,
+    net_lean           INTEGER NOT NULL,
+    price_pct_change   NUMERIC NOT NULL,
+    price_start_date   DATE NOT NULL,
+    price_end_date     DATE NOT NULL,
+    summary            TEXT NOT NULL,
+    direction          TEXT NOT NULL,     -- up | down | neutral | unclear
+    confidence         NUMERIC NOT NULL,
+    reasoning          TEXT NOT NULL,
+    source_refs        JSONB NOT NULL,
+    llm_call_id        BIGINT REFERENCES llm_call_log(id),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES
     ('fred', 'macro', 'official_primary', 'Federal Reserve Economic Data (US)'),
@@ -138,6 +165,28 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('binance', 'crypto', 'official_primary', 'Binance public API — щоденні OHLCV-свічки (klines) BTC/ETH/SOL проти USDT, без ключа'),
     ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа')
 ON CONFLICT (name) DO NOTHING;
+
+-- Порівняння факту з ринковим очікуванням для одного циклу релізу
+-- (release_log.status: detected -> processed, analysis/expectations/).
+-- Append-only, по одному рядку на release_log_id — той самий реліз
+-- не порівнюється двічі. actual_value/expected_value_parsed завжди в
+-- ОДНАКОВИХ одиницях (comparison_method визначає, як вони приведені
+-- до спільного вигляду — деталі docs/decisions.md), expected_value_raw
+-- лишає оригінальний текст ForexFactory для аудиту.
+CREATE TABLE IF NOT EXISTS expectation_comparisons (
+    id                     BIGSERIAL PRIMARY KEY,
+    release_log_id         BIGINT NOT NULL UNIQUE REFERENCES release_log(id),
+    source                 TEXT NOT NULL,
+    metric_id              TEXT NOT NULL,
+    observed_at            DATE NOT NULL,
+    actual_value           NUMERIC NOT NULL,
+    expected_value_raw     TEXT NOT NULL,
+    expected_value_parsed  NUMERIC NOT NULL,
+    surprise               NUMERIC NOT NULL,
+    surprise_pct           NUMERIC,
+    comparison_method      TEXT NOT NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Views для читабельного перегляду. raw_observations лишається
 -- append-only джерелом істини (жодних UPDATE/DELETE) — views тільки

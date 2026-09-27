@@ -29,6 +29,14 @@ SCHEDULE = {
         "trigger": {"day_of_week": "mon", "hour": 6, "minute": 0},
         "why": "refresh_calendar.py сам розрахований на тижневу періодичність — заводить наперед на наступний тиждень.",
     },
+    "compare_expectations": {
+        "trigger": {"minute": "5-59/15"},
+        "why": "+5 хв після check_releases (те саме 15-хв вікно) — дає час insert_observations() зафіксуватись, перш ніж порівнювати факт.",
+    },
+    "notify_expectations": {
+        "trigger": {"minute": "10-59/15"},
+        "why": "+5 хв після compare_expectations — надсилає вже готові порівняння, не порожньо.",
+    },
     "news_collect_watchlist": {
         "trigger": {"hour": "0,6,12,18", "minute": 0},
         "why": "4 рази на добу — вікно збору (GDELT timespan=3d) з запасом перекриває цей інтервал, дедуп по url прибирає повтори (docs/decisions.md, 2026-09-26).",
@@ -64,6 +72,14 @@ SCHEDULE = {
     "news_notify_watchlist": {
         "trigger": {"hour": "6,18", "minute": 30},
         "why": "+30 хв — після news_analysis_watchlist, щоб надсилати вже готові висновки, не порожньо.",
+    },
+    "news_synthesis": {
+        "trigger": {"hour": 6, "minute": 40},
+        "why": "Раз на добу (не кожні 6 год, як збір) — ціна оновлюється раз на добу (watchlist_prices@6:00), частіший синтез на тому самому ціновому вікні дав би лише зайву вартість LLM без нової інформації; +40 хв дає час watchlist_prices (6:00) і news_analysis_watchlist (6:20) завершитись.",
+    },
+    "notify_synthesis": {
+        "trigger": {"hour": 6, "minute": 45},
+        "why": "+5 хв після news_synthesis, щоб надсилати вже готові висновки.",
     },
     "crypto_prices": {
         "trigger": {"minute": 0},

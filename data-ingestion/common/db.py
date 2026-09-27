@@ -144,3 +144,24 @@ def fetch_latest(conn, source: str, metric_id: str) -> Optional[dict]:
             (source, metric_id),
         )
         return cur.fetchone()
+
+
+def fetch_recent(conn, source: str, metric_id: str, limit: int) -> list[dict]:
+    """Останні `limit` спостережень (найновіше перше), без шуму старих
+    ревізій — читає з `v_observations_latest_revision` (для кожної дати
+    лишається тільки останнє відоме значення). Потрібне analysis/expectations/
+    для обчислення m/m %, y/y % чи діапазонних змін: сире значення в
+    raw_observations часто це РІВЕНЬ показника, а не та величина, яку
+    дає ринковий прогноз."""
+    with _cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT source, metric_id, value, observed_at, fetched_at, revision
+            FROM v_observations_latest_revision
+            WHERE source = %s AND metric_id = %s
+            ORDER BY observed_at DESC
+            LIMIT %s
+            """,
+            (source, metric_id, limit),
+        )
+        return cur.fetchall()

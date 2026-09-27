@@ -1,12 +1,22 @@
 """
 Тонкий SQL-шар для news-аналізу — той самий принцип, що й
 analysis/screening/_batch_db.py: SQL без жодної інтерпретації значень,
-логіка (виклик DeepSeek, парсинг) лишається в relevance_filter.py.
+логіка (виклик DeepSeek, парсинг) лишається в relevance_filter.py/
+synthesize.py.
 """
 
+import json
 from typing import Optional
 
+from news_analysis.aggregate import AssetSignal
+from news_analysis.prices import PriceChange
 from news_analysis.relevance_filter import NewsAnalysisResult
+
+# SynthesisResult (synthesize.py) навмисно НЕ імпортується для type hint:
+# synthesize.py імпортує цей модуль (fetch_relevant_for_aggregation/
+# log_llm_call/save_synthesis) — імпорт у зворотному напрямку дав би
+# циклічний імпорт. save_synthesis() приймає result качиною типізацією
+# (потрібні лише .direction/.confidence/.summary/.reasoning).
 
 
 def fetch_unanalyzed(conn, stream: Optional[str] = None, limit: int = 50) -> list[dict]:
@@ -77,6 +87,46 @@ def log_llm_call(
         llm_call_id = cur.fetchone()[0]
     conn.commit()
     return llm_call_id
+
+
+def save_synthesis(
+    conn,
+    asset_id: str,
+    signal: AssetSignal,
+    price: PriceChange,
+    window_days: int,
+    result,  # SynthesisResult (synthesize.py) — качина типізація, див. коментар вище
+    llm_call_id: int,
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO news_synthesis
+                (asset_id, window_days, cluster_count, net_lean, price_pct_change,
+                 price_start_date, price_end_date, summary, direction, confidence,
+                 reasoning, source_refs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                asset_id,
+                window_days,
+                signal.cluster_count,
+                signal.net_lean,
+                price.pct_change,
+                price.start_date,
+                price.end_date,
+                result.summary,
+                result.direction,
+                result.confidence,
+                result.reasoning,
+                json.dumps(signal.summaries),
+                llm_call_id,
+            ),
+        )
+        synthesis_id = cur.fetchone()[0]
+    conn.commit()
+    return synthesis_id
 
 
 def save_analysis(
