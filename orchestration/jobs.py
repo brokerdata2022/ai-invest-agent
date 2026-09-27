@@ -128,6 +128,9 @@ JOBS = {
     "notify_candidates": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "candidates_notify.py")),
     },
+    "daily_digest": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "daily_digest.py")),
+    },
     "crypto_prices": {
         "callable": _crypto_prices,
     },

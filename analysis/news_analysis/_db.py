@@ -100,6 +100,9 @@ def save_synthesis(
     result,  # SynthesisResult (synthesize.py) — качина типізація, див. коментар вище
     llm_call_id: int,
 ) -> int:
+    """UPSERT — один рядок на (asset_id, день): повторний прогін того
+    самого активу того самого дня оновлює вже наявний рядок, не
+    дублює (db/schema.sql:idx_news_synthesis_asset_per_day)."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -108,6 +111,20 @@ def save_synthesis(
                  price_start_date, price_end_date, summary, direction, confidence,
                  reasoning, source_refs, llm_call_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (asset_id, ((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                window_days = EXCLUDED.window_days,
+                cluster_count = EXCLUDED.cluster_count,
+                net_lean = EXCLUDED.net_lean,
+                price_pct_change = EXCLUDED.price_pct_change,
+                price_start_date = EXCLUDED.price_start_date,
+                price_end_date = EXCLUDED.price_end_date,
+                summary = EXCLUDED.summary,
+                direction = EXCLUDED.direction,
+                confidence = EXCLUDED.confidence,
+                reasoning = EXCLUDED.reasoning,
+                source_refs = EXCLUDED.source_refs,
+                llm_call_id = EXCLUDED.llm_call_id,
+                created_at = now()
             RETURNING id
             """,
             (
@@ -139,6 +156,7 @@ def save_market_synthesis(
     result,  # SynthesisResult (synthesize_market.py) — качина типізація, див. коментар вище
     llm_call_id: int,
 ) -> int:
+    """UPSERT — один рядок на день (db/schema.sql:idx_market_synthesis_per_day)."""
     source_refs = [{"title": c.representative_title, "source_count": c.source_count} for c in clusters]
     with conn.cursor() as cur:
         cur.execute(
@@ -147,6 +165,17 @@ def save_market_synthesis(
                 (window_days, cluster_count, macro_context, summary, direction,
                  confidence, reasoning, source_refs, llm_call_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                window_days = EXCLUDED.window_days,
+                cluster_count = EXCLUDED.cluster_count,
+                macro_context = EXCLUDED.macro_context,
+                summary = EXCLUDED.summary,
+                direction = EXCLUDED.direction,
+                confidence = EXCLUDED.confidence,
+                reasoning = EXCLUDED.reasoning,
+                source_refs = EXCLUDED.source_refs,
+                llm_call_id = EXCLUDED.llm_call_id,
+                created_at = now()
             RETURNING id
             """,
             (
@@ -174,12 +203,20 @@ def save_candidate(
     source_refs: list,
     llm_call_id: int,
 ) -> int:
+    """UPSERT — один рядок на (ticker, день)
+    (db/schema.sql:idx_candidate_assets_ticker_per_day)."""
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO candidate_assets
                 (ticker, company_name, reasoning, source_refs, llm_call_id)
             VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (ticker, ((discovered_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                company_name = EXCLUDED.company_name,
+                reasoning = EXCLUDED.reasoning,
+                source_refs = EXCLUDED.source_refs,
+                llm_call_id = EXCLUDED.llm_call_id,
+                discovered_at = now()
             RETURNING id
             """,
             (ticker, company_name, reasoning, json.dumps(source_refs), llm_call_id),

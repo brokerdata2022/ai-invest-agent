@@ -126,12 +126,18 @@ CREATE TABLE IF NOT EXISTS news_analysis (
 -- Синтез "новини + ціна" по активу за вікно (analysis/news_analysis/
 -- synthesize.py, docs/news-purpose.md "Ціль 1" — точки входу для
 -- watchlist-пар: чи рух ціни пояснюється новинами, чи це шум/корекція).
--- Append-only, як news_analysis. Лише активи, для яких є ОБИДВА входи
--- (новинний сигнал + ціна) — тому price_* NOT NULL, на відміну від
--- news_analysis.asset_id, який буває NULL.
+-- Лише активи, для яких є ОБИДВА входи (новинний сигнал + ціна) — тому
+-- price_* NOT NULL, на відміну від news_analysis.asset_id, який буває
+-- NULL.
 -- source_refs — список summaries новин, на які спирався висновок
 -- (analysis/CLAUDE.md "Формат виходу LLM-аналізу"); AssetSignal не несе
 -- URL на цьому рівні агрегації, summaries — найближчий доступний бекінг.
+-- Один результат на актив НА ДЕНЬ (idx нижче + ON CONFLICT UPDATE у
+-- save_synthesis(), не чистий append-only): повторний прогін того
+-- самого дня (ручний тест, ретрай після збою) оновлює вже наявний
+-- рядок замість дублювання — живо виявлено 2026-09-27, ручні тестові
+-- прогони синтезу того самого активу того самого дня плодили по 3-5
+-- рядків без жодної нової інформації.
 CREATE TABLE IF NOT EXISTS news_synthesis (
     id                 BIGSERIAL PRIMARY KEY,
     asset_id           TEXT NOT NULL,
@@ -150,6 +156,9 @@ CREATE TABLE IF NOT EXISTS news_synthesis (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_news_synthesis_asset_per_day
+    ON news_synthesis (asset_id, ((created_at AT TIME ZONE 'UTC')::date));
+
 -- Синтез глобального контексту (analysis/news_analysis/synthesize_market.py,
 -- docs/news-purpose.md "Ціль 4" — risk-on/risk-off стан ринку) —
 -- geopolitical/general новини не прив'язані до активу (asset_id завжди
@@ -157,6 +166,8 @@ CREATE TABLE IF NOT EXISTS news_synthesis (
 -- замість них macro_context (знімок ключових ставок/дохідностей на
 -- момент синтезу, для аудиту) і source_refs зі списком урахованих
 -- кластерів (title+source_count, не окремих статей).
+-- Один результат НА ДЕНЬ (idx нижче + ON CONFLICT UPDATE у
+-- save_market_synthesis()) — той самий принцип, що news_synthesis вище.
 CREATE TABLE IF NOT EXISTS market_synthesis (
     id             BIGSERIAL PRIMARY KEY,
     window_days    INTEGER NOT NULL,
@@ -171,14 +182,22 @@ CREATE TABLE IF NOT EXISTS market_synthesis (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_synthesis_per_day
+    ON market_synthesis (((created_at AT TIME ZONE 'UTC')::date));
+
 -- Кандидати-новачки, знайдені LLM у general-потоці новин
 -- (analysis/news_analysis/discover_candidates.py, docs/news-purpose.md
--- "Ціль 3") — активи, яких ще немає в S&P 500 universe. Append-only
--- журнал відкриттів; "поточний список" (10 найновіших унікальних
--- тикерів) — DISTINCT ON (ticker) ORDER BY discovered_at DESC.
--- Кожен рядок тут ВЖЕ пройшов верифікацію торгованості через Twelve
--- Data (verify_tradable()) — LLM лише пропонує, підтвердження факту,
--- що тикер реальний і ліквідний, завжди детерміноване, не на слово LLM.
+-- "Ціль 3") — активи, яких ще немає в S&P 500 universe. Журнал
+-- відкриттів (append-only МІЖ днями); "поточний список" (10
+-- найновіших унікальних тикерів) — DISTINCT ON (ticker) ORDER BY
+-- discovered_at DESC. Кожен рядок тут ВЖЕ пройшов верифікацію
+-- торгованості через Twelve Data (verify_tradable()) — LLM лише
+-- пропонує, підтвердження факту, що тикер реальний і ліквідний,
+-- завжди детерміноване, не на слово LLM.
+-- Один рядок на тикер НА ДЕНЬ (idx нижче + ON CONFLICT UPDATE у
+-- save_candidate()) — той самий принцип, що news_synthesis/
+-- market_synthesis вище: повторне виявлення того самого тикера того
+-- самого дня оновлює рядок, не дублює.
 CREATE TABLE IF NOT EXISTS candidate_assets (
     id             BIGSERIAL PRIMARY KEY,
     ticker         TEXT NOT NULL,
@@ -188,6 +207,9 @@ CREATE TABLE IF NOT EXISTS candidate_assets (
     llm_call_id    BIGINT REFERENCES llm_call_log(id),
     discovered_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_assets_ticker_per_day
+    ON candidate_assets (ticker, ((discovered_at AT TIME ZONE 'UTC')::date));
 
 -- Зареєстровані джерела.
 INSERT INTO sources (name, category, source_type, notes) VALUES

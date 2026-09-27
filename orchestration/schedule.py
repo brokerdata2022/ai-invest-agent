@@ -97,6 +97,10 @@ SCHEDULE = {
         "trigger": {"hour": 19, "minute": 5},
         "why": "+5 хв після discover_candidates, щоб надсилати вже готовий список.",
     },
+    "daily_digest": {
+        "trigger": {"hour": 20, "minute": 0},
+        "why": "Раз на добу, після всіх вечірніх джоб (market_synthesis@18:40/45, discover_candidates@19:00/05) — 24-годинне вікно однаково охоплює й ранкові news_synthesis@6:40/45.",
+    },
     "crypto_prices": {
         "trigger": {"minute": 0},
         "why": "Крипта торгується 24/7 — щогодини, без прив'язки до релізів чи торгової сесії.",
