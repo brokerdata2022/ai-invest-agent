@@ -105,6 +105,10 @@ SCHEDULE = {
         "trigger": {"hour": 6, "minute": 0},
         "why": "Комодіті/форекс-джерела (FRED/TwelveData) оновлюються раз на добу — досить одного ранкового прогону.",
     },
+    "quotes_universe_refresh": {
+        "trigger": {"hour": 3, "minute": 0},
+        "why": "Раз на добу, до screening_composite_score@05:00 (буфер ~2 год на ~500 запитів із лімітом Twelve Data 8/хв, ~65 хв) — жива діра, знайдена 2026-09-27: без цієї джоби ціни S&P 500 universe для Tier A/B/C ніколи не оновлювались після одноразового ручного backfill (docs/decisions.md).",
+    },
     "screening_composite_score": {
         "trigger": {"hour": 5, "minute": 0},
         "why": "Раз на добу — фундаментал (SEC EDGAR) міняється повільно, ціни в Tier A/B живі на момент запуску.",

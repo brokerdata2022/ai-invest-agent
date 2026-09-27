@@ -20,12 +20,13 @@ import os
 import sys
 
 from dotenv import load_dotenv
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.db import get_connection  # noqa: E402
 from common.news_db import insert_news_batch  # noqa: E402
-from news.gdelt_adapter import GdeltAdapter  # noqa: E402
+from news.gdelt_adapter import GdeltAdapter, GdeltError  # noqa: E402
 from news.queries import (  # noqa: E402
     build_general_query,
     build_watchlist_query,
@@ -58,7 +59,16 @@ def main() -> None:
     logger.info("GDELT query (%s, timespan=%s): %s", args.stream, args.timespan, query)
 
     adapter = GdeltAdapter(stream=args.stream, query=query)
-    records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
+    try:
+        records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
+    except (requests.exceptions.RequestException, GdeltError):
+        # Транзієнтний збій GDELT (429 понад retry-бюджет адаптера,
+        # мережевий тайм-аут) — той самий підхід, що collect_stock_news.py/
+        # run_collect_rss.py: лог без трасування, наступний запланований
+        # прогін підхопить (живо виявлено 2026-09-27: раніше падало з
+        # повним traceback, exit 1).
+        logger.exception("Пропущено: помилка збору GDELT (%s)", args.stream)
+        sys.exit(1)
     logger.info("Отримано %d статей", len(records))
 
     if not records:

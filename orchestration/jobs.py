@@ -12,6 +12,7 @@ rule 1 кореневого CLAUDE.md, orchestration/CLAUDE.md).
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -52,17 +53,60 @@ def _crypto_prices() -> None:
         conn.close()
 
 
+# asset_id (Twelve Data джерело в ASSET_PRICE_SOURCES) → тикер, яким
+# TwelveDataAdapter реально треба викликати (не сам metric_id —
+# "xauusd_close" не відновити назад у "XAU/USD", слеш уже втрачено
+# нормалізацією адаптера). Лише один запис — xauusd єдиний
+# twelvedata-актив у ASSET_PRICE_SOURCES.
+_TWELVEDATA_TICKER_BY_ASSET = {"xauusd": "XAU/USD"}
+
+
 def _watchlist_prices() -> None:
-    """% зміни ціни watchlist-активів (WTI/Brent/EUR-USD/кава/золото)
-    за вікно — analysis/news_analysis/prices.py, без CLI, тому виклик
-    напряму."""
+    """Збирає ціни watchlist-товарів/форексу/золота (FredAdapter для
+    fred-джерел, TwelveDataAdapter для xauusd), ПОТІМ логує % зміни.
+
+    Живо виявлено 2026-09-27 (перевірка "з нуля" на новому Docker
+    Engine): ця функція раніше лише ЧИТАЛА fetch_all_price_changes(),
+    жодного разу нічого не збираючи — попри щоденний розклад і
+    докстрінг, що обіцяв збір. Єдиним (побічним, раз на місяць) шляхом
+    ці дані взагалі потрапляли в БД був safety_net_collect_all
+    (docs/decisions.md, 2026-09-27)."""
     sys.path.insert(0, str(REPO_ROOT / "analysis"))
     sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
-    from common.db import get_connection  # noqa: E402
+    from common.db import get_connection, insert_observations  # noqa: E402
+    from macro.fred_adapter import FredAdapter  # noqa: E402
+    from quotes.twelvedata_adapter import TwelveDataAdapter  # noqa: E402
     from news_analysis.prices import ASSET_PRICE_SOURCES, fetch_all_price_changes  # noqa: E402
+
+    fred_key = os.environ.get("FRED_API_KEY")
+    twelvedata_key = os.environ.get("TWELVEDATA_API_KEY")
 
     conn = get_connection()
     try:
+        for asset_id, (source, metric_id) in ASSET_PRICE_SOURCES.items():
+            try:
+                if source == "fred":
+                    if not fred_key:
+                        logger.error("%s: FRED_API_KEY не задано — пропущено", asset_id)
+                        continue
+                    records = FredAdapter(api_key=fred_key, metric_id=metric_id).collect(limit=10)
+                elif source == "twelvedata":
+                    if not twelvedata_key:
+                        logger.error("%s: TWELVEDATA_API_KEY не задано — пропущено", asset_id)
+                        continue
+                    ticker = _TWELVEDATA_TICKER_BY_ASSET[asset_id]
+                    records = TwelveDataAdapter(api_key=twelvedata_key, ticker=ticker).collect(limit=10)
+                else:
+                    logger.warning("%s: невідоме джерело %r — пропущено", asset_id, source)
+                    continue
+
+                if records:
+                    inserted = insert_observations(conn, records)
+                    logger.info("%s: %d записів (%d нових/змінених)", asset_id, len(records), inserted)
+            except Exception:
+                logger.error("%s: збір провалився", asset_id, exc_info=True)
+                conn.rollback()
+
         changes = fetch_all_price_changes(conn, list(ASSET_PRICE_SOURCES))
         for asset_id, change in changes.items():
             logger.info("%s: %.2f%% (%s -> %s)", asset_id, change.pct_change, change.start_date, change.end_date)
@@ -140,7 +184,10 @@ JOBS = {
     "companies_universe_refresh": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_companies_universe.py")),
     },
+    "quotes_universe_refresh": {
+        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_universe.py")),
+    },
     "safety_net_collect_all": {
-        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py")),
+        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py"), "--limit", "15"),
     },
 }
