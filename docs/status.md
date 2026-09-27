@@ -136,9 +136,47 @@ general@18:20). Код (SynthesisResult/parse_response/call_llm) навмисн�
 принцип, що вже є між `relevance_filter.py`/`synthesize.py`. Тести —
 `analysis/tests/test_aggregate.py` (`top_clusters`),
 `analysis/tests/test_synthesize_market.py`,
-`reporting/tests/test_market_notify.py`. Live-прогін користувач
-підтверджує сам. Цілі 2/3/5 (`docs/news-purpose.md`) синтезом ще не
-покриті.
+`reporting/tests/test_market_notify.py`. Live-прогін підтверджено
+(2026-09-27): 49 кластерів → топ-8 → risk-off (confidence 0.55) на
+основі UST-дохідностей/долара/іпотечних ставок.
+
+**Крок 4 — Ціль 2 (акції), персистентний скринінг (2026-09-27):**
+Блокер (не в LLM, у "проводці"): `composite_score.py` не зберігав
+результат скринінгу, тому `run_news_analysis.py` не знав, які тикери
+відстежувати для `tracked_assets`. Нова таблиця `screening_results`
+(`analysis/screening/_results_db.py:save_screening_run()`/
+`fetch_latest_tickers()`, `composite_score.py` пише сюди щоразу) +
+`run_news_analysis.py:resolve_tracked_assets()` тепер бере
+`WATCHLIST_ASSET_IDS + fetch_latest_tickers()` для watchlist-стріму +
+`prices.py:_resolve_price_source()` — здогад ціни тикера через Twelve
+Data (`f"{ticker.lower()}_close"`) для будь-якого asset_id поза
+фіксованим `ASSET_PRICE_SOURCES`. Новий LLM-скрипт не знадобився —
+**існуючий** `synthesize.py` (Ціль 1) автоматично підхоплює тикери,
+щойно вони отримують `asset_id` і ціну. Не-акційна половина Цілі 2
+(товари/форекс) уже покрита `synthesize.py` з кроку 2. Розклад
+(`orchestration/schedule.py`) не змінювався — `screening_composite_score`@5:00
+вже йде раніше за `news_analysis_watchlist`@{0,6,12,18}:20. Тести —
+`analysis/tests/test_run_news_analysis.py`, `analysis/tests/test_prices.py`
+(фікстури, без БД). **Live-прогін усього ланцюжка підтверджено
+(2026-09-27):** скринінг (16 тикерів) → `collect_stock_news.py` →
+`run_news_analysis.py` коректно проставив `asset_id=WAB` для статті
+про контракт Wabtec (раніше такого взагалі не траплялось) →
+Twelve Data історія довантажена вручну (`run_collect.py --source
+twelvedata --ticker <TICKER> --limit 10` для 16 тикерів — щоденного
+джоба на оновлення цін S&P 500 universe в оркестрації ще нема,
+`companies_universe_refresh` оновлює лише SEC EDGAR фундаментал) →
+`synthesize.py`: `WAB → direction=up confidence=0.75` — контракт на
+$700 млн узгоджується з ростом ціни +1.63%. Ціль 3 і Ціль 5
+(`docs/news-purpose.md`) синтезом ще не покриті.
+
+**Відкрите (не блокує):** ціни тикерів зі скринінгу оновлюються лише
+під час самого прогону `composite_score.py` (по одному дню) — щоб
+`synthesize.py` міг рахувати % зміни для НОВИХ тикерів одразу, а не
+через кілька днів очікування другої точки, знадобиться або
+одноразовий backfill (як вище) при появі нового тикера в
+`screening_results`, або окрема щоденна джоба оновлення Twelve Data
+цін для всього S&P 500 universe (зараз нема — не блокер, ціни
+природно накопичуються з часом).
 
 ### monitoring/ — календар релізів, двофазний цикл, US+EUR+JPY (2026-09-26/27)
 

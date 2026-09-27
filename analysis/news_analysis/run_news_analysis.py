@@ -29,6 +29,7 @@ from common.db import get_connection  # noqa: E402
 from news.queries import WATCHLIST_ASSET_IDS  # noqa: E402
 from news_analysis._db import fetch_unanalyzed, log_llm_call, save_analysis  # noqa: E402
 from news_analysis.relevance_filter import analyze_article, DeepSeekResponseError  # noqa: E402
+from screening._results_db import fetch_latest_tickers  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,12 +44,23 @@ _DEFAULT_TRACKED_ASSETS: dict[str, list[str]] = {
 
 
 def resolve_tracked_assets(
-    article_stream: str, explicit: Optional[list[str]]
+    article_stream: str,
+    explicit: Optional[list[str]],
+    screening_tickers: Optional[list[str]] = None,
 ) -> Optional[list[str]]:
     """Чиста функція вибору tracked_assets для однієї статті — явний
     --tracked-assets завжди виграє, інакше дефолт per stream (лише
-    watchlist його має)."""
-    return explicit or _DEFAULT_TRACKED_ASSETS.get(article_stream)
+    watchlist його має) + тикери з останнього скринінгу
+    (docs/news-purpose.md, "Ціль 2" — щоб DeepSeek міг проставити
+    asset_id=тикер для акційних новин, не тільки для watchlist.md-активів)."""
+    if explicit:
+        return explicit
+    default = _DEFAULT_TRACKED_ASSETS.get(article_stream)
+    if default is None:
+        return None
+    if screening_tickers:
+        return default + screening_tickers
+    return default
 
 
 def main() -> None:
@@ -73,12 +85,17 @@ def main() -> None:
 
     conn = get_connection()
     try:
+        screening_tickers = fetch_latest_tickers(conn)
+        logger.info("Тикери з останнього скринінгу: %d", len(screening_tickers))
+
         articles = fetch_unanalyzed(conn, stream=args.stream, limit=args.limit)
         logger.info("Знайдено %d непроаналізованих статей", len(articles))
 
         analyzed = 0
         for article in articles:
-            tracked_assets = resolve_tracked_assets(article["stream"], explicit_tracked_assets)
+            tracked_assets = resolve_tracked_assets(
+                article["stream"], explicit_tracked_assets, screening_tickers
+            )
             try:
                 result, prompt, raw_content = analyze_article(
                     article, article["stream"], api_key, tracked_assets=tracked_assets

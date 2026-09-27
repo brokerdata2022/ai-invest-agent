@@ -22,9 +22,14 @@ summary/direction/confidence/reasoning від LLM; source_refs — той сам
 env-параметр SYNTHESIS_LLM_PROVIDER, дефолт "deepseek" — заміна без
 редагування коду логіки синтезу.
 
-Обсяг: тільки активи, для яких є ОБИДВА входи (новинний сигнал і ціна,
-prices.py:ASSET_PRICE_SOURCES) — активи з сигналом, але без цінового
-джерела (xagusd/btc/eth/sol, тикери акцій зі скринінгу) пропускаються.
+Обсяг: тільки активи, для яких є ОБИДВА входи (новинний сигнал і ціна).
+Для watchlist-товарів/форексу ціна — prices.py:ASSET_PRICE_SOURCES;
+для тикерів акцій зі скринінгу (docs/news-purpose.md, "Ціль 2") ціна
+підхоплюється автоматично через Twelve Data (prices.py:_resolve_price_source(),
+2026-09-27) — АЛЕ тільки якщо той самий тикер потрапив у tracked_assets
+run_news_analysis.py (screening_results, оновлюється composite_score.py).
+xagusd/btc/eth/sol — досі без ціни тут (інше джерело, не Twelve Data)
+— пропускаються з логом, як і раніше.
 
 Використання:
     python synthesize.py

@@ -37,6 +37,9 @@ _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
+from common.db import get_connection  # noqa: E402
+from screening._results_db import save_screening_run  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -193,6 +196,13 @@ if __name__ == "__main__":
     all_results = run_composite_score()
 
     logger.info("Ранжовано %d тикерів (усі, що пройшли Tier A -> B -> C)", len(all_results))
+
+    conn = get_connection()
+    try:
+        saved = save_screening_run(conn, all_results)
+        logger.info("Збережено в screening_results: %d тикерів", saved)
+    finally:
+        conn.close()
 
     to_show = all_results[: args.top] if args.top else all_results
 

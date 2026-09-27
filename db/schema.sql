@@ -209,6 +209,27 @@ CREATE TABLE IF NOT EXISTS expectation_comparisons (
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Результати кожного прогону composite_score.py (analysis/screening/) —
+-- раніше тільки друкувались, ніде не зберігались (docs/status.md), тому
+-- ніщо не знало "які тикери зараз пройшли скринінг" (потрібне
+-- analysis/news_analysis/run_news_analysis.py для tracked_assets акцій,
+-- docs/news-purpose.md "Ціль 2"). Append-only, як решта проєкту — усі
+-- рядки ОДНОГО прогону мають той самий run_at, "поточний" скринінг =
+-- MAX(run_at). Порожній прогін (ніхто не пройшов) нічого не вставляє —
+-- свідомо: не затирати вчорашній валідний список нульовим/збійним прогоном.
+CREATE TABLE IF NOT EXISTS screening_results (
+    id                 BIGSERIAL PRIMARY KEY,
+    ticker             TEXT NOT NULL,
+    score              NUMERIC NOT NULL,
+    revenue_growth     NUMERIC,
+    eps_growth         NUMERIC,
+    pe                 NUMERIC,
+    avg_dollar_volume  NUMERIC,
+    run_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_screening_results_run_at ON screening_results (run_at);
+
 -- Views для читабельного перегляду. raw_observations лишається
 -- append-only джерелом істини (жодних UPDATE/DELETE) — views тільки
 -- читають і не змінюють дані, це суто зручність перегляду, не заміна

@@ -17,7 +17,10 @@ from typing import Optional
 # користувача, docs/decisions.md 2026-09-26) — мапиться тут явно.
 # xagusd відсутній свідомо: Twelve Data XAG/USD вимагає платний план
 # (підтверджено живим запитом, docs/decisions.md 2026-09-26). btc/eth/
-# sol відсутні: адаптер ще не написано (docs/watchlist.md, план).
+# sol відсутні: живуть під іншим джерелом (binance/coingecko, не
+# twelvedata), _resolve_price_source() нижче їх не вгадає — окремо не
+# додано, бо fetch_all_price_changes() і так призначений для
+# watchlist-товарів/форексу, крипта має власний облік.
 ASSET_PRICE_SOURCES: dict[str, tuple[str, str]] = {
     "xauusd": ("twelvedata", "xauusd_close"),
     "wti_crude": ("fred", "wti_crude"),
@@ -26,6 +29,20 @@ ASSET_PRICE_SOURCES: dict[str, tuple[str, str]] = {
     "coffee": ("fred", "coffee"),
     "usdjpy": ("fred", "usdjpy_fx_rate"),
 }
+
+
+def _resolve_price_source(asset_id: str) -> tuple[str, str]:
+    """Для watchlist-товарів/форексу — явний мапінг вище. Для БУДЬ-ЯКОГО
+    іншого asset_id (тикери акцій зі скринінгу, docs/news-purpose.md
+    "Ціль 2") — здогад за конвенцією, якою quotes/twelvedata_adapter.py
+    сам будує metric_id (`f"{ticker.lower()}_close"`). Безпечно: якщо
+    здогад хибний (актив насправді з іншого джерела, напр. крипта) —
+    просто не знайдеться жодного спостереження, fetch_price_change()
+    поверне None, як і раніше."""
+    mapping = ASSET_PRICE_SOURCES.get(asset_id)
+    if mapping is not None:
+        return mapping
+    return ("twelvedata", f"{asset_id.lower()}_close")
 
 
 @dataclass
@@ -58,12 +75,11 @@ def compute_pct_change(
 
 def fetch_price_change(conn, asset_id: str, days: int = 7) -> Optional[PriceChange]:
     """Перше й останнє значення (v_observations_latest_revision) за
-    останні `days` днів для asset_id — None, якщо asset_id не має
-    цінового джерела (ASSET_PRICE_SOURCES) або немає даних у вікні."""
-    mapping = ASSET_PRICE_SOURCES.get(asset_id)
-    if mapping is None:
-        return None
-    source, metric_id = mapping
+    останні `days` днів для asset_id — None, якщо немає даних у вікні
+    (для watchlist-товарів/форексу — ASSET_PRICE_SOURCES; для інших
+    asset_id, напр. тикерів акцій — здогад _resolve_price_source(),
+    теж природно дає None за відсутності даних)."""
+    source, metric_id = _resolve_price_source(asset_id)
 
     with conn.cursor() as cur:
         cur.execute(

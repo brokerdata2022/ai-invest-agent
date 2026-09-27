@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from news_analysis.prices import ASSET_PRICE_SOURCES, compute_pct_change
+from news_analysis.prices import ASSET_PRICE_SOURCES, _resolve_price_source, compute_pct_change
 
 
 def test_compute_pct_change_positive():
@@ -36,3 +36,17 @@ def test_asset_price_sources_known_watchlist_assets():
     assert ASSET_PRICE_SOURCES["usdjpy"] == ("fred", "usdjpy_fx_rate")
     assert ASSET_PRICE_SOURCES["xauusd"] == ("twelvedata", "xauusd_close")
     assert "xagusd" not in ASSET_PRICE_SOURCES  # заблоковано тарифом, свідомо відсутнє
+
+
+def test_resolve_price_source_uses_explicit_mapping_when_known():
+    assert _resolve_price_source("usdjpy") == ("fred", "usdjpy_fx_rate")
+
+
+def test_resolve_price_source_falls_back_to_twelvedata_convention_for_ticker():
+    # тикер зі скринінгу (docs/news-purpose.md, "Ціль 2") -- не в
+    # ASSET_PRICE_SOURCES, здогад за конвенцією twelvedata_adapter.py.
+    assert _resolve_price_source("AAPL") == ("twelvedata", "aapl_close")
+
+
+def test_resolve_price_source_fallback_lowercases_ticker():
+    assert _resolve_price_source("NVDA") == ("twelvedata", "nvda_close")
