@@ -42,6 +42,24 @@ services:
         condition: service_healthy
     command: sleep infinity
 
+  # Автоматичний запуск усього конвеєра за розкладом (orchestration/,
+  # APScheduler) — сам стартує з docker compose up і сам перезапускається
+  # при падінні (restart: unless-stopped). Розклад — orchestration/schedule.py.
+  # Ручний запуск окремих скриптів (docker compose exec app ...) — без змін.
+  scheduler:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    command: python orchestration/main.py
+
 volumes:
   db_data:
 

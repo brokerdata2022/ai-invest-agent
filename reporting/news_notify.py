@@ -16,7 +16,6 @@ import os
 import sys
 
 from dotenv import load_dotenv
-import requests
 
 # data-ingestion не є валідним іменем Python-пакета (дефіс у назві),
 # тож додаємо його вміст напряму в sys.path, щоб дістати common.db —
@@ -25,11 +24,10 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
 )
 from common.db import get_connection  # noqa: E402
+from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
 _DIRECTION_EMOJI = {"up": "🟢", "down": "🔴", "neutral": "⚪", "unclear": "❓"}
 
@@ -85,13 +83,6 @@ def format_message(rows: list[dict]) -> str:
         lines.append(row["url"])
         lines.append("")
     return "\n".join(lines).rstrip()
-
-
-def send_telegram_message(token: str, chat_id: str, text: str) -> dict:
-    url = TELEGRAM_API_URL.format(token=token)
-    response = requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=15)
-    response.raise_for_status()
-    return response.json()
 
 
 def main() -> None:

@@ -68,6 +68,22 @@ VSCode) видно всередині контейнера одразу, без 
 (`docker compose up -d --build`) потрібен лише коли змінюється
 `requirements.txt` або `Dockerfile`.
 
+## Автоматичний запуск (orchestration/)
+
+`docker compose up -d` піднімає й сервіс `scheduler` — увесь конвеєр
+вище (збір даних, новини, скринінг тощо) запускається сам за
+розкладом, ручний запуск команд вище лишається для дебагу/тестів.
+Розклад — `orchestration/schedule.py`, часовий пояс — Europe/Kyiv.
+
+```bash
+# Логи планувальника (список джоб при старті, помилки)
+docker compose logs -f scheduler
+
+# Запустити одну джобу негайно, не чекаючи розкладу
+docker compose exec app python orchestration/run_job.py --list
+docker compose exec app python orchestration/run_job.py check_releases
+```
+
 ## Перевірка даних у БД напряму
 
 ```bash
@@ -104,6 +120,7 @@ data-ingestion/   — збір сирих даних (адаптери джер�
 analysis/         — обробка зібраних даних: прогнози, порівняння з очікуваннями (Фаза 2)
 monitoring/       — відстеження календаря релізів (Фаза 3)
 reporting/        — генерація звітів і сповіщень
+orchestration/    — автозапуск усього конвеєра за розкладом (APScheduler)
 docs/             — архітектура, журнал рішень (decisions.md), каталог показників
 db/               — schema.sql (структура БД)
 ```

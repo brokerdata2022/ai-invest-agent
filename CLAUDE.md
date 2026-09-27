@@ -13,10 +13,11 @@
 - База даних: **PostgreSQL + TimescaleDB** (одна база для часових рядів
   і реляційних даних одночасно — не тримаємо дві окремі СУБД)
 - працюємо сесійно, з підключенням git, через vscode з необхідними розширеннями, локально тестуємо та запускаємо через Docker
-- Оркестрація фонових задач (збір даних за розкладом): TBD (Celery/Prefect/
-  Airflow — залежить від масштабу). Фаза 1 (збір даних) практично
-  завершена (докладніше — docs/status.md) — час вирішити це перед
-  Фазою 3 (моніторинг/тригери), яка на це спирається.
+- Оркестрація фонових задач (збір даних за розкладом): **APScheduler**,
+  окремий сервіс `scheduler` у docker-compose (не Celery/Prefect/Airflow —
+  зайва інфраструктура для незалежних періодичних джоб без черг/DAG;
+  рішення й обґрунтування — docs/decisions.md, 2026-09-27). Розклад —
+  `orchestration/schedule.py`, часовий пояс — Europe/Kyiv.
 - LLM-виклики (аналіз новин, генерація звітів): через DeepSeek API уся робота,  Anthropic API фінальний висновок аналіз
 
 ## Джерела даних (пріоритет: безкоштовні + першоджерела)
@@ -80,6 +81,8 @@ analysis/         — обробка зібраних даних: прогноз
   screening/        — скринінг акцій S&P 500 (Tier A/B/C + composite score)
 monitoring/       — відстеження календаря релізів, тригери на нові дані
 reporting/         — генерація коротких звітів і списків активів
+orchestration/    — автозапуск усього конвеєра за розкладом (APScheduler);
+                    schedule.py — єдиний файл для зміни періодичності
 db/               — db/schema.sql — схема БД (raw_observations, sources, release_log)
 docs/             — архітектурні рішення, дизайн-документи
   docs/archive/     — повні (нестиснуті) версії журналів рішень/сесій
@@ -159,6 +162,14 @@ docker compose exec app python analysis/news_analysis/show_aggregated_news.py
 
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
+
+# Оркестрація (orchestration/) — усе вище запускається САМО за розкладом
+# (сервіс scheduler, docker compose up -d, restart: unless-stopped)
+docker compose logs -f scheduler
+
+# Ручний запуск однієї джоби негайно (для тестів), той самий код/образ
+docker compose exec app python orchestration/run_job.py check_releases
+docker compose exec app python orchestration/run_job.py --list
 ```
 
 ## Статус проєкту

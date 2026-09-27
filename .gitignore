@@ -27,3 +27,6 @@ data/raw/
 
 # Локальні дампи БД — не джерело істини, db/schema.sql та raw_observations нею є
 backup.sql
+
+# Раннтайм-логи джоб оркестрації (orchestration/) — не джерело істини
+logs/

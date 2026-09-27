@@ -1014,3 +1014,32 @@ FRED-вікна ніколи не перетинались), стійкість 
 реальні forecast-значення. `check_releases.py` (реальний забір даних)
 ще не підтверджено — дати релізів (1-2 жовтня) ще не настали.
 Повна діагностика всіх виправлень — `docs/archive/decisions-full-2026-09-27.md`.
+
+### 2026-09-27: оркестрація — APScheduler, не cron/Celery/Prefect/Airflow
+**Питання:** блокер №1 (docs/status.md) — хто автоматично запускає
+`check_releases.py`/`refresh_calendar.py`/збір новин/скринінг тощо.
+**Рішення:** `APScheduler` (`BlockingScheduler`) у власному
+docker-compose сервісі `scheduler` (`restart: unless-stopped`), новий
+шар `orchestration/`. Голий cron у контейнері не бачить `.env` без
+окремого entrypoint-хака й губить логи без syslog-налаштувань;
+Celery потребує брокер (Redis/RabbitMQ), Prefect/Airflow — окремий
+сервер/БД метаданих — усе це зайве для ~15 незалежних періодичних джоб
+без черг і DAG-залежностей (Tier A→B→C вже ланцюжок в одній Python-
+функції `composite_score.py`, не окремі задачі). APScheduler — один
+pip-пакет, той самий образ/Python, розклад — звичайний код.
+**Часовий пояс:** Europe/Kyiv (за замовчуванням, `SCHEDULER_TIMEZONE`
+в `.env` перекриває) — переходи літній/зимовий автоматично через
+`zoneinfo`, повне геолокаційне автовизначення не має сенсу для
+headless-контейнера.
+**Розклад в окремому файлі:** `orchestration/schedule.py` — щоб міняти
+періодичність без торкання коду джоб (`jobs.py`), користувач сам
+редагує один Python-словник (назва → коли + чому), без нового формату/
+залежності (YAML/TOML/INI розглядались і відкинуті — зайвий парсер
+заради того, що звичайний `.py` і так уміє).
+**Провал джоби → Telegram-алерт** (лог + причина, дедуп
+`send_telegram_message` в `reporting/telegram_client.py` — раніше
+дублювалась у telegram_notify.py/news_notify.py); успіх — тільки
+лог-файл, без шуму.
+**Продакшен переїде на VPS пізніше** — це звичайний docker-compose
+сервіс, тому `docker compose up -d` на VPS піднімає й scheduler без
+змін коду.
