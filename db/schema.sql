@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS release_log (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Додано 2026-09-26 (monitoring/economic_calendar.py): очікуване
+-- ринком значення показника (форекс-календар дає "forecast" разом з
+-- датою/часом релізу) — TEXT, бо джерело віддає мішані одиниці
+-- ("0.6%", "-258B", "615K"), парсинг у число — робота analysis/, не
+-- цього шару (rule 1, CLAUDE.md). ALTER, не тільки CREATE — таблиця
+-- вже існувала й мала дані до цієї зміни, ALTER TABLE ADD COLUMN
+-- IF NOT EXISTS — ідемпотентно, безпечно перезастосовувати
+-- (apply_schema.py docstring).
+ALTER TABLE release_log ADD COLUMN IF NOT EXISTS expected_value TEXT;
+
 -- Сирі новини (окремо від raw_observations — там value NUMERIC,
 -- новина текстова, туди не лягає, докладніше docs/decisions.md
 -- 2026-09-25 "news/ — обсяг, межа шарів і схема БД"). Дедуп по
