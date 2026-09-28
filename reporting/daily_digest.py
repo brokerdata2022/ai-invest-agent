@@ -19,13 +19,17 @@ expectation_comparisons/candidate_assets), тут лише форматуван�
 
 import argparse
 import logging
-import os
-import sys
 
 from dotenv import load_dotenv
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import (  # noqa: E402
+    DIRECTION_EMOJI,
+    MARKET_DIRECTION_LABEL,
+    fetch_dicts,
+    fetch_one_dict,
+    resolve_telegram_credentials,
 )
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
@@ -34,22 +38,9 @@ from telegram_notify import METRIC_LABELS  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-_DIRECTION_EMOJI = {"up": "🟢", "down": "🔴", "neutral": "⚪", "unclear": "❓"}
-_MARKET_DIRECTION_LABEL = {
-    "up": "🟢 risk-on", "down": "🔴 risk-off",
-    "neutral": "⚪ збалансовано", "unclear": "❓ немає чіткого сигналу",
-}
-
-
-def _fetch_dicts(conn, query: str, params: tuple) -> list[dict]:
-    with conn.cursor() as cur:
-        cur.execute(query, params)
-        columns = [d[0] for d in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
-
 
 def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
-    return _fetch_dicts(
+    return fetch_dicts(
         conn,
         """
         SELECT asset_id, cluster_count, net_lean, price_pct_change, direction, confidence, summary
@@ -62,7 +53,7 @@ def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
 
 
 def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
-    rows = _fetch_dicts(
+    return fetch_one_dict(
         conn,
         """
         SELECT cluster_count, direction, confidence, summary
@@ -73,13 +64,12 @@ def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
         """,
         (hours,),
     )
-    return rows[0] if rows else None
 
 
 def fetch_recent_surprises(conn, hours: int) -> list[dict]:
     """Тільки impact_level high/medium — той самий фільтр, що вже в
     expectations_notify.py."""
-    return _fetch_dicts(
+    return fetch_dicts(
         conn,
         """
         SELECT ec.metric_id, ec.observed_at, ec.actual_value, ec.expected_value_raw,
@@ -97,7 +87,7 @@ def fetch_recent_surprises(conn, hours: int) -> list[dict]:
 def fetch_recent_candidates(conn, hours: int) -> list[dict]:
     """НОВІ рядки candidate_assets за вікно — не весь поточний список,
     тільки те, що з'явилось за --hours (docs/news-purpose.md, "Ціль 3")."""
-    return _fetch_dicts(
+    return fetch_dicts(
         conn,
         """
         SELECT ticker, company_name, reasoning
@@ -110,7 +100,7 @@ def fetch_recent_candidates(conn, hours: int) -> list[dict]:
 
 
 def format_news_synthesis_message(row: dict) -> str:
-    emoji = _DIRECTION_EMOJI.get(row["direction"], "❓")
+    emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
     return (
         f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}%, "
         f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)\n"
@@ -119,7 +109,7 @@ def format_news_synthesis_message(row: dict) -> str:
 
 
 def format_market_synthesis_message(row: dict) -> str:
-    label = _MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
+    label = MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
     return f"🌍 Стан ринку: {label} (упевненість {float(row['confidence']):.2f})\n{row['summary']}"
 
 
@@ -145,13 +135,7 @@ def main() -> None:
     parser.add_argument("--hours", type=int, default=24)
     args = parser.parse_args()
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не задані в .env (див. .env.example)"
-        )
-        sys.exit(1)
+    token, chat_id = resolve_telegram_credentials()
 
     conn = get_connection()
     try:

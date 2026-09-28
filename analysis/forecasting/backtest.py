@@ -94,6 +94,19 @@ def main() -> None:
             sys.exit(1)
 
         result = backtest_metric(args.metric, observations, min_history=args.min_history)
+        if result["trend_mae"] is None or result["naive_mae"] is None:
+            # Можливо при малому --min-history: linear_trend_forecast()
+            # повертає None, коли історії < 2 точок, тож список похибок
+            # лишається порожнім. Без цієї перевірки порівняння нижче
+            # падало з TypeError (None < None) замість зрозумілого
+            # повідомлення.
+            logger.error(
+                "%s: жодної точки не вдалось перевірити (--min-history=%d замало для моделі) "
+                "— збільште --min-history або наберіть більше історії",
+                args.metric, args.min_history,
+            )
+            sys.exit(1)
+
         verdict = "тренд кращий" if result["trend_mae"] < result["naive_mae"] else "naive кращий (або не гірший)"
         logger.info(
             "%s: %d точок перевірено, MAE тренд=%.4g, MAE naive=%.4g — %s",

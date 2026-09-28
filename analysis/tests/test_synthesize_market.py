@@ -1,21 +1,18 @@
 """
-Тести build_prompt()/parse_response()/call_llm() (чисті функції, без
-мережі) і synthesize_market() з підміненим call_deepseek — той самий
-підхід, що test_synthesize.py.
+Тести build_prompt() (чиста функція) і synthesize_market() з підміненим
+call_deepseek — той самий підхід, що test_synthesize.py.
+
+Розбір відповіді LLM і вибір провайдера — спільні (llm_common.py),
+покриті test_llm_common.py.
 """
 
 import json
 from datetime import datetime, timezone
 
-import pytest
-
+import llm_common
 from news_analysis.aggregate import NewsCluster
-import news_analysis.synthesize_market as synthesize_market
 from news_analysis.synthesize_market import (
-    SynthesisResponseError,
     build_prompt,
-    call_llm,
-    parse_response,
     synthesize_market as run_synthesize_market,
 )
 
@@ -60,41 +57,11 @@ def test_build_prompt_handles_missing_macro_context():
     assert "немає даних" in prompt
 
 
-def test_parse_response_valid():
-    result = parse_response(json.dumps(VALID_RESPONSE))
-    assert result.direction == "down"
-    assert result.confidence == 0.7
-
-
-def test_parse_response_rejects_invalid_json():
-    with pytest.raises(SynthesisResponseError):
-        parse_response("not json")
-
-
-def test_parse_response_rejects_missing_fields():
-    data = dict(VALID_RESPONSE)
-    del data["reasoning"]
-    with pytest.raises(SynthesisResponseError):
-        parse_response(json.dumps(data))
-
-
-def test_parse_response_rejects_unknown_direction():
-    data = dict(VALID_RESPONSE, direction="sideways")
-    with pytest.raises(SynthesisResponseError):
-        parse_response(json.dumps(data))
-
-
-def test_call_llm_rejects_unsupported_provider(monkeypatch):
-    monkeypatch.setattr(synthesize_market, "LLM_PROVIDER", "anthropic")
-    with pytest.raises(ValueError):
-        call_llm("prompt", "system", api_key="fake-key")
-
-
 def test_synthesize_market_calls_llm_and_parses(monkeypatch):
     def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
         return json.dumps(VALID_RESPONSE)
 
-    monkeypatch.setattr(synthesize_market, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
 
     result, prompt, raw_content = run_synthesize_market([CLUSTER], MACRO, api_key="fake-key")
 

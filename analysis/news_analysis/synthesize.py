@@ -17,10 +17,9 @@ summary/direction/confidence/reasoning від LLM; source_refs — той сам
 галюцинації того, що й так відоме викликачу з `signal.summaries`), код
 приєднує сам.
 
-Провайдер (docs/decisions.md, 2026-09-27): DeepSeek під час розробки
-(дешевше для ітерацій), Anthropic — перед завершенням фічі. Один
-env-параметр SYNTHESIS_LLM_PROVIDER, дефолт "deepseek" — заміна без
-редагування коду логіки синтезу.
+Провайдер, розбір відповіді й аудит-лог виклику — спільні для всіх
+LLM-скриптів analysis/ (`llm_common.py`); тут лишається тільки те, що
+справді своє: SYSTEM_PROMPT і build_prompt().
 
 Обсяг: тільки активи, для яких є ОБИДВА входи (новинний сигнал і ціна).
 Для watchlist-товарів/форексу ціна — prices.py:ASSET_PRICE_SOURCES;
@@ -37,11 +36,9 @@ xagusd/btc/eth/sol — досі без ціни тут (інше джерело,
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
 import requests
@@ -51,20 +48,20 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
-from news_analysis._db import fetch_relevant_for_aggregation, log_llm_call, save_synthesis  # noqa: E402
+from llm_common import (  # noqa: E402
+    SynthesisResponseError,
+    call_llm,
+    log_llm_call,
+    parse_synthesis_response,
+    require_api_key,
+    resolve_provider,
+)
+from news_analysis._db import fetch_relevant_for_aggregation, save_synthesis  # noqa: E402
 from news_analysis.aggregate import AssetSignal, aggregate_by_asset, cluster_articles  # noqa: E402
-from news_analysis.deepseek_client import call_deepseek  # noqa: E402
 from news_analysis.prices import PriceChange, fetch_all_price_changes  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_DIRECTIONS = frozenset({"up", "down", "neutral", "unclear"})
-_REQUIRED_FIELDS = ("direction", "confidence", "summary", "reasoning")
-
-# Заміна на "anthropic" пізніше — окремий клієнт-модуль ще не написаний
-# (YAGNI: писати його заздалегідь, без реального переходу, немає сенсу).
-LLM_PROVIDER = os.environ.get("SYNTHESIS_LLM_PROVIDER", "deepseek")
 
 SYSTEM_PROMPT = (
     "Ти фінансовий аналітик. Тобі дають один актив: агрегований "
@@ -92,18 +89,6 @@ SYSTEM_PROMPT = (
 )
 
 
-@dataclass
-class SynthesisResult:
-    direction: str
-    confidence: float
-    summary: str
-    reasoning: str
-
-
-class SynthesisResponseError(ValueError):
-    pass
-
-
 def build_prompt(asset_id: str, signal: AssetSignal, price: PriceChange) -> str:
     lines = [
         f"Актив: {asset_id}",
@@ -119,56 +104,13 @@ def build_prompt(asset_id: str, signal: AssetSignal, price: PriceChange) -> str:
     return "\n".join(lines)
 
 
-def parse_response(raw_content: str) -> SynthesisResult:
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as e:
-        raise SynthesisResponseError(
-            f"Відповідь LLM не є коректним JSON: {raw_content!r}"
-        ) from e
-
-    missing = [f for f in _REQUIRED_FIELDS if f not in data]
-    if missing:
-        raise SynthesisResponseError(f"У відповіді LLM бракує полів {missing}: {data!r}")
-
-    direction = data["direction"]
-    if direction not in _DIRECTIONS:
-        raise SynthesisResponseError(f"Неочікуване значення direction: {direction!r}")
-
-    try:
-        confidence = float(data["confidence"])
-    except (TypeError, ValueError) as e:
-        raise SynthesisResponseError(f"confidence не число: {data['confidence']!r}") from e
-    if not 0 <= confidence <= 1:
-        raise SynthesisResponseError(f"confidence поза межами [0,1]: {confidence}")
-
-    return SynthesisResult(
-        direction=direction,
-        confidence=confidence,
-        summary=data["summary"],
-        reasoning=data["reasoning"],
-    )
-
-
-def call_llm(prompt: str, system_prompt: str, api_key: str) -> str:
-    if LLM_PROVIDER == "deepseek":
-        return call_deepseek(prompt, api_key=api_key, system_prompt=system_prompt)
-    raise ValueError(
-        f"Непідтримуваний SYNTHESIS_LLM_PROVIDER={LLM_PROVIDER!r} — наразі реалізовано "
-        "лише 'deepseek' (Anthropic-клієнт з'явиться разом зі свідомим переходом, "
-        "docs/decisions.md, 2026-09-27)."
-    )
-
-
-def synthesize_asset(
-    asset_id: str, signal: AssetSignal, price: PriceChange, api_key: str
-) -> tuple[SynthesisResult, str, str]:
+def synthesize_asset(asset_id: str, signal: AssetSignal, price: PriceChange, api_key: str):
     """Будує промпт → LLM → парсить. Повертає (результат, промпт,
     сира_відповідь) — обов'язкові для логування в llm_call_log
     (rule 5), той самий контракт, що relevance_filter.analyze_article()."""
     prompt = build_prompt(asset_id, signal, price)
     raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_response(raw_content)
+    result = parse_synthesis_response(raw_content)
     return result, prompt, raw_content
 
 
@@ -180,10 +122,7 @@ def main() -> None:
     parser.add_argument("--max-age-days", type=int, default=7)
     args = parser.parse_args()
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY") if LLM_PROVIDER == "deepseek" else None
-    if LLM_PROVIDER == "deepseek" and not api_key:
-        logger.error("DEEPSEEK_API_KEY не задано. Додайте його в .env (див. .env.example).")
-        sys.exit(1)
+    api_key = require_api_key()
 
     conn = get_connection()
     try:
@@ -214,7 +153,7 @@ def main() -> None:
 
             llm_call_id = log_llm_call(
                 conn,
-                provider=LLM_PROVIDER,
+                provider=resolve_provider(),
                 purpose="news_price_synthesis",
                 prompt=prompt,
                 response=raw_content,

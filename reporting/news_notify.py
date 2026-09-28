@@ -12,25 +12,17 @@ DeepSeek (analysis/news_analysis/run_news_analysis.py). Тільки
 
 import argparse
 import logging
-import os
-import sys
 
 from dotenv import load_dotenv
 
-# data-ingestion не є валідним іменем Python-пакета (дефіс у назві),
-# тож додаємо його вміст напряму в sys.path, щоб дістати common.db —
-# той самий підхід, що й telegram_notify.py.
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
-)
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import DIRECTION_EMOJI, fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_DIRECTION_EMOJI = {"up": "🟢", "down": "🔴", "neutral": "⚪", "unclear": "❓"}
-
 
 def fetch_recent_relevant(
     conn, stream: str = None, limit: int = 5, max_age_days: int = 7
@@ -64,10 +56,7 @@ def fetch_recent_relevant(
     query += " ORDER BY n.published_at DESC LIMIT %s"
     params.append(limit)
 
-    with conn.cursor() as cur:
-        cur.execute(query, params)
-        columns = [d[0] for d in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    return fetch_dicts(conn, query, tuple(params))
 
 
 def format_message(rows: list[dict]) -> str:
@@ -76,7 +65,7 @@ def format_message(rows: list[dict]) -> str:
 
     lines = [f"📰 Релевантні новини ({len(rows)}):", ""]
     for row in rows:
-        emoji = _DIRECTION_EMOJI.get(row["direction"], "❓")
+        emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
         asset = row["asset_id"] or "—"
         lines.append(f"{emoji} [{asset}] {row['title']}")
         lines.append(row["summary"])
@@ -97,13 +86,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не задані в .env (див. .env.example)"
-        )
-        sys.exit(1)
+    token, chat_id = resolve_telegram_credentials()
 
     conn = get_connection()
     try:

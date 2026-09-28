@@ -31,7 +31,6 @@ LLM-відбір, не будувати composite-score-подібний кри�
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -47,11 +46,11 @@ sys.path.insert(0, _DATA_INGESTION_DIR)
 
 from collect_universe import fetch_sp500_constituents  # noqa: E402
 from common.db import get_connection, insert_observations  # noqa: E402
+from llm_common import call_llm, log_llm_call, parse_json_object, require_api_key, resolve_provider  # noqa: E402
 from quotes.twelvedata_adapter import TwelveDataAdapter  # noqa: E402
 
-from news_analysis._db import fetch_relevant_for_aggregation, log_llm_call, save_candidate  # noqa: E402
+from news_analysis._db import fetch_relevant_for_aggregation, save_candidate  # noqa: E402
 from news_analysis.aggregate import NewsCluster, cluster_articles, top_clusters  # noqa: E402
-from news_analysis.deepseek_client import call_deepseek  # noqa: E402
 from news_analysis.prices import PriceChange, fetch_price_change  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -61,8 +60,6 @@ logger = logging.getLogger(__name__)
 # фінансовий контекст без прив'язки до активу (geopolitical — вузький
 # курований набір тем, малоймовірно містить нові тикери).
 STREAM = "general"
-
-LLM_PROVIDER = os.environ.get("SYNTHESIS_LLM_PROVIDER", "deepseek")
 
 SYSTEM_PROMPT = (
     "Ти аналітик, що шукає нові інвестиційні ідеї серед фінансових "
@@ -105,12 +102,10 @@ def build_prompt(clusters: list[NewsCluster], already_tracked: list[str]) -> str
 
 
 def parse_response(raw_content: str) -> list[dict]:
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as e:
-        raise CandidateResponseError(
-            f"Відповідь LLM не є коректним JSON: {raw_content!r}"
-        ) from e
+    """Власний парсер (не llm_common.parse_synthesis_response) — форма
+    виходу тут інша: список кандидатів, а не один
+    direction/confidence/summary/reasoning."""
+    data = parse_json_object(raw_content, CandidateResponseError)
 
     candidates = data.get("candidates")
     if candidates is None:
@@ -124,16 +119,6 @@ def parse_response(raw_content: str) -> list[dict]:
             raise CandidateResponseError(f"Кандидату бракує полів {missing}: {c!r}")
 
     return candidates
-
-
-def call_llm(prompt: str, system_prompt: str, api_key: str) -> str:
-    if LLM_PROVIDER == "deepseek":
-        return call_deepseek(prompt, api_key=api_key, system_prompt=system_prompt)
-    raise ValueError(
-        f"Непідтримуваний SYNTHESIS_LLM_PROVIDER={LLM_PROVIDER!r} — наразі реалізовано "
-        "лише 'deepseek' (Anthropic-клієнт з'явиться разом зі свідомим переходом, "
-        "docs/decisions.md, 2026-09-27)."
-    )
 
 
 def verify_tradable(conn, ticker: str, twelvedata_api_key: str) -> Optional[PriceChange]:
@@ -161,10 +146,7 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=8, help="скільки найбільш підтверджених історій урахувати")
     args = parser.parse_args()
 
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY") if LLM_PROVIDER == "deepseek" else None
-    if LLM_PROVIDER == "deepseek" and not deepseek_key:
-        logger.error("DEEPSEEK_API_KEY не задано. Додайте його в .env (див. .env.example).")
-        sys.exit(1)
+    llm_api_key = require_api_key()
 
     twelvedata_key = os.environ.get("TWELVEDATA_API_KEY")
     if not twelvedata_key:
@@ -186,7 +168,7 @@ def main() -> None:
         prompt = build_prompt(top, already_tracked)
 
         try:
-            raw_content = call_llm(prompt, SYSTEM_PROMPT, deepseek_key)
+            raw_content = call_llm(prompt, SYSTEM_PROMPT, llm_api_key)
             candidates = parse_response(raw_content)
         except CandidateResponseError:
             logger.exception("Некоректна відповідь LLM — прогін пропущено")
@@ -199,7 +181,7 @@ def main() -> None:
 
         llm_call_id = log_llm_call(
             conn,
-            provider=LLM_PROVIDER,
+            provider=resolve_provider(),
             purpose="candidate_discovery",
             prompt=prompt,
             response=raw_content,

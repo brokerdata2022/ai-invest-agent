@@ -1,24 +1,18 @@
 """
-Тести build_prompt()/parse_response()/call_llm() (чисті функції, без
-мережі) і synthesize_asset() з підміненим call_deepseek — той самий
-підхід, що test_relevance_filter.py.
+Тести build_prompt() (чиста функція) і synthesize_asset() з підміненим
+call_deepseek — той самий підхід, що test_relevance_filter.py.
+
+Розбір відповіді LLM і вибір провайдера тут НЕ тестуються — вони спільні
+для всіх LLM-скриптів (llm_common.py) і покриті test_llm_common.py.
 """
 
 import json
 from decimal import Decimal
 
-import pytest
-
+import llm_common
 from news_analysis.aggregate import AssetSignal
 from news_analysis.prices import compute_pct_change
-import news_analysis.synthesize as synthesize
-from news_analysis.synthesize import (
-    SynthesisResponseError,
-    build_prompt,
-    call_llm,
-    parse_response,
-    synthesize_asset,
-)
+from news_analysis.synthesize import build_prompt, synthesize_asset
 
 SIGNAL = AssetSignal(
     asset_id="xauusd",
@@ -56,62 +50,11 @@ def test_build_prompt_omits_facts_section_when_no_summaries():
     assert "Факти з новин:" not in prompt
 
 
-def test_parse_response_valid():
-    result = parse_response(json.dumps(VALID_RESPONSE))
-    assert result.direction == "up"
-    assert result.confidence == 0.75
-
-
-def test_parse_response_rejects_invalid_json():
-    with pytest.raises(SynthesisResponseError):
-        parse_response("not json")
-
-
-def test_parse_response_rejects_missing_fields():
-    data = dict(VALID_RESPONSE)
-    del data["reasoning"]
-    with pytest.raises(SynthesisResponseError):
-        parse_response(json.dumps(data))
-
-
-def test_parse_response_rejects_unknown_direction():
-    data = dict(VALID_RESPONSE, direction="sideways")
-    with pytest.raises(SynthesisResponseError):
-        parse_response(json.dumps(data))
-
-
-def test_parse_response_rejects_confidence_out_of_range():
-    data = dict(VALID_RESPONSE, confidence=1.5)
-    with pytest.raises(SynthesisResponseError):
-        parse_response(json.dumps(data))
-
-
-def test_call_llm_uses_deepseek_by_default(monkeypatch):
-    monkeypatch.setattr(synthesize, "LLM_PROVIDER", "deepseek")
-    captured = {}
-
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
-        captured["prompt"] = prompt
-        return json.dumps(VALID_RESPONSE)
-
-    monkeypatch.setattr(synthesize, "call_deepseek", fake_call_deepseek)
-
-    raw = call_llm("some prompt", "system", api_key="fake-key")
-    assert raw == json.dumps(VALID_RESPONSE)
-    assert captured["prompt"] == "some prompt"
-
-
-def test_call_llm_rejects_unsupported_provider(monkeypatch):
-    monkeypatch.setattr(synthesize, "LLM_PROVIDER", "anthropic")
-    with pytest.raises(ValueError):
-        call_llm("prompt", "system", api_key="fake-key")
-
-
 def test_synthesize_asset_calls_llm_and_parses(monkeypatch):
     def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
         return json.dumps(VALID_RESPONSE)
 
-    monkeypatch.setattr(synthesize, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
 
     result, prompt, raw_content = synthesize_asset("xauusd", SIGNAL, PRICE, api_key="fake-key")
 

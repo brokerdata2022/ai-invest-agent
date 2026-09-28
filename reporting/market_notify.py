@@ -11,27 +11,17 @@
 
 import argparse
 import logging
-import os
-import sys
 
 from dotenv import load_dotenv
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
-)
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import MARKET_DIRECTION_LABEL, fetch_one_dict, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_DIRECTION_LABEL = {
-    "up": "🟢 risk-on",
-    "down": "🔴 risk-off",
-    "neutral": "⚪ збалансовано",
-    "unclear": "❓ немає чіткого сигналу",
-}
-
 
 def fetch_latest_market_synthesis(conn):
     query = """
@@ -40,20 +30,14 @@ def fetch_latest_market_synthesis(conn):
         ORDER BY created_at DESC
         LIMIT 1
     """
-    with conn.cursor() as cur:
-        cur.execute(query)
-        row = cur.fetchone()
-        if row is None:
-            return None
-        columns = [d[0] for d in cur.description]
-        return dict(zip(columns, row))
+    return fetch_one_dict(conn, query)
 
 
 def format_message(row) -> str:
     if row is None:
         return "🌍 Синтезу стану ринку ще немає."
 
-    label = _DIRECTION_LABEL.get(row["direction"], row["direction"])
+    label = MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
     lines = [
         f"🌍 Стан ринку: {label} (упевненість {float(row['confidence']):.2f})",
         row["summary"],
@@ -69,15 +53,9 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(description=__doc__)
-    args = parser.parse_args()
+    parser.parse_args()  # лише для --help/валідації: скрипт без параметрів
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не задані в .env (див. .env.example)"
-        )
-        sys.exit(1)
+    token, chat_id = resolve_telegram_credentials()
 
     conn = get_connection()
     try:

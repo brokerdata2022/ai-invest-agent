@@ -14,6 +14,7 @@ rule 1 кореневого CLAUDE.md, orchestration/CLAUDE.md).
 import logging
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,41 @@ def _crypto_prices() -> None:
                 except Exception:
                     logger.error("%s: провалилось", metric_id, exc_info=True)
                     conn.rollback()
+    finally:
+        conn.close()
+
+
+def _crypto_derivatives_collect() -> None:
+    """Щоденний bulk-знімок 3 бірж ф'ючерсів (обсяг/funding/OI, де
+    доступно bulk) — для крипто-скринінгу лонг/шорт/спостереження
+    (analysis/crypto_screening/, PLAN.md Фаза 4, крок 4.5). Той самий
+    підхід, що _crypto_prices(): одна біржа не валить решту.
+
+    Критично для самої скринінг-логіки (не просто "збір заради збору"):
+    `screen_long`/`screen_short_or_watch` (crypto_screening/) рахують
+    зміну OI/обсягу за кілька днів — без цієї джоби raw_observations
+    ніколи не накопичить історію, скільки не чекай (docs/decisions.md,
+    2026-09-27, "крок 4.5")."""
+    sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
+    from common.db import get_connection, insert_observations  # noqa: E402
+    from crypto.binance_futures_adapter import BinanceFuturesAdapter  # noqa: E402
+    from crypto.bybit_futures_adapter import BybitFuturesAdapter  # noqa: E402
+    from crypto.okx_futures_adapter import OkxFuturesAdapter  # noqa: E402
+
+    conn = get_connection()
+    try:
+        for adapter_class in (BinanceFuturesAdapter, BybitFuturesAdapter, OkxFuturesAdapter):
+            try:
+                records = adapter_class().collect()
+                if records:
+                    inserted = insert_observations(conn, records)
+                    logger.info(
+                        "%s: %d записів (%d нових/змінених)",
+                        adapter_class.source, len(records), inserted,
+                    )
+            except Exception:
+                logger.error("%s: провалилось", adapter_class.source, exc_info=True)
+                conn.rollback()
     finally:
         conn.close()
 
@@ -112,6 +148,42 @@ def _watchlist_prices() -> None:
             logger.info("%s: %.2f%% (%s -> %s)", asset_id, change.pct_change, change.start_date, change.end_date)
     finally:
         conn.close()
+
+
+LOG_RETENTION_DAYS = 14
+
+
+def _prune_logs() -> None:
+    """Видаляє файли logs/*.log, старші за LOG_RETENTION_DAYS.
+
+    Кожен запуск джоби пише окремий файл (runner.py:_log_path) — за
+    поточним розкладом це ~150 файлів на добу (лише check_releases —
+    96), тобто десятки тисяч за місяць безперервної роботи на VPS.
+    Логи — не джерело істини (rule 6 захищає сирі ДАНІ в БД, не
+    раннтайм-вивід джоб; logs/ тому й у .gitignore), тож їх можна
+    прибирати. 14 днів — достатньо, щоб розібрати будь-який провал
+    постфактум, і достатньо мало, щоб диск не ріс нескінченно."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=LOG_RETENTION_DAYS)
+    log_dir = REPO_ROOT / "logs"
+    if not log_dir.is_dir():
+        logger.info("logs/ ще не існує — нічого прибирати")
+        return
+
+    removed = 0
+    for path in log_dir.glob("*.log"):
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            if mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            # Один нечитабельний файл не повинен валити прибирання решти.
+            logger.warning("не вдалось прибрати %s", path, exc_info=True)
+
+    logger.info(
+        "Прибрано %d логів, старших за %d днів (лишилось %d)",
+        removed, LOG_RETENTION_DAYS, len(list(log_dir.glob("*.log"))),
+    )
 
 
 JOBS = {
@@ -181,6 +253,17 @@ JOBS = {
     "crypto_prices": {
         "callable": _crypto_prices,
     },
+    "crypto_derivatives_collect": {
+        "callable": _crypto_derivatives_collect,
+    },
+    "crypto_screening_daily": {
+        # Живо виміряно 2026-09-27: ~3.5 хв на ~150 Tier A-виживших —
+        # у межах дефолтного таймауту runner.py (30 хв), окремий не потрібен.
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "crypto_screening" / "run_screening.py")),
+    },
+    "crypto_candidates_monitor": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "crypto_screening" / "monitor_candidates.py")),
+    },
     "watchlist_prices": {
         "callable": _watchlist_prices,
     },
@@ -206,5 +289,8 @@ JOBS = {
     },
     "safety_net_collect_all": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py"), "--limit", "15"),
+    },
+    "prune_logs": {
+        "callable": _prune_logs,
     },
 }

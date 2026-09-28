@@ -14,16 +14,13 @@
 
 import argparse
 import logging
-import os
 import sys
 
 from dotenv import load_dotenv
 
-# data-ingestion не є валідним іменем Python-пакета (дефіс у назві),
-# тож додаємо його вміст напряму в sys.path, щоб дістати common.db.
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
-)
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection, fetch_latest  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -116,13 +113,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не задані в .env (див. .env.example)"
-        )
-        sys.exit(1)
+    token, chat_id = resolve_telegram_credentials()
 
     conn = get_connection()
     try:

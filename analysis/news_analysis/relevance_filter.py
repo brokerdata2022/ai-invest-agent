@@ -15,16 +15,19 @@ build_prompt()/parse_response() — чисті функції, тестують�
 що ходить у DeepSeek (тестується окремо/мокається).
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from llm_common import DIRECTIONS, parse_confidence, parse_json_object
 from news_analysis.deepseek_client import call_deepseek
 
 logger = logging.getLogger(__name__)
 
-_DIRECTIONS = frozenset({"up", "down", "neutral", "unclear"})
+# DIRECTIONS — спільний словник напрямків із llm_common.py (один
+# контракт виходу на весь analysis/, analysis/CLAUDE.md). Набір полів
+# тут ШИРШИЙ за синтезний: класифікація однієї статті додає
+# is_relevant (і опційний asset_id).
 _REQUIRED_FIELDS = ("is_relevant", "direction", "confidence", "summary", "reasoning")
 
 SYSTEM_PROMPT = (
@@ -108,33 +111,21 @@ def _extract_description(article: dict) -> Optional[str]:
 
 
 def parse_response(raw_content: str) -> NewsAnalysisResult:
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as e:
-        raise DeepSeekResponseError(
-            f"Відповідь DeepSeek не є коректним JSON: {raw_content!r}"
-        ) from e
+    data = parse_json_object(raw_content, DeepSeekResponseError)
 
     missing = [f for f in _REQUIRED_FIELDS if f not in data]
     if missing:
         raise DeepSeekResponseError(f"У відповіді DeepSeek бракує полів {missing}: {data!r}")
 
     direction = data["direction"]
-    if direction not in _DIRECTIONS:
+    if direction not in DIRECTIONS:
         raise DeepSeekResponseError(f"Неочікуване значення direction: {direction!r}")
-
-    try:
-        confidence = float(data["confidence"])
-    except (TypeError, ValueError) as e:
-        raise DeepSeekResponseError(f"confidence не число: {data['confidence']!r}") from e
-    if not 0 <= confidence <= 1:
-        raise DeepSeekResponseError(f"confidence поза межами [0,1]: {confidence}")
 
     return NewsAnalysisResult(
         is_relevant=bool(data["is_relevant"]),
         asset_id=data.get("asset_id") or None,
         direction=direction,
-        confidence=confidence,
+        confidence=parse_confidence(data["confidence"], DeepSeekResponseError),
         summary=data["summary"],
         reasoning=data["reasoning"],
     )

@@ -16,14 +16,11 @@ summary/direction/confidence/reasoning від LLM; source_refs (сам
 показник/метод порівняння, на якому базується висновок) приєднує код,
 не LLM — той самий принцип, що news_analysis/synthesize.py.
 
-Межа шарів / формат виходу / провайдер — той самий принцип, що
-news_analysis/synthesize.py (SynthesisResult/parse_response/call_llm
-дубльовані навмисно, кожен LLM-скрипт самодостатній,
-docs/decisions.md 2026-09-27 "LLM-синтез новин").
-
-Провайдер: SYNTHESIS_LLM_PROVIDER (спільний з news_analysis/synthesize.py
-— один архітектурний перемикач на весь проєкт, docs/decisions.md
-2026-09-27), дефолт "deepseek".
+Межа шарів / формат виходу — той самий принцип, що
+news_analysis/synthesize.py; провайдер (SYNTHESIS_LLM_PROVIDER, дефолт
+"deepseek"), розбір відповіді й аудит-лог виклику — спільний код
+`llm_common.py`, тут лишається тільки своє: SYSTEM_PROMPT і
+build_prompt().
 
 Використання (після analysis/expectations/compare_releases.py):
     python synthesize.py
@@ -31,11 +28,9 @@ docs/decisions.md 2026-09-27 "LLM-синтез новин").
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
 import requests
@@ -45,21 +40,19 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
-from news_analysis.deepseek_client import call_deepseek  # noqa: E402
-
-from expectations._db import (  # noqa: E402
-    fetch_unsynthesized_comparisons,
+from llm_common import (  # noqa: E402
+    SynthesisResponseError,
+    call_llm,
     log_llm_call,
-    save_synthesis,
+    parse_synthesis_response,
+    require_api_key,
+    resolve_provider,
 )
+
+from expectations._db import fetch_unsynthesized_comparisons, save_synthesis  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_DIRECTIONS = frozenset({"up", "down", "neutral", "unclear"})
-_REQUIRED_FIELDS = ("direction", "confidence", "summary", "reasoning")
-
-LLM_PROVIDER = os.environ.get("SYNTHESIS_LLM_PROVIDER", "deepseek")
 
 SYSTEM_PROMPT = (
     "Ти макро-аналітик. Тобі дають один макроекономічний реліз: яке "
@@ -84,18 +77,6 @@ SYSTEM_PROMPT = (
 )
 
 
-@dataclass
-class SynthesisResult:
-    direction: str
-    confidence: float
-    summary: str
-    reasoning: str
-
-
-class SynthesisResponseError(ValueError):
-    pass
-
-
 def build_prompt(comparison: dict) -> str:
     lines = [
         f"Показник: {comparison['metric_id']} ({comparison['source']})",
@@ -115,54 +96,13 @@ def build_prompt(comparison: dict) -> str:
     return "\n".join(lines)
 
 
-def parse_response(raw_content: str) -> SynthesisResult:
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as e:
-        raise SynthesisResponseError(
-            f"Відповідь LLM не є коректним JSON: {raw_content!r}"
-        ) from e
-
-    missing = [f for f in _REQUIRED_FIELDS if f not in data]
-    if missing:
-        raise SynthesisResponseError(f"У відповіді LLM бракує полів {missing}: {data!r}")
-
-    direction = data["direction"]
-    if direction not in _DIRECTIONS:
-        raise SynthesisResponseError(f"Неочікуване значення direction: {direction!r}")
-
-    try:
-        confidence = float(data["confidence"])
-    except (TypeError, ValueError) as e:
-        raise SynthesisResponseError(f"confidence не число: {data['confidence']!r}") from e
-    if not 0 <= confidence <= 1:
-        raise SynthesisResponseError(f"confidence поза межами [0,1]: {confidence}")
-
-    return SynthesisResult(
-        direction=direction,
-        confidence=confidence,
-        summary=data["summary"],
-        reasoning=data["reasoning"],
-    )
-
-
-def call_llm(prompt: str, system_prompt: str, api_key: str) -> str:
-    if LLM_PROVIDER == "deepseek":
-        return call_deepseek(prompt, api_key=api_key, system_prompt=system_prompt)
-    raise ValueError(
-        f"Непідтримуваний SYNTHESIS_LLM_PROVIDER={LLM_PROVIDER!r} — наразі реалізовано "
-        "лише 'deepseek' (Anthropic-клієнт з'явиться разом зі свідомим переходом, "
-        "docs/decisions.md, 2026-09-27)."
-    )
-
-
-def synthesize_comparison(comparison: dict, api_key: str) -> tuple[SynthesisResult, str, str]:
+def synthesize_comparison(comparison: dict, api_key: str):
     """Будує промпт → LLM → парсить. Повертає (результат, промпт,
     сира_відповідь) — обов'язкові для логування в llm_call_log
     (rule 5), той самий контракт, що news_analysis/synthesize.py."""
     prompt = build_prompt(comparison)
     raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_response(raw_content)
+    result = parse_synthesis_response(raw_content)
     return result, prompt, raw_content
 
 
@@ -173,10 +113,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20)
     args = parser.parse_args()
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY") if LLM_PROVIDER == "deepseek" else None
-    if LLM_PROVIDER == "deepseek" and not api_key:
-        logger.error("DEEPSEEK_API_KEY не задано. Додайте його в .env (див. .env.example).")
-        sys.exit(1)
+    api_key = require_api_key()
 
     conn = get_connection()
     try:
@@ -200,7 +137,7 @@ def main() -> None:
 
             llm_call_id = log_llm_call(
                 conn,
-                provider=LLM_PROVIDER,
+                provider=resolve_provider(),
                 purpose="expectation_synthesis",
                 prompt=prompt,
                 response=raw_content,

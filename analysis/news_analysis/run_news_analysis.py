@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from news.queries import WATCHLIST_ASSET_IDS  # noqa: E402
-from news_analysis._db import fetch_unanalyzed, log_llm_call, save_analysis  # noqa: E402
+from llm_common import log_llm_call  # noqa: E402
+from news_analysis._db import fetch_unanalyzed, save_analysis  # noqa: E402
 from news_analysis.relevance_filter import analyze_article, DeepSeekResponseError  # noqa: E402
 from screening._results_db import fetch_latest_tickers  # noqa: E402
 

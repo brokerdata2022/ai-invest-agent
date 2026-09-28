@@ -31,7 +31,6 @@ import os
 import sys
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ANALYSIS_DIR)

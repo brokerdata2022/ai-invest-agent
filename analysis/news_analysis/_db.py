@@ -14,7 +14,7 @@ from news_analysis.relevance_filter import NewsAnalysisResult
 
 # SynthesisResult (synthesize.py/synthesize_market.py) навмисно НЕ
 # імпортується для type hint: обидва модулі імпортують цей модуль
-# (fetch_relevant_for_aggregation/log_llm_call/save_synthesis/
+# (fetch_relevant_for_aggregation/save_synthesis/
 # save_market_synthesis) — імпорт у зворотному напрямку дав би
 # циклічний імпорт. save_synthesis()/save_market_synthesis() приймають
 # result качиною типізацією (потрібні лише .direction/.confidence/
@@ -72,23 +72,6 @@ def fetch_relevant_for_aggregation(
         cur.execute(query, params)
         columns = [d[0] for d in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
-
-
-def log_llm_call(
-    conn, provider: str, purpose: str, prompt: str, response: str, source_ref: Optional[str]
-) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO llm_call_log (provider, purpose, prompt, response, source_ref)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (provider, purpose, prompt, response, source_ref),
-        )
-        llm_call_id = cur.fetchone()[0]
-    conn.commit()
-    return llm_call_id
 
 
 def save_synthesis(

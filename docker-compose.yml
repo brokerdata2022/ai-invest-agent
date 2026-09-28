@@ -9,7 +9,13 @@ services:
       POSTGRES_USER: ${DB_USER:-invest_agent}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Задайте DB_PASSWORD у .env}
     ports:
-      - "${DB_PORT:-5432}:5432"
+      # Прив'язка саме до 127.0.0.1, не до 0.0.0.0: без цього префікса
+      # Docker публікує порт на ВСІХ інтерфейсах і сам додає правило в
+      # iptables, яке проходить "поверх" ufw/firewalld — на VPS
+      # (docs/production-readiness.md — розгортання на сервер) база
+      # опинилась би доступною з інтернету. Локальний доступ (psql,
+      # PostgreSQL-розширення VSCode) через localhost працює так само.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
       # Застосовується автоматично ЛИШЕ при першому створенні volume

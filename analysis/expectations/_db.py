@@ -6,7 +6,6 @@ parse_expected.py.
 """
 
 import json
-from typing import Optional
 
 
 def save_comparison(conn, result) -> int:
@@ -118,22 +117,3 @@ def save_synthesis(
         synthesis_id = cur.fetchone()[0]
     conn.commit()
     return synthesis_id
-
-
-def log_llm_call(
-    conn, provider: str, purpose: str, prompt: str, response: str, source_ref: Optional[str]
-) -> int:
-    """Дубльовано з news_analysis/_db.py навмисно — кожен LLM-скрипт
-    самодостатній (той самий принцип, що synthesize.py/synthesize_market.py)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO llm_call_log (provider, purpose, prompt, response, source_ref)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (provider, purpose, prompt, response, source_ref),
-        )
-        llm_call_id = cur.fetchone()[0]
-    conn.commit()
-    return llm_call_id

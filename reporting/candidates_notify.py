@@ -11,14 +11,12 @@
 
 import argparse
 import logging
-import os
-import sys
 
 from dotenv import load_dotenv
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
-)
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -31,21 +29,19 @@ def fetch_current_candidates(conn, limit: int = 10) -> list[dict]:
     кожного) — власний запит, не імпорт з analysis/ (reporting/CLAUDE.md:
     контейнерна незалежність, той самий принцип, що telegram_notify.py:_METRIC_SOURCE).
     Дублює news_analysis/_db.py:fetch_current_candidates() навмисно."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ticker, company_name, reasoning, discovered_at FROM (
-                SELECT DISTINCT ON (ticker) ticker, company_name, reasoning, discovered_at
-                FROM candidate_assets
-                ORDER BY ticker, discovered_at DESC
-            ) t
-            ORDER BY discovered_at DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        columns = [d[0] for d in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    return fetch_dicts(
+        conn,
+        """
+        SELECT ticker, company_name, reasoning, discovered_at FROM (
+            SELECT DISTINCT ON (ticker) ticker, company_name, reasoning, discovered_at
+            FROM candidate_assets
+            ORDER BY ticker, discovered_at DESC
+        ) t
+        ORDER BY discovered_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
 
 
 def format_message(rows: list[dict]) -> str:
@@ -67,13 +63,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args()
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не задані в .env (див. .env.example)"
-        )
-        sys.exit(1)
+    token, chat_id = resolve_telegram_credentials()
 
     conn = get_connection()
     try:

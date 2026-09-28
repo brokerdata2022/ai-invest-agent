@@ -2,6 +2,10 @@
 Тести build_prompt()/parse_response()/verify_tradable() (чисті функції
 чи з підміненими залежностями, без реальної мережі/БД) — той самий
 підхід, що test_synthesize_market.py.
+
+parse_response() тут ВЛАСНИЙ (форма виходу — список кандидатів, не
+SynthesisResult), тому тестується тут, а не в test_llm_common.py; вибір
+провайдера — спільний, покритий test_llm_common.py.
 """
 
 import json
@@ -14,7 +18,6 @@ import news_analysis.discover_candidates as discover_candidates
 from news_analysis.discover_candidates import (
     CandidateResponseError,
     build_prompt,
-    call_llm,
     parse_response,
     verify_tradable,
 )
@@ -77,12 +80,6 @@ def test_parse_response_rejects_candidate_missing_fields():
     data = {"candidates": [{"ticker": "ACME", "company_name": "Acme Robotics Inc."}]}
     with pytest.raises(CandidateResponseError):
         parse_response(json.dumps(data))
-
-
-def test_call_llm_rejects_unsupported_provider(monkeypatch):
-    monkeypatch.setattr(discover_candidates, "LLM_PROVIDER", "anthropic")
-    with pytest.raises(ValueError):
-        call_llm("prompt", "system", api_key="fake-key")
 
 
 def test_verify_tradable_returns_none_when_adapter_rejects_ticker(monkeypatch):

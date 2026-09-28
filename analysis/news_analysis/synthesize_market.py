@@ -12,10 +12,10 @@ LLM-синтез глобального контексту (docs/news-purpose.md
 aggregate.py:top_clusters() (найбільш підтверджені історії, не по
 активу).
 
-Межа шарів / формат виходу / провайдер — той самий принцип, що
-synthesize.py (SynthesisResult/parse_response/call_llm дубльовані
-навмисно, кожен LLM-скрипт самодостатній — той самий підхід, що вже є
-між relevance_filter.py й synthesize.py).
+Межа шарів / формат виходу — той самий принцип, що synthesize.py;
+провайдер, розбір відповіді й аудит-лог виклику — спільні
+(`llm_common.py`), тут лишається лише своє: SYSTEM_PROMPT,
+build_prompt() і макро-контекст.
 
 Використання:
     python synthesize_market.py
@@ -23,11 +23,9 @@ synthesize.py (SynthesisResult/parse_response/call_llm дубльовані
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
 import requests
@@ -37,15 +35,19 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection, fetch_recent  # noqa: E402
-from news_analysis._db import fetch_relevant_for_aggregation, log_llm_call, save_market_synthesis  # noqa: E402
+from llm_common import (  # noqa: E402
+    SynthesisResponseError,
+    call_llm,
+    log_llm_call,
+    parse_synthesis_response,
+    require_api_key,
+    resolve_provider,
+)
+from news_analysis._db import fetch_relevant_for_aggregation, save_market_synthesis  # noqa: E402
 from news_analysis.aggregate import NewsCluster, cluster_articles, top_clusters  # noqa: E402
-from news_analysis.deepseek_client import call_deepseek  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-_DIRECTIONS = frozenset({"up", "down", "neutral", "unclear"})
-_REQUIRED_FIELDS = ("direction", "confidence", "summary", "reasoning")
 
 # Не CLI-прапорець — сама суть Цілі 4 саме ці два потоки (asset_id=NULL,
 # не прив'язані до активу, на відміну від watchlist).
@@ -63,8 +65,6 @@ MACRO_CONTEXT_METRICS: dict[str, tuple[str, str]] = {
     "Eurozone Deposit Rate": ("ecb", "eurozone_deposit_rate"),
     "Japan Policy Rate": ("boj", "japan_policy_rate"),
 }
-
-LLM_PROVIDER = os.environ.get("SYNTHESIS_LLM_PROVIDER", "deepseek")
 
 SYSTEM_PROMPT = (
     "Ти макро-стратег. Тобі дають дві речі: (1) макро-контекст — "
@@ -89,18 +89,6 @@ SYSTEM_PROMPT = (
     "макро-контекст узгоджуються), summary (1-2 речення: який стан "
     "ринку і чому), reasoning (коротке обґрунтування для аудиту)."
 )
-
-
-@dataclass
-class SynthesisResult:
-    direction: str
-    confidence: float
-    summary: str
-    reasoning: str
-
-
-class SynthesisResponseError(ValueError):
-    pass
 
 
 def fetch_macro_context(conn) -> dict[str, dict]:
@@ -146,56 +134,13 @@ def build_prompt(clusters: list[NewsCluster], macro: dict) -> str:
     return "\n".join(lines)
 
 
-def parse_response(raw_content: str) -> SynthesisResult:
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as e:
-        raise SynthesisResponseError(
-            f"Відповідь LLM не є коректним JSON: {raw_content!r}"
-        ) from e
-
-    missing = [f for f in _REQUIRED_FIELDS if f not in data]
-    if missing:
-        raise SynthesisResponseError(f"У відповіді LLM бракує полів {missing}: {data!r}")
-
-    direction = data["direction"]
-    if direction not in _DIRECTIONS:
-        raise SynthesisResponseError(f"Неочікуване значення direction: {direction!r}")
-
-    try:
-        confidence = float(data["confidence"])
-    except (TypeError, ValueError) as e:
-        raise SynthesisResponseError(f"confidence не число: {data['confidence']!r}") from e
-    if not 0 <= confidence <= 1:
-        raise SynthesisResponseError(f"confidence поза межами [0,1]: {confidence}")
-
-    return SynthesisResult(
-        direction=direction,
-        confidence=confidence,
-        summary=data["summary"],
-        reasoning=data["reasoning"],
-    )
-
-
-def call_llm(prompt: str, system_prompt: str, api_key: str) -> str:
-    if LLM_PROVIDER == "deepseek":
-        return call_deepseek(prompt, api_key=api_key, system_prompt=system_prompt)
-    raise ValueError(
-        f"Непідтримуваний SYNTHESIS_LLM_PROVIDER={LLM_PROVIDER!r} — наразі реалізовано "
-        "лише 'deepseek' (Anthropic-клієнт з'явиться разом зі свідомим переходом, "
-        "docs/decisions.md, 2026-09-27)."
-    )
-
-
-def synthesize_market(
-    clusters: list[NewsCluster], macro: dict, api_key: str
-) -> tuple[SynthesisResult, str, str]:
+def synthesize_market(clusters: list[NewsCluster], macro: dict, api_key: str):
     """Той самий контракт, що synthesize.synthesize_asset(): повертає
     (результат, промпт, сира_відповідь) для обов'язкового логування
     (rule 5)."""
     prompt = build_prompt(clusters, macro)
     raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_response(raw_content)
+    result = parse_synthesis_response(raw_content)
     return result, prompt, raw_content
 
 
@@ -207,10 +152,7 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=8, help="скільки найбільш підтверджених історій урахувати")
     args = parser.parse_args()
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY") if LLM_PROVIDER == "deepseek" else None
-    if LLM_PROVIDER == "deepseek" and not api_key:
-        logger.error("DEEPSEEK_API_KEY не задано. Додайте його в .env (див. .env.example).")
-        sys.exit(1)
+    api_key = require_api_key()
 
     conn = get_connection()
     try:
@@ -241,7 +183,7 @@ def main() -> None:
 
         llm_call_id = log_llm_call(
             conn,
-            provider=LLM_PROVIDER,
+            provider=resolve_provider(),
             purpose="market_context_synthesis",
             prompt=prompt,
             response=raw_content,

@@ -230,7 +230,10 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('skynews_rss', 'news', 'aggregator', 'Sky News — RSS World, без ключа'),
     ('dw_rss', 'news', 'aggregator', 'Deutsche Welle — RSS "all" (англомовний), без ключа'),
     ('binance', 'crypto', 'official_primary', 'Binance public API — щоденні OHLCV-свічки (klines) BTC/ETH/SOL проти USDT, без ключа'),
-    ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа')
+    ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа'),
+    ('binance_futures', 'crypto', 'official_primary', 'Binance USDⓈ-M Futures public API — bulk-знімок ринку (обсяг/funding rate) для крипто-скринінгу лонг/шорт/спостереження, без ключа (docs/decisions.md 2026-09-27)'),
+    ('bybit_futures', 'crypto', 'official_primary', 'Bybit v5 public API (linear perpetual) — bulk-знімок ринку (обсяг/funding rate/Open Interest, усе в одному запиті), без ключа'),
+    ('okx_futures', 'crypto', 'official_primary', 'OKX v5 public API (SWAP) — bulk-знімок ринку (обсяг/Open Interest), без ключа')
 ON CONFLICT (name) DO NOTHING;
 
 -- Порівняння факту з ринковим очікуванням для одного циклу релізу
@@ -346,3 +349,37 @@ SELECT DISTINCT ON (source, metric_id)
     source, metric_id, value, observed_at, fetched_at, revision
 FROM raw_observations
 ORDER BY source, metric_id, observed_at DESC, revision DESC;
+
+-- Крипто-скринінг лонг/шорт/спостереження (analysis/crypto_screening/,
+-- PLAN.md Фаза 4, докладніше docs/decisions.md 2026-09-27) — на відміну
+-- від screening_results (акції, знімок ОДНОГО прогону), тут МУТАБЕЛЬНИЙ
+-- стан, що живе МІЖ прогонами: денний скан (run_screening.py) заводить
+-- 'candidate' при виявленні пампу; погодинний моніторинг
+-- (monitor_candidates.py) оновлює той самий рядок і переводить статус
+-- (candidate -> short/watch, або candidate/watch -> closed, коли памп
+-- вичерпався). last_oi_usd/last_quote_volume — знімок з ПОПЕРЕДНЬОЇ
+-- погодинної перевірки, потрібен для рахування дельти "з минулого разу"
+-- (не з фіксованого вікна годин — користувач, 2026-09-27: "тримати,
+-- поки дані відповідають", без таймера).
+CREATE TABLE IF NOT EXISTS crypto_screening_candidates (
+    id                     BIGSERIAL PRIMARY KEY,
+    symbol                 TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'candidate',  -- candidate | short | watch | closed
+    detected_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_checked_at        TIMESTAMPTZ,
+    closed_at              TIMESTAMPTZ,
+    pump_pct_at_detection  NUMERIC NOT NULL,
+    last_pump_pct          NUMERIC,
+    last_funding_rate      NUMERIC,
+    last_oi_usd            NUMERIC,
+    last_quote_volume      NUMERIC,
+    reason                 TEXT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Лише ОДИН активний (не closed) рядок на symbol одночасно — новий
+-- памп тієї самої монети через тижні заводить НОВИЙ рядок (історія
+-- попередніх циклів лишається, rule 6 у дусі — не raw-дані, але той
+-- самий принцип "не губити минуле").
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_candidates_active_symbol
+    ON crypto_screening_candidates (symbol) WHERE status != 'closed';
