@@ -64,8 +64,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--maxrecords", type=int, default=75)
     parser.add_argument(
-        "--timespan", default="3d",
-        help="скільки часу назад шукати (GDELT-формат, напр. 3d/1w) — "
+        "--timespan", default="1d",
+        help="скільки часу назад шукати (GDELT-формат, напр. 1d/3d) — "
              "без обмеження GDELT віддає найновіші maxrecords збігів "
              "БЕЗ огляду на давність, це можуть бути місяці старі статті",
     )

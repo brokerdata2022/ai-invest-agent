@@ -94,10 +94,13 @@ def cluster_articles(
     O(n*k), де k — к-сть кластерів, достатньо для обсягів news/ (сотні
     статей на прогін, не мільйони).
 
-    articles — список dict з ключами title/url/published_at/asset_id/
-    direction/summary/raw_news_id (той самий формат, що повертає
-    _db.py:fetch_relevant_for_aggregation()). Порядок вхідного списку
-    не важливий — кластери сортуються за latest_published_at DESC на
+    articles — список dict з ключами title/url/published_at/raw_news_id
+    (обов'язкові) + asset_id/direction/summary (опційні — 2026-09-28:
+    ця сама функція тепер використовується і на СИРИХ статтях ДО
+    LLM-аналізу, `consolidate.py`, де цих полів ще нема; той самий
+    формат, що повертає `_db.py:fetch_relevant_for_aggregation()`,
+    лишається робочим для старого виклику). Порядок вхідного списку не
+    важливий — кластери сортуються за latest_published_at DESC на
     виході.
     """
     groups: list[list[dict]] = []
@@ -127,9 +130,14 @@ def _build_cluster(group: list[dict]) -> NewsCluster:
 
     asset_ids = sorted({a["asset_id"] for a in group if a.get("asset_id")})
 
+    # .get("direction", "unclear") — не жорстке a["direction"]: з
+    # 2026-09-28 цю саму функцію викликають і на СИРИХ (ще не
+    # проаналізованих) статтях (consolidate.py, механічна
+    # кластеризація ПЕРЕД LLM), де direction/summary ще не існують.
     direction_counts = {d: 0 for d in _DIRECTIONS}
     for a in group:
-        direction_counts[a["direction"]] = direction_counts.get(a["direction"], 0) + 1
+        direction = a.get("direction", "unclear")
+        direction_counts[direction] = direction_counts.get(direction, 0) + 1
     dominant_direction = _dominant_direction(direction_counts)
 
     summaries = list(dict.fromkeys(a["summary"] for a in group if a.get("summary")))

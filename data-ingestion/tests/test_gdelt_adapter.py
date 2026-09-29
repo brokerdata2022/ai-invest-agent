@@ -168,16 +168,17 @@ def test_fetch_raises_gdelt_error_after_exhausting_retries_on_non_json():
         adapter.fetch()
 
 
-def test_fetch_defaults_to_3d_timespan():
-    # Regression: без обмеження часу GDELT віддавав місяцями старі
-    # статті (живо виявлено 2026-09-26 -- стаття про ставку з липня
-    # в результатах у вересні, коли рішення вже застаріле).
+def test_fetch_defaults_to_1d_timespan():
+    # Regression 2026-09-26: без обмеження часу GDELT віддавав місяцями
+    # старі статті (стаття про ставку з липня в результатах у вересні).
+    # Звужено з "3d" до "1d" 2026-09-28 (рішення користувача: лише
+    # статті за останні 24г, common/news_db.py:MAX_ARTICLE_AGE_HOURS).
     session = _FakeSession([_FakeResponse(200, {"articles": []})])
     adapter = GdeltAdapter(stream="watchlist", query="bitcoin", session=session)
 
     adapter.fetch()
 
-    assert session.last_params["timespan"] == "3d"
+    assert session.last_params["timespan"] == "1d"
 
 
 def test_fetch_accepts_custom_timespan():

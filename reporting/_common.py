@@ -17,6 +17,13 @@ Telegram-креденшелів, словники емодзі напрямку,
 - `fetch_dicts()` — `cur.description`-в-dict, був продубльований у
   кожному fetch_*() (raw cursor замість RealDictCursor — щоб не тягнути
   psycopg2.extras у кожен скрипт).
+- `mark_notified()` — спільний дедуп-паттерн "позначити рядки як вже
+  надіслані" (2026-09-28, критичний фікс — живий фідбек користувача:
+  `news_notify.py` слав ІДЕНТИЧНІ ранкове й вечірнє повідомлення, коли
+  за день з'являлось мало нового). Той самий принцип, що вже був у
+  `expectations_notify.py`/`expectations._db.mark_notified` — тут
+  узагальнено на решту 4 notify-скриптів, СВОЇМ кодом (не імпортом з
+  analysis/, contained independence нижче).
 """
 
 import logging
@@ -70,3 +77,29 @@ def fetch_one_dict(conn, query: str, params: tuple = ()):
     """Перший рядок як dict, або None якщо запит нічого не повернув."""
     rows = fetch_dicts(conn, query, params)
     return rows[0] if rows else None
+
+
+# Білий список таблиць для mark_notified() — psycopg2 не вміє
+# параметризувати SQL-ідентифікатори (лише значення), тому ім'я
+# таблиці підставляється в SQL напряму; безпечно, бо `table` завжди
+# літерал у коді виклику (ніколи не користувацький ввід), і білий
+# список унеможливлює будь-яке інше ім'я.
+_NOTIFIABLE_TABLES = frozenset({
+    "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
+    "news_consolidated",
+})
+
+
+def mark_notified(conn, table: str, ids: list[int]) -> None:
+    """UPDATE <table> SET notified_at = now() WHERE id = ANY(ids).
+
+    Викликати одразу після успішної відправки в Telegram — щоб
+    наступний прогін (news_notify.py — двічі на добу) не надіслав ті
+    самі рядки повторно, якщо за вікно з'явилось мало нового."""
+    if not ids:
+        return
+    if table not in _NOTIFIABLE_TABLES:
+        raise ValueError(f"mark_notified: непідтримувана таблиця {table!r}")
+    with conn.cursor() as cur:
+        cur.execute(f"UPDATE {table} SET notified_at = now() WHERE id = ANY(%s)", (ids,))  # noqa: S608 — table з білого списку вище, не користувацький ввід
+    conn.commit()

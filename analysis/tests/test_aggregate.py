@@ -179,3 +179,21 @@ def test_aggregate_by_asset_skips_articles_without_asset_id():
     clusters = cluster_articles(only_unclear)
     signals = aggregate_by_asset(clusters)
     assert signals == {}
+
+
+def test_cluster_articles_tolerates_raw_pre_analysis_dicts():
+    """Регресія 2026-09-28: consolidate.py тепер кластеризує СИРІ
+    статті (ще без direction/asset_id/summary — ці поля з'являються
+    лише після LLM-аналізу). Раніше _build_cluster падав з KeyError на
+    відсутньому "direction"."""
+    raw_articles = [
+        {"title": "Bitcoin tops $84000", "url": "https://a.com/1",
+         "published_at": datetime(2026, 9, 27, tzinfo=timezone.utc), "raw_news_id": 1},
+        {"title": "Bitcoin tops $84,000", "url": "https://b.com/1",
+         "published_at": datetime(2026, 9, 27, tzinfo=timezone.utc), "raw_news_id": 2},
+    ]
+    clusters = cluster_articles(raw_articles)
+    assert len(clusters) == 1
+    assert clusters[0].source_count == 2
+    assert clusters[0].dominant_direction == "unclear"
+    assert clusters[0].asset_ids == []

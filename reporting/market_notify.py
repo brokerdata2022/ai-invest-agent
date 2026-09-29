@@ -5,6 +5,11 @@
 Тільки форматування готового результату, жодної аналітики
 (reporting/CLAUDE.md).
 
+Дедуп (2026-09-28, критичний фікс, той самий принцип що
+news_notify.py): `notified_at IS NULL` — без цього повторний запуск
+джоби (напр. ретрай runner.py при транзієнтному збої відправки) слав
+би той самий висновок дня вдруге.
+
 Використання (після analysis/news_analysis/synthesize_market.py):
     python market_notify.py
 """
@@ -16,17 +21,19 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import MARKET_DIRECTION_LABEL, fetch_one_dict, resolve_telegram_credentials  # noqa: E402
+from _common import MARKET_DIRECTION_LABEL, fetch_one_dict, mark_notified, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-def fetch_latest_market_synthesis(conn):
+
+def fetch_unnotified_market_synthesis(conn):
     query = """
-        SELECT cluster_count, direction, confidence, summary, source_refs, created_at
+        SELECT id, cluster_count, direction, confidence, summary, source_refs, created_at
         FROM market_synthesis
+        WHERE notified_at IS NULL
         ORDER BY created_at DESC
         LIMIT 1
     """
@@ -59,13 +66,17 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        row = fetch_latest_market_synthesis(conn)
+        row = fetch_unnotified_market_synthesis(conn)
+        if row is None:
+            logger.info("Нового синтезу стану ринку немає — сповіщення не надсилається")
+            return
+
+        text = format_message(row)
+        send_telegram_message(token, chat_id, text)
+        mark_notified(conn, "market_synthesis", [row["id"]])
+        logger.info("Надіслано в Telegram: стан ринку %s", row["direction"])
     finally:
         conn.close()
-
-    text = format_message(row)
-    send_telegram_message(token, chat_id, text)
-    logger.info("Надіслано в Telegram: стан ринку %s", row["direction"] if row else "(немає)")
 
 
 if __name__ == "__main__":

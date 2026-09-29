@@ -5,6 +5,11 @@
 Тільки форматування готового результату, жодної аналітики
 (reporting/CLAUDE.md).
 
+Дедуп (2026-09-28, критичний фікс, той самий принцип що
+news_notify.py): `notified_at IS NULL` — без цього повторний запуск
+джоби (напр. ретрай runner.py при транзієнтному збої відправки) слав
+би ті самі рядки вдруге.
+
 Використання (після analysis/news_analysis/synthesize.py):
     python synthesis_notify.py --limit 5
 """
@@ -16,18 +21,20 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import DIRECTION_EMOJI, fetch_dicts, resolve_telegram_credentials  # noqa: E402
+from _common import DIRECTION_EMOJI, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-def fetch_recent_synthesis(conn, limit: int = 5) -> list[dict]:
+
+def fetch_unnotified_synthesis(conn, limit: int = 5) -> list[dict]:
     query = """
-        SELECT asset_id, cluster_count, net_lean, price_pct_change,
+        SELECT id, asset_id, cluster_count, net_lean, price_pct_change,
                direction, confidence, summary, created_at
         FROM news_synthesis
+        WHERE notified_at IS NULL
         ORDER BY created_at DESC
         LIMIT %s
     """
@@ -61,13 +68,17 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        rows = fetch_recent_synthesis(conn, limit=args.limit)
+        rows = fetch_unnotified_synthesis(conn, limit=args.limit)
+        if not rows:
+            logger.info("Нових синтезів немає — сповіщення не надсилається")
+            return
+
+        text = format_message(rows)
+        send_telegram_message(token, chat_id, text)
+        mark_notified(conn, "news_synthesis", [row["id"] for row in rows])
+        logger.info("Надіслано в Telegram: %d синтезів", len(rows))
     finally:
         conn.close()
-
-    text = format_message(rows)
-    send_telegram_message(token, chat_id, text)
-    logger.info("Надіслано в Telegram: %d синтезів", len(rows))
 
 
 if __name__ == "__main__":

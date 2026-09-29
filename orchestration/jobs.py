@@ -186,6 +186,24 @@ def _prune_logs() -> None:
     )
 
 
+def _prune_raw_news() -> None:
+    """Видаляє raw_news, старші за RETENTION_HOURS (2026-09-28,
+    рішення користувача — raw_news НЕ append-only-вічний, свідомий
+    виняток із rule 6, common/news_db.py). Логіка/SQL — у
+    data-ingestion/common/news_db.py (rule 1: orchestration лише
+    викликає, нуль бізнес-логіки)."""
+    sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
+    from common.db import get_connection  # noqa: E402
+    from common.news_db import prune_stale_news  # noqa: E402
+
+    conn = get_connection()
+    try:
+        deleted = prune_stale_news(conn)
+        logger.info("Видалено %d застарілих новин з raw_news", deleted)
+    finally:
+        conn.close()
+
+
 JOBS = {
     "check_releases": {
         "subprocess": _py(str(REPO_ROOT / "monitoring" / "check_releases.py")),
@@ -206,16 +224,27 @@ JOBS = {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "expectations_notify.py")),
     },
     "news_collect_watchlist": {
+        # retries=3 (не дефолтний 1) — 2026-09-29, живо: двічі за добу
+        # всі 4 внутрішні спроби адаптера (5с/10с/20с бекоф) + 1
+        # дефолтний ретрай runner.py (~60с пізніше) НЕ покрили тривале
+        # вікно GDELT 429 на спільному dev-IP. 3 ретраї — до 4 повних
+        # циклів ~60с один від одного, ширше вікно на те, щоб ліміт
+        # звільнився.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "watchlist"),
+        "retries": 3,
     },
     "news_collect_general": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "general"),
+        "retries": 3,
     },
     "news_collect_rss": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_rss.py")),
     },
     "news_collect_stock": {
+        # той самий принцип, що news_collect_watchlist/general вище —
+        # теж GDELT, той самий 429-ризик на спільному IP.
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "collect_stock_news.py")),
+        "retries": 3,
     },
     "news_analysis_watchlist": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "watchlist"),
@@ -226,8 +255,29 @@ JOBS = {
     "news_analysis_general": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "general"),
     },
-    "news_notify_watchlist": {
-        "subprocess": _py(str(REPO_ROOT / "reporting" / "news_notify.py"), "--stream", "watchlist", "--limit", "5"),
+    "news_consolidate_watchlist": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "watchlist"),
+    },
+    "news_consolidate_general": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "general"),
+    },
+    "news_consolidate_geopolitical": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "geopolitical"),
+    },
+    "news_merge_similar": {
+        # Семантичне об'єднання дублів МІЖ прогонами consolidate.py
+        # (2026-09-29, живий приклад — 3 незалежні переклади "золото
+        # впало на 7-тижневий мінімум" пішли 3 окремими записами;
+        # text-similarity підтверджено ненадійним, потрібен окремий
+        # фокусований LLM-виклик). Без --stream — усі 3 потоки.
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "merge_similar.py")),
+    },
+    "news_notify": {
+        # Без --stream — ОДНЕ сповіщення з усіх зібраних потоків разом
+        # (watchlist+general+geopolitical), рішення користувача
+        # 2026-09-28: "важливі новини мають бути не тільки з watchlist
+        # а зі всіх зібраних новин".
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "news_notify.py")),
     },
     "news_synthesis": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize.py")),
@@ -274,8 +324,14 @@ JOBS = {
         # Весь S&P 500 (503 тикери), SEC EDGAR — живо виміряно
         # 2026-09-27: ~26 хв, дефолтний runner.py timeout (30 хв) лишає
         # замало запасу на природний розкид латентності API. 50 хв.
+        # retries=0: другий повний ~26-хв прогін одразу після провалу
+        # (runner.py, дефолт — 1 ретрай) лише вдруге вперся б у те саме
+        # джерело без паузи, і зсунув би наступну щотижневу джобу —
+        # append-only дедуп все одно робить наступний ЗАПЛАНОВАНИЙ
+        # прогін безпечним надолуженням.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_companies_universe.py")),
         "timeout": 3000,
+        "retries": 0,
     },
     "quotes_universe_refresh": {
         # Весь S&P 500 (503 тикери), Twelve Data — ліміт 8 запитів/хв
@@ -283,14 +339,20 @@ JOBS = {
         # 2026-09-27 — ~78 хв. Дефолтний runner.py timeout (30 хв) робив
         # цю ЩОДЕННУ джобу приречена на TimeoutExpired щоразу (живий
         # провал, знайдений під час розгортання з нуля) — 90 хв дає
-        # реальний запас.
+        # реальний запас. retries=0 — той самий принцип, що вище: другий
+        # ~78-хв прогін одразу після провалу лише вдруге вичерпав би той
+        # самий добовий ліміт Twelve Data без користі.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_universe.py")),
         "timeout": 5400,
+        "retries": 0,
     },
     "safety_net_collect_all": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py"), "--limit", "15"),
     },
     "prune_logs": {
         "callable": _prune_logs,
+    },
+    "prune_raw_news": {
+        "callable": _prune_raw_news,
     },
 }

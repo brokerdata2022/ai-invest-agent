@@ -2,11 +2,22 @@
 Виконання ОДНІЄЇ джоби (subprocess-скрипт або Python-функція) з логом і
 Telegram-алертом при провалі. Тільки виконання — жодної бізнес-логіки
 (orchestration/CLAUDE.md).
+
+Повторні спроби (2026-09-28, рішення користувача — docs/decisions.md
+"критичні фікси звітності"): "джоби не мають провалюватися, бо ми не
+отримуємо останні дані — це критично важливо". Транзієнтний мережевий
+збій (таймаут до джерела, тимчасовий 429/5xx) — найчастіша причина
+провалу джоб збору даних (docs/decisions.md, кілька живих прикладів), і
+повторний прогін найчастіше просто спрацьовує — append-only дедуп
+(rule 6 CLAUDE.md) робить повтор безпечним для БУДЬ-ЯКОЇ джоби проєкту,
+тому ретрай тут увімкнено за замовчуванням для всіх, не per-job
+white-list.
 """
 
 import logging
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_TIMEOUT_SECONDS = 1800
+
+# Скільки ДОДАТКОВИХ спроб робити після першого провалу, перш ніж
+# здатись і сповістити Telegram (jobs.py:JOBS може перекрити на джобу
+# через "retries" — 0 для важких годинних прогонів типу
+# quotes_universe_refresh, де другий повний прогін одразу після
+# провалу лише вдруге вперся б у те саме джерело без паузи).
+# 1 = одна повторна спроба (2 виконання всього).
+DEFAULT_RETRIES = 1
+RETRY_BACKOFF_SECONDS = 60
 
 
 def _log_path(job_name: str) -> Path:
@@ -42,51 +62,76 @@ def _decode(value) -> str:
     return value
 
 
+def _attempt_subprocess(spec: dict) -> tuple[bool, str, str]:
+    """Одна спроба subprocess-джоби. Повертає (успіх, причина_провалу
+    [порожньо при успіху], вивід)."""
+    try:
+        result = subprocess.run(
+            spec["subprocess"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = _decode(exc.stdout) + _decode(exc.stderr)
+        return False, f"timeout ({exc.timeout}с)", output
+
+    output = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 0:
+        return False, f"exit code {result.returncode}", output
+    return True, "", output
+
+
+def _attempt_callable(spec: dict) -> tuple[bool, str, str]:
+    """Одна спроба callable-джоби."""
+    func = spec["callable"]
+    try:
+        func()
+    except Exception as exc:  # noqa: BLE001 — навмисно широкий catch, той самий підхід, що collect_all.py
+        return False, str(exc), f"{exc!r}\n"
+    return True, "", "OK\n"
+
+
 def run_job(job_name: str) -> bool:
     """Повертає True, якщо джоба виконалась успішно (subprocess exit 0
-    або функція не кинула виняток)."""
+    або функція не кинула виняток) — за потреби з повторними спробами
+    (див. докстрінг модуля). Лог накопичує ВСІ спроби в один файл
+    (один файл на виклик джоби, не на спробу — не роздувати logs/
+    вдвічі й не ламати очікування `prune_logs`/дебагу "один файл на
+    прогін"). Telegram-алерт (`notify_failure`) шле лише ОДИН раз,
+    після того як вичерпано всі спроби — не спамити чат про кожну
+    транзієнтну спробу, яку наступна ж могла виправити."""
     if job_name not in JOBS:
         raise KeyError(f"Невідома джоба: {job_name!r} (немає в orchestration/jobs.py:JOBS)")
 
     spec = JOBS[job_name]
     log_path = _log_path(job_name)
-    logger.info("Старт джоби %s (лог: %s)", job_name, log_path)
+    total_attempts = spec.get("retries", DEFAULT_RETRIES) + 1
 
-    if "subprocess" in spec:
-        try:
-            result = subprocess.run(
-                spec["subprocess"],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS),
-            )
-        except subprocess.TimeoutExpired as exc:
-            output = _decode(exc.stdout) + _decode(exc.stderr)
-            log_path.write_text(output)
-            logger.error("Джоба %s не завершилась за %s с — примусово зупинено", job_name, exc.timeout)
-            notify_failure(job_name, f"timeout ({exc.timeout}с)", output)
-            return False
+    attempt_logs: list[str] = []
+    success = False
+    reason = ""
+    output = ""
 
-        output = (result.stdout or "") + (result.stderr or "")
-        log_path.write_text(output)
-        if result.returncode != 0:
-            logger.error("Джоба %s провалилась (exit %d)", job_name, result.returncode)
-            notify_failure(job_name, f"exit code {result.returncode}", output)
-            return False
+    for attempt in range(1, total_attempts + 1):
+        logger.info("Старт джоби %s, спроба %d/%d (лог: %s)", job_name, attempt, total_attempts, log_path)
 
-        logger.info("Джоба %s завершилась успішно", job_name)
-        return True
+        if "subprocess" in spec:
+            success, reason, output = _attempt_subprocess(spec)
+        else:
+            success, reason, output = _attempt_callable(spec)
 
-    func = spec["callable"]
-    try:
-        func()
-    except Exception as exc:  # noqa: BLE001 — навмисно широкий catch, той самий підхід, що collect_all.py
-        log_path.write_text(f"{exc!r}\n")
-        logger.error("Джоба %s провалилась: %s", job_name, exc, exc_info=True)
-        notify_failure(job_name, str(exc), "")
-        return False
+        attempt_logs.append(f"--- спроба {attempt}/{total_attempts} ---\n{output}")
+        log_path.write_text("\n".join(attempt_logs))
 
-    log_path.write_text("OK\n")
-    logger.info("Джоба %s завершилась успішно", job_name)
-    return True
+        if success:
+            logger.info("Джоба %s завершилась успішно (спроба %d/%d)", job_name, attempt, total_attempts)
+            return True
+
+        logger.error("Джоба %s провалилась (спроба %d/%d): %s", job_name, attempt, total_attempts, reason)
+        if attempt < total_attempts:
+            time.sleep(RETRY_BACKOFF_SECONDS)
+
+    notify_failure(job_name, reason, "\n".join(attempt_logs))
+    return False

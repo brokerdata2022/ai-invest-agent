@@ -42,15 +42,24 @@
   companies/sec_edgar_adapter.py) + ✅ Twelve Data (ціни/обсяг,
   неофіційне джерело — quotes/twelvedata_adapter.py; Stooq і Alpaca
   розглядались і відкинуті, деталі — docs/decisions.md 2026-09-14/20)
-- **Крипта:** ✅ Binance public API (ціна/обсяг, першоджерело біржі,
-  crypto/binance_adapter.py) + ✅ CoinGecko (market cap, агрегатор,
-  crypto/coingecko_adapter.py) — BTC/ETH/SOL, docs/watchlist.md
+- **Крипта (спот):** ✅ Binance public API (ціна/обсяг, першоджерело
+  біржі, crypto/binance_adapter.py) + ✅ CoinGecko (market cap,
+  агрегатор, crypto/coingecko_adapter.py) — BTC/ETH/SOL, docs/watchlist.md
+- **Крипта (ф'ючерси, скринінг лонг/шорт/спостереження):** ✅ Binance +
+  Bybit + OKX Futures (crypto/binance_futures_adapter.py,
+  crypto/bybit_futures_adapter.py, crypto/okx_futures_adapter.py) —
+  ширший ринок за watchlist (не лише BTC/ETH/SOL), окремий трек від
+  скринінгу акцій, деталі — `analysis/crypto_screening/`, PLAN.md
+  Фаза 4
 - **Форекс/Товари поза watchlist-парами:** закрито як окрема задача
   (рішення користувача, 2026-09-26) — розширення переліку валютних
   пар/товарів понад watchlist (docs/watchlist.md) користувач вносить
   сам через файл вибраних активів, не через нові адаптери на запит
-- **Новини/звіти:** ✅ GDELT (3 потоки: watchlist/geopolitical/general,
-  news/gdelt_adapter.py) + ✅ офіційні RSS Fed/ECB (news/rss_adapter.py);
+- **Новини/звіти:** ✅ GDELT (2 потоки: watchlist/general,
+  news/gdelt_adapter.py) + ✅ 9 RSS-фідів (Fed/ECB/BOJ + 6 широких
+  редакційних — BBC/Al Jazeera/Guardian/NPR/Sky News/DW,
+  news/rss_adapter.py) для потоку geopolitical (замінив курований
+  GDELT-запит 2026-09-27 — губив непередбачені події, docs/decisions.md);
   активи для відстеження — docs/watchlist.md, **для чого нам новини й що
   для цього ще потрібно — docs/news-purpose.md** (5 цілей, поставлено
   2026-09-26)
@@ -69,6 +78,11 @@ docker compose exec app python reporting/telegram_notify.py --metric cpi
 docker compose exec app pytest
 ```
 Після зміни requirements.txt перезібрати образ: `docker compose up -d --build`.
+
+⚠️ Це лише дим-тест на одному показнику. Свіжа БД після цього порожня —
+скринінг/синтез/дайджест нічого не покажуть, доки не пройдено
+обов'язковий bootstrap: `README.md`, "Перший запуск з чистими даними"
+(`scripts/bootstrap_1_backfill.sh` + `scripts/bootstrap_2_pipeline.sh`).
 
 ## Структура репозиторію
 ```
@@ -119,6 +133,13 @@ docs/             — архітектурні рішення, дизайн-до
 6. **Ніколи не видаляти сирі зібрані дані**, навіть якщо джерело
    змінилось/зникло — тільки архівувати. Історичні дані — це те, на чому
    тримається якість майбутніх прогнозів.
+   **Виняток — `raw_news` (2026-09-28, рішення користувача):**
+   обґрунтування правила (якість МАЙБУТНІХ ПРОГНОЗІВ) стосується
+   макропоказників, не новинних статей — стаття тижневої давності не
+   покращує прогноз. Збір обмежено 24г (`common/news_db.py:
+   MAX_ARTICLE_AGE_HOURS`), зберігання — 48г (`RETENTION_HOURS`,
+   джоба `prune_raw_news`). `raw_observations` (макро/акції/крипта)
+   це правило НЕ торкається — і далі append-only назавжди.
 
 ## Команди
 ```bash
@@ -151,13 +172,14 @@ docker compose exec app python data-ingestion/run_collect_news.py --stream watch
 # теж raw_news/watchlist, окремий query від команди вище
 docker compose exec app python analysis/news_analysis/collect_stock_news.py
 
-# Зібрати геополітичні новини (GDELT) → raw_news/geopolitical
-docker compose exec app python data-ingestion/run_collect_news.py --stream geopolitical
-
 # Зібрати загальний ринковий потік (GDELT) → raw_news/general
 docker compose exec app python data-ingestion/run_collect_news.py --stream general
 
-# Зібрати офіційні RSS-фіди центробанків (Fed/ECB/BOJ) → raw_news/geopolitical
+# Зібрати геополітичний потік → raw_news/geopolitical. НЕ через GDELT
+# (--stream geopolitical більше не існує в run_collect_news.py, видалено
+# 2026-09-27 — курований GDELT-запит губив непередбачені події) — 9
+# RSS-фідів (Fed/ECB/BOJ + 6 редакційних: BBC/Al Jazeera/Guardian/NPR/
+# Sky News/DW):
 docker compose exec app python data-ingestion/run_collect_rss.py
 
 # DeepSeek-аналіз зібраних новин (raw_news → news_analysis, потребує
@@ -169,6 +191,10 @@ docker compose exec app python reporting/news_notify.py --stream watchlist --lim
 
 # Показати агреговані новини (кластери дублікатів + зведення по активу)
 docker compose exec app python analysis/news_analysis/show_aggregated_news.py
+
+# Крипто-скринінг ф'ючерсів (лонг/шорт/спостереження, Binance+Bybit+OKX)
+docker compose exec app python analysis/crypto_screening/run_screening.py
+docker compose exec app python analysis/crypto_screening/monitor_candidates.py
 
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q

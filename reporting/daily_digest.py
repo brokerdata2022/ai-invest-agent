@@ -12,6 +12,16 @@ expectation_comparisons/candidate_assets), тут лише форматуван�
 топ-списку йде ОКРЕМИМ повідомленням (природно короткі за
 конструкцією, ліміт ніколи не досягається).
 
+Дедуп (2026-09-28, критичний фікс, той самий принцип що
+news_notify.py/market_notify.py/synthesis_notify.py/candidates_notify.py):
+`notified_at IS NULL` на всіх 4 джерелах + `mark_notified()` після
+відправки. Раніше вікно `--hours` бралось СЛІПО за `created_at`, тому
+цей дайджест дублював один в один усе, що окремі notify_*-джоби вже
+надіслали протягом дня (напр. notify_synthesis@6:45,
+notify_market_synthesis@18:45) — живий фідбек користувача 2026-09-28,
+той самий рядок news_synthesis/market_synthesis приходив у Telegram
+двічі символ-в-символ.
+
 Використання:
     python daily_digest.py
     python daily_digest.py --hours 12
@@ -19,6 +29,8 @@ expectation_comparisons/candidate_assets), тут лише форматуван�
 
 import argparse
 import logging
+import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -29,23 +41,38 @@ from _common import (  # noqa: E402
     MARKET_DIRECTION_LABEL,
     fetch_dicts,
     fetch_one_dict,
+    mark_notified,
     resolve_telegram_credentials,
 )
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 from telegram_notify import METRIC_LABELS  # noqa: E402
 
+# Той самий виняток контейнерної незалежності, що expectations_notify.py
+# (reporting/CLAUDE.md) — expectation_comparisons позначається нотифікованим
+# через власний mark_notified() з analysis/expectations/_db.py, не через
+# спільний _common.py (той обмежений білим списком таблиць news_*/market_*/
+# candidate_assets).
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis")
+)
+from expectations._db import mark_notified as mark_expectations_notified  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
+    """Лише ще НЕ надіслані (notified_at IS NULL) — окремі notify_synthesis
+    (нижче за розкладом) уже надсилає свіжі рядки протягом дня, дайджест
+    підбирає тільки те, що вони не встигли/не покрили."""
     return fetch_dicts(
         conn,
         """
-        SELECT asset_id, cluster_count, net_lean, price_pct_change, direction, confidence, summary
+        SELECT id, asset_id, cluster_count, net_lean, price_pct_change, direction, confidence, summary
         FROM news_synthesis
         WHERE created_at >= now() - (%s || ' hours')::interval
+          AND notified_at IS NULL
         ORDER BY created_at DESC
         """,
         (hours,),
@@ -53,12 +80,15 @@ def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
 
 
 def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
+    """Лише ще НЕ надісланий (notified_at IS NULL) — той самий принцип,
+    що fetch_recent_news_synthesis()."""
     return fetch_one_dict(
         conn,
         """
-        SELECT cluster_count, direction, confidence, summary
+        SELECT id, cluster_count, direction, confidence, summary
         FROM market_synthesis
         WHERE created_at >= now() - (%s || ' hours')::interval
+          AND notified_at IS NULL
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -68,16 +98,18 @@ def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
 
 def fetch_recent_surprises(conn, hours: int) -> list[dict]:
     """Тільки impact_level high/medium — той самий фільтр, що вже в
-    expectations_notify.py."""
+    expectations_notify.py. `notified_at IS NULL` — той самий принцип,
+    що fetch_recent_news_synthesis()."""
     return fetch_dicts(
         conn,
         """
-        SELECT ec.metric_id, ec.observed_at, ec.actual_value, ec.expected_value_raw,
+        SELECT ec.id, ec.metric_id, ec.observed_at, ec.actual_value, ec.expected_value_raw,
                ec.expected_value_parsed, ec.surprise, ec.surprise_pct
         FROM expectation_comparisons ec
         JOIN release_log rl ON rl.id = ec.release_log_id
         WHERE ec.created_at >= now() - (%s || ' hours')::interval
           AND rl.impact_level IN ('high', 'medium')
+          AND ec.notified_at IS NULL
         ORDER BY ec.created_at DESC
         """,
         (hours,),
@@ -86,13 +118,15 @@ def fetch_recent_surprises(conn, hours: int) -> list[dict]:
 
 def fetch_recent_candidates(conn, hours: int) -> list[dict]:
     """НОВІ рядки candidate_assets за вікно — не весь поточний список,
-    тільки те, що з'явилось за --hours (docs/news-purpose.md, "Ціль 3")."""
+    тільки те, що з'явилось за --hours (docs/news-purpose.md, "Ціль 3").
+    `notified_at IS NULL` — той самий принцип, що fetch_recent_news_synthesis()."""
     return fetch_dicts(
         conn,
         """
-        SELECT ticker, company_name, reasoning
+        SELECT id, ticker, company_name, reasoning
         FROM candidate_assets
         WHERE discovered_at >= now() - (%s || ' hours')::interval
+          AND notified_at IS NULL
         ORDER BY discovered_at DESC
         """,
         (hours,),
@@ -143,23 +177,42 @@ def main() -> None:
         market_row = fetch_recent_market_synthesis(conn, args.hours)
         surprise_rows = fetch_recent_surprises(conn, args.hours)
         candidate_rows = fetch_recent_candidates(conn, args.hours)
+
+        # (текст, callback позначення notified_at) — маркуємо ОДРАЗУ після
+        # успішної відправки КОЖНОГО повідомлення (не одним батчем
+        # наприкінці), щоб мережевий збій на половині списку не змусив
+        # наступний прогін надіслати вже надіслані рядки вдруге.
+        items = []
+        if market_row is not None:
+            items.append((
+                format_market_synthesis_message(market_row),
+                lambda r=market_row: mark_notified(conn, "market_synthesis", [r["id"]]),
+            ))
+        items.extend(
+            (format_news_synthesis_message(r), lambda r=r: mark_notified(conn, "news_synthesis", [r["id"]]))
+            for r in news_rows
+        )
+        items.extend(
+            (format_surprise_message(r), lambda r=r: mark_expectations_notified(conn, [r["id"]]))
+            for r in surprise_rows
+        )
+        items.extend(
+            (format_candidate_message(r), lambda r=r: mark_notified(conn, "candidate_assets", [r["id"]]))
+            for r in candidate_rows
+        )
+
+        if not items:
+            send_telegram_message(token, chat_id, "Сьогодні суттєвих подій не було.")
+            logger.info("Надіслано в Telegram: 0 повідомлень дайджесту (нового немає)")
+            return
+
+        for text, mark_fn in items:
+            send_telegram_message(token, chat_id, text)
+            mark_fn()
+
+        logger.info("Надіслано в Telegram: %d повідомлень дайджесту", len(items))
     finally:
         conn.close()
-
-    messages = []
-    if market_row is not None:
-        messages.append(format_market_synthesis_message(market_row))
-    messages.extend(format_news_synthesis_message(r) for r in news_rows)
-    messages.extend(format_surprise_message(r) for r in surprise_rows)
-    messages.extend(format_candidate_message(r) for r in candidate_rows)
-
-    if not messages:
-        messages = ["Сьогодні суттєвих подій не було."]
-
-    for text in messages:
-        send_telegram_message(token, chat_id, text)
-
-    logger.info("Надіслано в Telegram: %d повідомлень дайджесту", len(messages))
 
 
 if __name__ == "__main__":

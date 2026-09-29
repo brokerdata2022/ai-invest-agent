@@ -25,7 +25,8 @@ aggregate.py:cluster_articles()/source_count вирішує значущість
 новина правдива, вона буде опублікована всюди", а не вгадування
 ключових слів наперед. Деталі — docs/decisions.md, 2026-09-27.
 
-general — build_general_query(), широкий фінансовий контекст (без
+general — build_general_queries() (два окремі GDELT-запити, ліміт
+довжини — див. коментар нижче), широкий фінансовий контекст (без
 прив'язки до конкретного активу) — "чи взагалі щось відбувається на
 ринку, що варте уваги" (докладніше docs/decisions.md, 2026-09-25
 "news/ — обсяг..."). GDELT query тут лишається — на відміну від
@@ -134,19 +135,53 @@ MIN_QUERY_LEN = 70
 # відбувається на ринку" контекст. Кожен термін — багатослівна фраза
 # або акронім ("IPO"), не окреме коротке загальновживане слово (урок
 # "Uber", docs/decisions.md, 2026-09-25/26).
-GENERAL_TERMS: dict[str, str] = {
+#
+# Розбито на ДВІ групи (2026-09-28, живий фідбек користувача: сьогодні
+# ринок падав, а жодної новини про це в raw_news не зібралось —
+# перевірено, справжня причина не фільтр, а те, що набір термінів
+# нижче ніколи не покривав ані назви індексів (S&P 500/Dow/Nasdaq),
+# ані звичайні дієслова падіння ("stocks plunge/tumble/sink" —
+# заголовки рідко пишуть саме "selloff" як іменник)):
+# - MOVEMENT — як заголовки описують РУХ ринку (і вгору, і вниз).
+# - EVENTS — конкретні ринкові події/індекси.
+# Об'єднаний запит (15 термінів) — 266 символів, перевищує підтверджений
+# робочий лімім GDELT (150, MAX_QUERY_LEN нижче) — тому ДВА окремі
+# GDELT-запити (build_general_queries()), не один.
+GENERAL_TERMS_MOVEMENT: dict[str, str] = {
     "rally": '"stock market rally"',
     "selloff": '"market selloff"',
+    "plunge": '"stocks plunge"',
+    "tumble": '"stocks tumble"',
+    "sink": '"stocks sink"',
+    "crash": '"market crash"',
+    "volatility": '"market volatility"',
+}
+
+GENERAL_TERMS_EVENTS: dict[str, str] = {
     "earnings": '"earnings season"',
     "ipo": "IPO",
     "ma_deal": '"merger acquisition"',
-    "volatility": '"market volatility"',
     "recession": '"recession fears"',
+    "sp500": '"S&P 500"',
+    "dow": '"Dow Jones"',
+    "nasdaq": "NASDAQ",
+    "wallstreet": '"Wall Street"',
 }
 
+# Об'єднання обох груп — єдине джерело істини для "усі general-терміни
+# загалом" (тести/аудит), сам запит завжди будується ОКРЕМО з кожної
+# групи (build_general_queries()), не з цього об'єднання.
+GENERAL_TERMS: dict[str, str] = {**GENERAL_TERMS_MOVEMENT, **GENERAL_TERMS_EVENTS}
 
-def build_general_query() -> str:
-    return "(" + " OR ".join(GENERAL_TERMS.values()) + ")"
+
+def build_general_queries() -> list[str]:
+    """ДВА окремі GDELT-запити (не один — див. коментар вище про
+    ліміт довжини). Виклик (run_collect_news.py) робить collect() для
+    КОЖНОГО, обидва пишуться в той самий stream="general"."""
+    return [
+        "(" + " OR ".join(GENERAL_TERMS_MOVEMENT.values()) + ")",
+        "(" + " OR ".join(GENERAL_TERMS_EVENTS.values()) + ")",
+    ]
 
 
 def batch_ticker_names(

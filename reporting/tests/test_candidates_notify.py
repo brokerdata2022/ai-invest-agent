@@ -4,7 +4,10 @@ from candidates_notify import format_message
 
 
 def test_format_message_empty():
-    assert "порожній" in format_message([])
+    # 2026-09-28: дедуп-фікс змінив семантику з "поточний список порожній"
+    # на "нічого нового з часу останнього сповіщення" — пуста БД і
+    # "усе вже надіслано" тепер одна й та сама відповідь, це навмисно.
+    assert "немає" in format_message([])
 
 
 def test_format_message_known_rows():

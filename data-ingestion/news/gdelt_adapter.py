@@ -14,7 +14,7 @@ GDELT сам документує ліміт "не частіше одного �
 2026-09-23): проактивна обробка задокументованого ліміту джерела, не
 костиль на одноразову помилку.
 
-timespan (за замовчуванням "3d") обмежує пошук останніми N днями —
+timespan (за замовчуванням "1d" — 24г, 2026-09-28 рішення користувача: збирати лише свіжі статті, докладніше common/news_db.py) обмежує пошук останніми N днями —
 без нього GDELT віддає найновіші `maxrecords` збігів БЕЗ ОБМЕЖЕННЯ
 глибини в часі: для вузьких query це означає статті кількамісячної
 давнини (живо виявлено 2026-09-26 — стаття про ставку з липня була в
@@ -70,7 +70,7 @@ class GdeltAdapter(BaseNewsAdapter):
         self.session = session or requests.Session()
         self.sleep = sleep
 
-    def fetch(self, maxrecords: int = 75, timespan: str = "3d") -> Any:
+    def fetch(self, maxrecords: int = 75, timespan: str = "1d") -> Any:
         params = {
             "query": self.query,
             "mode": "artlist",

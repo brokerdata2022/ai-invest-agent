@@ -383,3 +383,73 @@ CREATE TABLE IF NOT EXISTS crypto_screening_candidates (
 -- самий принцип "не губити минуле").
 CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_candidates_active_symbol
     ON crypto_screening_candidates (symbol) WHERE status != 'closed';
+
+-- Дедуп сповіщень (2026-09-28, критичний фікс — живий фідбек
+-- користувача: news_notify.py надсилав ІДЕНТИЧНІ ранкове й вечірнє
+-- повідомлення, коли за день з'являлось мало нового). Той самий
+-- принцип, що вже застосований у expectation_comparisons.notified_at
+-- вище (2026-09-27): NULL = ще не надіслано, reporting-скрипт
+-- проставляє now() одразу після успішної відправки. ALTER, не тільки
+-- CREATE — усі чотири таблиці вже існували й мали дані до цієї зміни.
+ALTER TABLE news_analysis ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+ALTER TABLE news_synthesis ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+ALTER TABLE market_synthesis ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
+-- Консолідований новинний дайджест (2026-09-28, живий фідбек
+-- користувача: news_notify.py слав по окремій статті — 3 албанських
+-- сайти з тим самим текстом про Bitcoin 84000 йшли ТРЬОМА окремими
+-- повідомленнями, мовою оригіналу). analysis/news_analysis/consolidate.py
+-- бере СИРІ статті (не news_analysis — навмисно, щоб DeepSeek сам
+-- відсіював нерелевантне, а не покладався на relevance_filter.py) за
+-- вікно й ОДНИМ LLM-викликом на потік: фільтрує шум, об'єднує статті
+-- про ОДНУ подію (навіть різними мовами/сайтами) в один запис,
+-- перекладає українською. source_raw_news_ids/source_urls — які
+-- сирі статті об'єднано (аудит); джерела приєднує КОД за індексами,
+-- які повернув DeepSeek, не сам DeepSeek (той самий принцип, що
+-- relevance_filter.py — ризик галюцинації URL).
+CREATE TABLE IF NOT EXISTS news_consolidated (
+    id                  BIGSERIAL PRIMARY KEY,
+    stream              TEXT NOT NULL,
+    asset_id            TEXT,
+    summary             TEXT NOT NULL,
+    direction           TEXT NOT NULL,     -- up | down | neutral | unclear
+    confidence          NUMERIC NOT NULL,
+    reasoning           TEXT NOT NULL,
+    source_count        INTEGER NOT NULL,  -- скільки сирих статей об'єднано
+    source_raw_news_ids JSONB NOT NULL,
+    source_urls         JSONB NOT NULL,
+    llm_call_id         BIGINT REFERENCES llm_call_log(id),
+    notified_at         TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_consolidated_stream_created
+    ON news_consolidated (stream, created_at DESC);
+
+-- Яку сиру статтю вже враховано в якомусь прогоні консолідації —
+-- щоб той самий прогін (кілька разів на добу) не пережовував ту саму
+-- статтю знову й знову. NULL = ще не оброблено.
+ALTER TABLE raw_news ADD COLUMN IF NOT EXISTS consolidated_at TIMESTAMPTZ;
+
+-- Свіжість raw_news (2026-09-28, рішення користувача) — СВІДОМИЙ
+-- ВИНЯТОК із critical rule 6 кореневого CLAUDE.md ("ніколи не
+-- видаляти сирі дані"): обґрунтування правила ("історичні дані — те,
+-- на чому тримається якість МАЙБУТНІХ ПРОГНОЗІВ") стосується
+-- макропоказників (raw_observations), не новинних статей — стаття
+-- тижневої давності не покращує прогноз, лише захаращує "важливі
+-- новини" застарілим контентом. Збір (common/news_db.py:
+-- MAX_ARTICLE_AGE_HOURS=24) і зберігання (RETENTION_HOURS=48,
+-- prune_stale_news(), orchestration-джоба prune_raw_news) тепер МАЮТЬ
+-- часову межу. raw_observations (макро/акції/крипта) ЛИШАЄТЬСЯ
+-- append-only — це правило їх не торкається.
+--
+-- ON DELETE CASCADE потрібен: news_analysis.raw_news_id — єдиний
+-- реальний FK на raw_news(id) (news_consolidated.source_raw_news_ids —
+-- JSONB-масив, не FK, видалення raw_news його не зачіпає). Без CASCADE
+-- prune_stale_news() падав би з foreign key violation на будь-якій
+-- уже проаналізованій статті. DROP+ADD — ALTER ідемпотентний
+-- (apply_schema.py), як решта міграцій цього файлу.
+ALTER TABLE news_analysis DROP CONSTRAINT IF EXISTS news_analysis_raw_news_id_fkey;
+ALTER TABLE news_analysis ADD CONSTRAINT news_analysis_raw_news_id_fkey
+    FOREIGN KEY (raw_news_id) REFERENCES raw_news(id) ON DELETE CASCADE;

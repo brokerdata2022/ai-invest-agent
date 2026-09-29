@@ -11,7 +11,8 @@
 macro/       — макроекономічні показники (інфляція, ставки, ВВП, FX, товари)
 companies/   — фундаментал компаній (SEC EDGAR)
 quotes/      — ціни/обсяг акцій (Twelve Data)
-crypto/      — крипта (Binance, CoinGecko)
+crypto/      — крипта: спот (Binance, CoinGecko) + ф'ючерси для
+               crypto_screening (Binance/Bybit/OKX Futures adapters)
 news/        — новинні стрічки (GDELT, RSS) + queries.py/rss_feeds.py
 common/      — спільний інтерфейс адаптера (adapter.py/news_adapter.py)
                і шар збереження (db.py/news_db.py)
@@ -89,8 +90,9 @@ docker compose exec app pytest
 | Календар релізів | FRED `/release/dates` + ForexFactory-фід | офіційні дати + неофіційний фід | `monitoring/release_calendar.py`, `monitoring/economic_calendar.py` | ForexFactory неофіційний, але єдине джерело часу/impact/forecast; для EUR/JPY — єдине джерело й самої дати |
 | Акції (фундаментал) | SEC EDGAR | офіційне першоджерело | `companies/sec_edgar_adapter.py` | обов'язковий контактний User-Agent, інакше 403 |
 | Акції (ціни/обсяг) | Twelve Data | агрегатор, офіційний API | `quotes/twelvedata_adapter.py` | free tier ~8 запитів/хв, 800/добу — найвужче місце конвеєра |
-| Крипта (ціна/обсяг) | Binance public API | першоджерело (біржа) | `crypto/binance_adapter.py` | без ключа |
+| Крипта (спот, ціна/обсяг) | Binance public API | першоджерело (біржа) | `crypto/binance_adapter.py` | без ключа |
 | Крипта (market cap) + срібло | CoinGecko | агрегатор | `crypto/coingecko_adapter.py` | без ключа; срібло — проксі через kinesis-silver |
+| Крипта (ф'ючерси — universe/funding/OI/обсяг, для crypto_screening) | Binance + Bybit + OKX Futures | першоджерела (біржі) | `crypto/binance_futures_adapter.py`, `crypto/bybit_futures_adapter.py`, `crypto/okx_futures_adapter.py` | без ключа; одиниці різняться між біржами (OKX volCcy24h/oiCcy — у базовій валюті, не USDT) — 2 живі баги знайдено й виправлено, docs/decisions.md 2026-09-27 |
 | Новини (широкий потік) | GDELT DOC 2.0 | агрегатор | `news/gdelt_adapter.py` | регулярні 429 на спільному IP — є retry з backoff |
 | Новини (офіційні + редакційні) | RSS: Fed/ECB/BOJ + BBC/Al Jazeera/Guardian/NPR/Sky News/DW | першоджерела + агрегатори | `news/rss_adapter.py`, `news/rss_feeds.py` | найнадійніше; широкі фіди замінили курований GDELT-запит для geopolitical (docs/decisions.md 2026-09-27) |
 

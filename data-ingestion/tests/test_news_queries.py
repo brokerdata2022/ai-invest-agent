@@ -2,12 +2,14 @@ import pytest
 
 from news.queries import (
     GENERAL_TERMS,
+    GENERAL_TERMS_EVENTS,
+    GENERAL_TERMS_MOVEMENT,
     MAX_QUERY_LEN,
     STOCK_NAME_OVERRIDES,
     WATCHLIST_ASSET_IDS,
     WATCHLIST_TERMS,
     batch_ticker_names,
-    build_general_query,
+    build_general_queries,
     build_stocks_query,
     build_watchlist_query,
 )
@@ -66,27 +68,50 @@ def test_build_stocks_query_override_takes_priority_over_given_name():
     assert query == '("Uber Technologies")'
 
 
-def test_build_general_query_includes_every_term():
-    query = build_general_query()
+def test_build_general_queries_returns_two_queries():
+    # Regression 2026-09-28: об'єднаний одинарний query (15 термінів,
+    # 266 символів) перевищував MAX_QUERY_LEN — розбито на дві групи.
+    queries = build_general_queries()
+    assert len(queries) == 2
+
+
+def test_build_general_queries_together_include_every_term():
+    queries = build_general_queries()
+    combined = " ".join(queries)
     for term in GENERAL_TERMS.values():
-        assert term in query
+        assert term in combined
 
 
-def test_build_general_query_is_a_single_or_group():
-    query = build_general_query()
-    assert query.startswith("(")
-    assert query.endswith(")")
-    assert " OR " in query
+def test_build_general_queries_are_each_a_single_or_group():
+    for query in build_general_queries():
+        assert query.startswith("(")
+        assert query.endswith(")")
+        assert " OR " in query
 
 
-def test_build_general_query_terms_are_not_single_short_common_words():
+def test_build_general_queries_terms_are_not_single_short_common_words():
     for term in GENERAL_TERMS.values():
         bare = term.strip('"')
         assert " " in bare or bare.isupper()
 
 
-def test_build_general_query_under_max_len():
-    assert len(build_general_query()) <= MAX_QUERY_LEN
+def test_build_general_queries_each_under_max_len():
+    for query in build_general_queries():
+        assert len(query) <= MAX_QUERY_LEN
+
+
+def test_general_terms_groups_are_disjoint_and_cover_general_terms():
+    assert set(GENERAL_TERMS_MOVEMENT) & set(GENERAL_TERMS_EVENTS) == set()
+    assert {**GENERAL_TERMS_MOVEMENT, **GENERAL_TERMS_EVENTS} == GENERAL_TERMS
+
+
+def test_general_terms_cover_market_decline_and_major_indices():
+    # Regression 2026-09-28: живий фідбек користувача — падіння ринку
+    # того дня не потрапило в raw_news взагалі, бо термінів на кшталт
+    # "stocks plunge"/"S&P 500" не було в GENERAL_TERMS.
+    combined = " ".join(GENERAL_TERMS.values())
+    for must_have in ('"stocks plunge"', '"stocks tumble"', '"S&P 500"', '"Dow Jones"', "NASDAQ"):
+        assert must_have in combined
 
 
 # Тикери/назви з реального live-прогону 2026-09-25 (Tier C), що

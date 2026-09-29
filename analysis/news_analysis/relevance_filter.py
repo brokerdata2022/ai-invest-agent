@@ -90,7 +90,7 @@ def build_prompt(article: dict, stream: str, tracked_assets: Optional[list[str]]
     # — без нього DeepSeek оцінює релевантність з самого заголовка,
     # що системно занадто шумно (docs/decisions.md, 2026-09-26): багато
     # заголовків "звучать фінансово", не несучи конкретного сигналу.
-    description = _extract_description(article)
+    description = extract_description(article)
     if description:
         lines.append(f"Опис: {description}")
 
@@ -99,10 +99,11 @@ def build_prompt(article: dict, stream: str, tracked_assets: Optional[list[str]]
     return "\n".join(lines)
 
 
-def _extract_description(article: dict) -> Optional[str]:
+def extract_description(article: dict) -> Optional[str]:
     """raw_payload має різну форму per адаптер (RSS: {"description": ...},
     GDELT: сира відповідь GDELT без опису взагалі) — тому обережний
-    .get(), не жорстка схема."""
+    .get(), не жорстка схема. Публічна (без "_") — спільна утиліта,
+    consolidate.py теж її використовує (той самий формат raw_payload)."""
     raw_payload = article.get("raw_payload")
     if not isinstance(raw_payload, dict):
         return None

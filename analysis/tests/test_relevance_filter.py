@@ -10,7 +10,7 @@ import pytest
 
 from news_analysis.relevance_filter import (
     DeepSeekResponseError,
-    _extract_description,
+    extract_description,
     analyze_article,
     build_prompt,
     parse_response,
@@ -64,13 +64,13 @@ def test_build_prompt_omits_description_line_when_gdelt_style_payload():
     assert "Опис:" not in prompt
 
 
-def test_extract_description_handles_missing_or_non_dict_payload():
-    assert _extract_description({}) is None
-    assert _extract_description({"raw_payload": None}) is None
-    assert _extract_description({"raw_payload": "not a dict"}) is None
-    assert _extract_description({"raw_payload": {"description": None}}) is None
-    assert _extract_description({"raw_payload": {"description": "   "}}) is None
-    assert _extract_description({"raw_payload": {"description": " text "}}) == "text"
+def testextract_description_handles_missing_or_non_dict_payload():
+    assert extract_description({}) is None
+    assert extract_description({"raw_payload": None}) is None
+    assert extract_description({"raw_payload": "not a dict"}) is None
+    assert extract_description({"raw_payload": {"description": None}}) is None
+    assert extract_description({"raw_payload": {"description": "   "}}) is None
+    assert extract_description({"raw_payload": {"description": " text "}}) == "text"
 
 
 def test_parse_response_valid():

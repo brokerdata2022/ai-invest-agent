@@ -50,15 +50,15 @@ SCHEDULE = {
         "why": "4 рази на добу — вікно збору (GDELT timespan=3d) з запасом перекриває цей інтервал, дедуп по url прибирає повтори (docs/decisions.md, 2026-09-26).",
     },
     "news_collect_general": {
-        "trigger": {"hour": "6,18", "minute": 2},
+        "trigger": {"hour": "6,14,20", "minute": 2},
         "why": "Той самий 6-годинний ритм, що й watchlist, +2 хв зсув — обидва GDELT-запити (різні query), одночасний старт із news_collect_watchlist бив по тому самому джерелу й ловив 429 (живо виявлено 2026-09-27); той самий принцип зсуву, що вже застосований до news_collect_stock (+5 хв), просто раніше пропущений тут.",
     },
     "news_collect_rss": {
-        "trigger": {"hour": "6,18", "minute": 0},
+        "trigger": {"hour": "6,14,20", "minute": 0},
         "why": "Офіційні RSS оновлюються нечасто — той самий ритм, що GDELT, для одноманітності циклу.",
     },
     "news_collect_stock": {
-        "trigger": {"hour": "6,18", "minute": 5},
+        "trigger": {"hour": "6,14,20", "minute": 5},
         "why": "+5 хв після news_collect_* — окремий GDELT-запит (тикери зі скринінгу), зсунутий старт, щоб не бити джерело одночасно.",
     },
     "news_analysis_watchlist": {
@@ -73,9 +73,25 @@ SCHEDULE = {
         "trigger": {"hour": "6,18", "minute": 20},
         "why": "Той самий офсет, що news_analysis_watchlist — незалежний потік, той самий ритм.",
     },
-    "news_notify_watchlist": {
-        "trigger": {"hour": "6,18", "minute": 30},
-        "why": "+30 хв — після news_analysis_watchlist, щоб надсилати вже готові висновки, не порожньо.",
+    "news_consolidate_watchlist": {
+        "trigger": {"hour": "6,14,20", "minute": 25},
+        "why": "+25 хв — після news_collect_watchlist(+0)/news_collect_stock(+5), до news_notify(+30). Один LLM-виклик на потік: фільтрує/об'єднує/перекладає сирі статті (2026-09-28, живий фідбек — окремі статті різними мовами йшли окремими повідомленнями).",
+    },
+    "news_consolidate_general": {
+        "trigger": {"hour": "6,14,20", "minute": 26},
+        "why": "Той самий принцип, що news_consolidate_watchlist, +1 хв зсув (не бити DeepSeek трьома одночасними запитами) — незалежний потік.",
+    },
+    "news_consolidate_geopolitical": {
+        "trigger": {"hour": "6,14,20", "minute": 27},
+        "why": "Той самий принцип, +2 хв зсув від watchlist — незалежний потік, RSS-джерела (news_collect_rss@0) уже завершились.",
+    },
+    "news_merge_similar": {
+        "trigger": {"hour": "6,14,20", "minute": 28},
+        "why": "+28 хв — після всіх трьох news_consolidate_* (25/26/27), до news_notify(+30). Семантичне об'єднання дублів МІЖ прогонами (2026-09-29, живий приклад — 3 переклади того самого факту про золото пішли окремими записами).",
+    },
+    "news_notify": {
+        "trigger": {"hour": "6,14,20", "minute": 30},
+        "why": "+30 хв — після news_merge_similar(+28), одне сповіщення з усіх зібраних потоків разом (рішення користувача 2026-09-28: не лише watchlist).",
     },
     "news_synthesis": {
         "trigger": {"hour": 6, "minute": 40},
@@ -144,5 +160,9 @@ SCHEDULE = {
     "prune_logs": {
         "trigger": {"hour": 4, "minute": 30},
         "why": "Раз на добу, у найтихішу годину (між quotes_universe_refresh@3:00 і screening_composite_score@5:00) — кожен запуск джоби пише окремий файл у logs/, ~150 файлів на добу, без прибирання диск VPS росте нескінченно (jobs.py:_prune_logs, LOG_RETENTION_DAYS).",
+    },
+    "prune_raw_news": {
+        "trigger": {"hour": 4, "minute": 35},
+        "why": "Раз на добу, той самий тихий слот, що prune_logs (+5 хв) — видаляє raw_news старші за 48г (rішення користувача 2026-09-28, common/news_db.py:RETENTION_HOURS). Раз на добу досить: колекція вже обмежена 24г (MAX_ARTICLE_AGE_HOURS), 48г-вікно дає запас на день без вибуху обсягу БД.",
     },
 }
