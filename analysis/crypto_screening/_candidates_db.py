@@ -50,7 +50,9 @@ def upsert_candidate(
 
 def fetch_active_candidates(conn) -> list[dict]:
     """Усі рядки зі статусом != 'closed' — вхід для погодинного
-    моніторингу (monitor_candidates.py)."""
+    моніторингу (monitor_candidates.py). `status` включено явно (не
+    лише для фільтра WHERE) — caller передає його в update_candidate()
+    як old_status, щоб відрізнити "статус не змінився" від "змінився"."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
@@ -67,6 +69,7 @@ def fetch_active_candidates(conn) -> list[dict]:
 def update_candidate(
     conn,
     candidate_id: int,
+    old_status: str,
     status: str,
     pump_pct: float,
     funding_rate,
@@ -77,7 +80,16 @@ def update_candidate(
     """Оновлює знімок ("минулого разу") для наступної погодинної
     дельти, і статус. `closed_at` проставляється лише при переході в
     'closed' (COALESCE — повторний перехід у closed не перезаписує
-    оригінальний момент закриття)."""
+    оригінальний момент закриття).
+
+    `notified_at` скидається на NULL, коли status РЕАЛЬНО змінився
+    (напр. candidate→short) — 2026-10-02, той самий принцип, що вже
+    застосований до news_synthesis/market_synthesis (docs/decisions.md,
+    2026-09-29): без цього significant перехід лишився б непоміченим
+    під уже проставленим notified_at (reporting/crypto_screening_notify.py
+    більше не надіслав би його). Якщо status не змінився — notified_at
+    лишається як є (не скидати на кожен погодинний тик, інакше дедуп
+    узагалі не працює)."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -89,9 +101,10 @@ def update_candidate(
                 last_quote_volume = %s,
                 reason = %s,
                 last_checked_at = now(),
-                closed_at = CASE WHEN %s = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
+                closed_at = CASE WHEN %s = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END,
+                notified_at = CASE WHEN %s != %s THEN NULL ELSE notified_at END
             WHERE id = %s
             """,
-            (status, pump_pct, funding_rate, oi_usd, quote_volume, reason, status, candidate_id),
+            (status, pump_pct, funding_rate, oi_usd, quote_volume, reason, status, status, old_status, candidate_id),
         )
     conn.commit()

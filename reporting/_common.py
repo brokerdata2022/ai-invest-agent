@@ -86,7 +86,8 @@ def fetch_one_dict(conn, query: str, params: tuple = ()):
 # список унеможливлює будь-яке інше ім'я.
 _NOTIFIABLE_TABLES = frozenset({
     "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
-    "news_consolidated",
+    "news_consolidated", "screening_results", "crypto_screening_candidates",
+    "crypto_long_candidates",
 })
 
 

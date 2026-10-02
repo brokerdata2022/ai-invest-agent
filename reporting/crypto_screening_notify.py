@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Сповіщення в Telegram про крипто-кандидатів SHORT/WATCH
+(crypto_screening_candidates) — вже пораховано
+analysis/crypto_screening/run_screening.py (денний скан, заводить
+кандидата при пампі ≥30%) + monitor_candidates.py (погодинне оновлення
+статусу). Тільки форматування готового результату, жодної аналітики
+(reporting/CLAUDE.md).
+
+PLAN.md, Фаза 4, Крок 5: "Telegram-сповіщення про SHORT/WATCH (зараз
+лише лог)" — закрито тут. LONG-кандидати (той самий run_screening.py,
+широкий скан ринку) НЕ покриті — вони лише логуються, ніколи не
+персистуються в БД (окреме рішення, потребує власної таблиці — не
+зроблено цією сесією).
+
+Дедуп: той самий принцип notified_at IS NULL, але рядок тут
+МУТАБЕЛЬНИЙ (monitor_candidates.py оновлює status щогодини, на
+відміну від append-only screening_results) —
+analysis/crypto_screening/_candidates_db.py:update_candidate() скидає
+notified_at на NULL, коли status РЕАЛЬНО змінився (напр. candidate→
+short), щоб значущий перехід не загубився під уже проставленим
+notified_at.
+
+Використання (після run_screening.py і/або monitor_candidates.py):
+    python crypto_screening_notify.py
+"""
+
+import argparse
+import logging
+
+from dotenv import load_dotenv
+
+# _common додає data-ingestion у sys.path (дефіс у назві теки —
+# не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
+from _common import fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from common.db import get_connection  # noqa: E402
+from telegram_client import send_telegram_message  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+# Тон: описові характеристики (напрямок ризику, рівень уваги), не
+# прямі інструкції "шорти/купуй" (analysis/CLAUDE.md "Заборонені
+# формулювання" — той самий принцип стосується й reporting/).
+STATUS_LABEL = {
+    "short": "🔴 SHORT-нахил",
+    "watch": "🟡 WATCH (спостереження, не напрямок сигналу)",
+    "candidate": "🟠 кандидат — памп тримається, критерії ще не підтвердились",
+}
+
+
+def fetch_unnotified_crypto_candidates(conn) -> list[dict]:
+    """Усі активні (не closed), ще не надіслані кандидати — SHORT і
+    WATCH першими (найважливіші), потім candidate."""
+    return fetch_dicts(
+        conn,
+        """
+        SELECT id, symbol, status, pump_pct_at_detection, last_pump_pct,
+               last_funding_rate, reason, detected_at
+        FROM crypto_screening_candidates
+        WHERE status != 'closed' AND notified_at IS NULL
+        ORDER BY
+            CASE status WHEN 'short' THEN 0 WHEN 'watch' THEN 1 ELSE 2 END,
+            detected_at DESC
+        """,
+    )
+
+
+def format_message(rows: list[dict]) -> str:
+    if not rows:
+        return "🪙 Нових крипто-кандидатів SHORT/WATCH немає."
+
+    lines = [f"🪙 Крипто-скринінг ф'ючерсів — {len(rows)} кандидатів:", ""]
+    for row in rows:
+        label = STATUS_LABEL.get(row["status"], row["status"])
+        pump = row["last_pump_pct"] if row["last_pump_pct"] is not None else row["pump_pct_at_detection"]
+        lines.append(f"{row['symbol']} — {label}")
+        lines.append(f"  памп {float(pump):+.1f}%")
+        if row["last_funding_rate"] is not None:
+            lines.append(f"  funding {float(row['last_funding_rate']) * 100:+.3f}%")
+        if row["reason"]:
+            lines.append(f"  {row['reason']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def main() -> None:
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.parse_args()  # лише для --help/валідації: скрипт без параметрів
+
+    token, chat_id = resolve_telegram_credentials()
+
+    conn = get_connection()
+    try:
+        rows = fetch_unnotified_crypto_candidates(conn)
+        if not rows:
+            logger.info("Нових крипто-кандидатів немає — сповіщення не надсилається")
+            return
+
+        text = format_message(rows)
+        send_telegram_message(token, chat_id, text)
+        mark_notified(conn, "crypto_screening_candidates", [row["id"] for row in rows])
+        logger.info("Надіслано в Telegram: %d крипто-кандидатів", len(rows))
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

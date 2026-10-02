@@ -73,18 +73,22 @@ def monitor_once(conn, session: requests.Session) -> dict[str, int]:
 
     for candidate in candidates:
         symbol = candidate["symbol"]
+        old_status = candidate["status"]
         try:
             data = aggregated.get(symbol)
             if data is None:
                 logger.warning("%s: зник з агрегованого знімку — закриваю", symbol)
-                update_candidate(conn, candidate["id"], "closed", None, None, None, None, "символ зник із ринку")
+                update_candidate(
+                    conn, candidate["id"], old_status, "closed", None, None, None, None,
+                    "символ зник із ринку",
+                )
                 counts["closed"] += 1
                 continue
 
             pump_pct = pump_pct_from_aggregated(data)
             if pump_pct is None or pump_pct < PUMP_THRESHOLD_PCT:
                 update_candidate(
-                    conn, candidate["id"], "closed", pump_pct, data["funding_rate_avg"],
+                    conn, candidate["id"], old_status, "closed", pump_pct, data["funding_rate_avg"],
                     data["open_interest_usd"], data["quote_volume_24h"],
                     "памп вичерпався — нижче порогу",
                 )
@@ -118,7 +122,7 @@ def monitor_once(conn, session: requests.Session) -> dict[str, int]:
             # НЕ закривається (закриття — лише коли сам памп вичерпався, вище).
             new_status = signal.category if signal.category != "none" else "candidate"
             update_candidate(
-                conn, candidate["id"], new_status, pump_pct, data["funding_rate_avg"],
+                conn, candidate["id"], old_status, new_status, pump_pct, data["funding_rate_avg"],
                 data["open_interest_usd"], data["quote_volume_24h"],
                 "; ".join(signal.reasons),
             )

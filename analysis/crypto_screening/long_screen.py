@@ -40,6 +40,14 @@ class LongSignal:
     qualifies: bool
     direction: str  # "up" | "none" — НІКОЛИ інструкція купити
     reasons: list[str] = field(default_factory=list)
+    # Контекст для персистування/звіту (run_screening.py:
+    # crypto_screening/_long_db.py, 2026-10-02) — screen_long() сам їх
+    # НЕ заповнює (чиста функція рішення, вхідні метрики вже передані
+    # окремими аргументами вище); caller проставляє на вже готовому
+    # сигналі, щоб не дублювати значення в сигнатурі функції.
+    oi_change_pct: Optional[float] = None
+    rsi_value: Optional[float] = None
+    funding_rate: Optional[Decimal] = None
 
 
 def screen_long(

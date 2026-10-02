@@ -49,7 +49,11 @@ def test_mark_notified_rejects_unknown_table():
 
 @pytest.mark.parametrize(
     "table",
-    ["news_analysis", "news_synthesis", "market_synthesis", "candidate_assets", "news_consolidated"],
+    [
+        "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
+        "news_consolidated", "screening_results", "crypto_screening_candidates",
+        "crypto_long_candidates",
+    ],
 )
 def test_mark_notified_executes_update_for_known_tables(table):
     conn = _FakeConn()

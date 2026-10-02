@@ -22,11 +22,16 @@ def save_screening_run(conn, results: list) -> int:
         cur.executemany(
             """
             INSERT INTO screening_results
-                (ticker, score, revenue_growth, eps_growth, pe, avg_dollar_volume, run_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (ticker, score, revenue_growth, eps_growth, pe, avg_dollar_volume,
+                 company_name, price_change_24h_pct, price_date, volume_change_24h_pct, run_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
-                (r.ticker, r.score, r.revenue_growth, r.eps_growth, r.pe, r.avg_dollar_volume, run_at)
+                (
+                    r.ticker, r.score, r.revenue_growth, r.eps_growth, r.pe, r.avg_dollar_volume,
+                    getattr(r, "company_name", None), getattr(r, "price_change_24h_pct", None),
+                    getattr(r, "price_date", None), getattr(r, "volume_change_24h_pct", None), run_at,
+                )
                 for r in results
             ],
         )

@@ -30,13 +30,16 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
+from typing import Optional
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
+from screening._batch_db import batch_series  # noqa: E402
 from screening._results_db import save_screening_run  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -61,6 +64,15 @@ class CompositeResult:
     eps_growth_pct: Decimal
     neg_pe_pct: Decimal
     avg_dollar_volume_pct: Decimal
+    # Контекст для виводу (reporting/screening_notify.py), не впливають
+    # на сам score — заповнюються ПІСЛЯ ранжування, окремим
+    # enrich_with_report_context() (живий фідбек користувача: score/
+    # revenue/eps/pe/avg_dollar_volume нічого не каже без контексту в
+    # Telegram-повідомленні, реальна потреба — тикер/назва/зміна 24г).
+    company_name: str = ""
+    price_change_24h_pct: Optional[Decimal] = None
+    price_date: Optional[date] = None  # дата останнього закриття, яке й дає %-зміну
+    volume_change_24h_pct: Optional[Decimal] = None
 
 
 def percentile_ranks(values: list[Decimal]) -> list[Decimal]:
@@ -182,6 +194,91 @@ def run_composite_score(
     return results
 
 
+def _fetch_price_context(conn, tickers: list[str]) -> dict[str, dict]:
+    """{ticker: {"price_date", "change_pct", "volume_change_pct"}} --
+    дешево: лише для тикерів, що вже пройшли Tier A->B->C (десятки, не
+    весь S&P 500), той самий batch-принцип, що tier_a.py (N+1 фікс,
+    docs/decisions.md 2026-09-25). `price_date` -- дата ОСТАННЬОГО
+    закриття (не run_at самого скринінгу) -- живий фідбек користувача,
+    2026-10-02: без цього неясно, на яку дату рахуються %-зміни.
+    `volume_change_pct` -- % зміна обсягу торгів день-до-дня (той
+    самий стиль, що `change_pct` для ціни; замінив $-обсяг на пряме
+    прохання користувача того самого дня: "обсяг потрібно в
+    відсотках зміни за 24 години"). Обидва None, якщо даних не
+    вистачає (щойно зібраний тикер) -- caller робить .get()."""
+    if not tickers:
+        return {}
+
+    close_ids = [f"{t.lower()}_close" for t in tickers]
+    volume_ids = [f"{t.lower()}_volume" for t in tickers]
+    closes_by_metric = batch_series(conn, "twelvedata", close_ids, limit_per_metric=2)
+    volumes_by_metric = batch_series(conn, "twelvedata", volume_ids, limit_per_metric=2)
+
+    context: dict[str, dict] = {}
+    for ticker in tickers:
+        close_series = closes_by_metric.get(f"{ticker.lower()}_close", [])
+        if not close_series:
+            continue
+        latest_date, latest_close = close_series[0]
+        entry = {"price_date": latest_date, "change_pct": None, "volume_change_pct": None}
+
+        if len(close_series) >= 2:
+            _, previous_close = close_series[1]
+            if previous_close:
+                entry["change_pct"] = (latest_close - previous_close) / previous_close * Decimal("100")
+
+        volume_series = volumes_by_metric.get(f"{ticker.lower()}_volume", [])
+        if len(volume_series) >= 2:
+            _, latest_volume = volume_series[0]
+            _, previous_volume = volume_series[1]
+            if previous_volume:
+                entry["volume_change_pct"] = (latest_volume - previous_volume) / previous_volume * Decimal("100")
+
+        context[ticker] = entry
+    return context
+
+
+def _fetch_company_names(tickers: list[str]) -> dict[str, str]:
+    """{ticker: назва компанії} з constituents.csv -- той самий
+    мережевий запит, що вже використовує analysis/news_analysis/
+    discover_candidates.py. Назва -- лише контекст виводу, не критерій
+    скринінгу, тож мережевий збій тут НЕ повинен ламати весь прогін:
+    порожній dict -- caller виводить тикер замість назви."""
+    try:
+        from collect_universe import fetch_sp500_constituents
+
+        wanted = {t.upper() for t in tickers}
+        return {
+            c["symbol"].upper(): c["name"]
+            for c in fetch_sp500_constituents()
+            if c["symbol"].upper() in wanted
+        }
+    except Exception:
+        logger.warning("Не вдалося отримати назви компаній (constituents.csv)", exc_info=True)
+        return {}
+
+
+def enrich_with_report_context(conn, results: list[CompositeResult]) -> None:
+    """Проставляє company_name/price_change_24h_pct/price_date/
+    volume_change_24h_pct на вже готовому ранжованому списку -- не впливає
+    на score/порядок, лише контекст для screening_notify.py. Мутує
+    results по місцю (той самий підхід, що інші enrich-style хелпери
+    проєкту)."""
+    if not results:
+        return
+
+    tickers = [r.ticker for r in results]
+    names = _fetch_company_names(tickers)
+    price_context = _fetch_price_context(conn, tickers)
+
+    for r in results:
+        r.company_name = names.get(r.ticker, r.ticker)
+        ctx = price_context.get(r.ticker, {})
+        r.price_change_24h_pct = ctx.get("change_pct")
+        r.price_date = ctx.get("price_date")
+        r.volume_change_24h_pct = ctx.get("volume_change_pct")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Composite score ранжування кандидатів")
     parser.add_argument(
@@ -198,6 +295,7 @@ if __name__ == "__main__":
 
     conn = get_connection()
     try:
+        enrich_with_report_context(conn, all_results)
         saved = save_screening_run(conn, all_results)
         logger.info("Збережено в screening_results: %d тикерів", saved)
     finally:

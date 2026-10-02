@@ -500,3 +500,77 @@ CREATE TABLE IF NOT EXISTS scheduler_heartbeat (
     id           SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     last_tick_at TIMESTAMPTZ NOT NULL
 );
+
+-- notified_at для screening_results (2026-10-02, docs/production-readiness.md
+-- розділ 3а №1: "скринінг рахується щодня, але жодного reporting-скрипта
+-- для нього немає"): reporting/screening_notify.py — той самий принцип
+-- NULL = ще не надіслано, що всюди в проєкті. Дедуп тут не по id рядків
+-- (композит рахується на весь S&P-прохід одразу), а по run_at: нотифай
+-- позначає весь run_at одним UPDATE, щоб той самий щоденний прогін не
+-- надсилався повторно, якщо notify-джоба випадково спрацює двічі.
+ALTER TABLE screening_results ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
+-- company_name/price_change_24h_pct для screening_results (2026-10-02,
+-- живий фідбек користувача: вивід score/revenue/eps/pe/avg_dollar_volume
+-- "страшний" — реальна потреба читача Telegram-звіту: тикер, назва
+-- компанії, зміна ціни за 24г, не сирі компоненти формули ранжування).
+-- composite_score.py рахує й зберігає обидва поля ПІСЛЯ самого
+-- ранжування (не впливають на score) — лише контекст для виводу.
+-- company_name — з constituents.csv (collect_universe.py, той самий
+-- підхід, що вже використовує discover_candidates.py); NULL, якщо
+-- мережевий запит не вдався (screening_notify.py тоді показує тикер
+-- замість назви, не падає).
+ALTER TABLE screening_results ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE screening_results ADD COLUMN IF NOT EXISTS price_change_24h_pct NUMERIC;
+
+-- price_date/volume_change_24h_pct (2026-10-02, живий фідбек
+-- користувача: "на яку дату ці дані? чи є можливість добавити обсяг
+-- торгів за 24 год у доларах?", того самого дня уточнено: "обсяг
+-- потрібно в відсотках зміни за 24 години", не в доларах —
+-- volume_change_24h_pct одразу в підсумковій формі, попередній варіант
+-- у $ ніде не встиг використовуватись). price_date — дата ОСТАННЬОГО
+-- закриття, на основі якого рахуються обидва %-поля (не run_at самого
+-- скринінгу — можуть відрізнятись на кілька годин через час збору
+-- котирувань). volume_change_24h_pct — % зміна обсягу торгів день-до-дня
+-- (twelvedata), той самий стиль, що price_change_24h_pct.
+ALTER TABLE screening_results ADD COLUMN IF NOT EXISTS price_date DATE;
+ALTER TABLE screening_results ADD COLUMN IF NOT EXISTS volume_change_24h_pct NUMERIC;
+-- volume_24h_usd — попередня (тим самим днем, кілька хвилин) версія
+-- цього поля в доларах, жодного живого коду чи звіту вже не читає її.
+ALTER TABLE screening_results DROP COLUMN IF EXISTS volume_24h_usd;
+
+-- notified_at для crypto_screening_candidates (2026-10-02, PLAN.md
+-- Фаза 4 Крок 5: "Telegram-сповіщення про SHORT/WATCH, зараз лише
+-- лог" — закрито для SHORT/WATCH тут; LONG-кандидати run_screening.py
+-- й далі лише логуються, у цій таблиці не персистуються, окреме
+-- рішення). На відміну від append-only таблиць вище, рядок тут
+-- МУТАБЕЛЬНИЙ (monitor_candidates.py оновлює status щогодини) —
+-- _candidates_db.py:update_candidate() скидає notified_at на NULL,
+-- коли status РЕАЛЬНО змінився (напр. candidate→short), той самий
+-- принцип, що вже застосований до news_synthesis/market_synthesis
+-- (2026-09-29, "UPSERT не скидав notified_at — повторний результат
+-- того самого дня мовчки губився") — інакше значущий перехід
+-- лишився б непоміченим під уже проставленим notified_at.
+ALTER TABLE crypto_screening_candidates ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
+-- LONG-кандидати крипто-скринінгу (2026-10-02, рішення користувача:
+-- закрити LONG перед тестуванням notify-скриптів). На відміну від
+-- crypto_screening_candidates вище (SHORT/WATCH, мутабельний стан —
+-- памп, що з часом вичерпується, тож потребує погодинного
+-- моніторингу статусу), LONG-сигнал — "сьогодні тренд підтверджений"
+-- для вже Tier A-допущеного символу (run_screening.py, широкий денний
+-- скан усього ринку) — append-only ЗНІМОК одного прогону, той самий
+-- принцип, що screening_results (акції): один run_at на весь виклик,
+-- notified_at для дедупу Telegram, "останній прогін" = MAX(run_at).
+-- Раніше LONG лише логувався (logger.info), ніколи не йшов у БД.
+CREATE TABLE IF NOT EXISTS crypto_long_candidates (
+    id            BIGSERIAL PRIMARY KEY,
+    symbol        TEXT NOT NULL,
+    oi_change_pct NUMERIC,
+    rsi_value     NUMERIC,
+    funding_rate  NUMERIC,
+    run_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notified_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_crypto_long_candidates_run_at ON crypto_long_candidates (run_at);

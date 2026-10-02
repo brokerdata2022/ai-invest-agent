@@ -42,8 +42,8 @@ def _patch_common(monkeypatch, candidates, aggregated, updates):
         lambda binance, bybit, okx: aggregated["__result__"],
     )
 
-    def fake_update(conn, candidate_id, status, pump_pct, funding_rate, oi_usd, quote_volume, reason):
-        updates.append({"id": candidate_id, "status": status, "reason": reason})
+    def fake_update(conn, candidate_id, old_status, status, pump_pct, funding_rate, oi_usd, quote_volume, reason):
+        updates.append({"id": candidate_id, "old_status": old_status, "status": status, "reason": reason})
 
     monkeypatch.setattr("crypto_screening.monitor_candidates.update_candidate", fake_update)
 

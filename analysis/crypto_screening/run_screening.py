@@ -81,6 +81,7 @@ from crypto_screening.indicators import rsi  # noqa: E402
 from crypto_screening.long_screen import screen_long  # noqa: E402
 from crypto_screening.short_watch_screen import screen_short_or_watch, PUMP_THRESHOLD_PCT  # noqa: E402
 from crypto_screening._candidates_db import upsert_candidate  # noqa: E402
+from crypto_screening._long_db import save_long_run  # noqa: E402
 
 from forecasting.backtest import backtest_metric  # noqa: E402
 
@@ -196,6 +197,44 @@ def run_screening(limit: Optional[int] = None) -> dict[str, list]:
                 oldest_onboard[canonical] = entry["onboard_date"]
 
     today = datetime.now(timezone.utc).date()
+
+    # Жива діра (2026-10-02, живий кейс користувача: MAGMAUSDT +40%
+    # памп на Binance+Bybit, Tier A НЕ пройдений попри обсяг $241М і
+    # сукупний OI ~$14М — далеко вище порогів). Причина: Binance
+    # НІКОЛИ не дає OI в bulk-знімку (лише Bybit/OKX) — Binance-частка
+    # OI додавалась (enrich_with_binance_oi нижче) лише ПІСЛЯ фільтра
+    # Tier A, тобто тільки символам, що ВЖЕ пройшли й без неї. Якщо
+    # сам Bybit+OKX OI нижче MIN_OPEN_INTEREST_USD (MAGMAUSDT: $4.4М
+    # лише з Bybit, на OKX символу нема) — символ відсіювався Tier A
+    # ще до того, як міг отримати шанс пройти з повним трибіржовим OI.
+    # Фікс: для символів, що провалюють Tier A ЛИШЕ через OI
+    # (підстановка штучно величезного OI у пробну копію — якщо це
+    # змінює вердикт, OI справді єдина причина) і мають дані з
+    # Binance — дістати Binance OI ЗАРАЗ (не для всього ринку, лише
+    # для цих прикордонних) і додати в aggregated ПЕРЕД фінальним
+    # Tier A. binance_oi_cache — щоб той самий символ не отримав
+    # Binance OI ВДРУГЕ в enrich_with_binance_oi() нижче (там += ).
+    binance_oi_cache: dict[str, Decimal] = {}
+    for symbol, data in aggregated.items():
+        if check_tier_a(symbol, data, oldest_onboard.get(symbol), today).eligible:
+            continue
+        if "binance_futures" not in data["per_exchange"]:
+            continue
+        boosted = dict(data, open_interest_usd=data["open_interest_usd"] + Decimal(10) ** 12)
+        if not check_tier_a(symbol, boosted, oldest_onboard.get(symbol), today).eligible:
+            continue  # провал Tier A НЕ лише через OI — Binance OI тут не допоможе
+
+        try:
+            oi_base = fetch_binance_oi(session, symbol)
+            if oi_base is not None:
+                oi_usd = oi_base * data["per_exchange"]["binance_futures"]["mark_price"]
+                binance_oi_cache[symbol] = oi_usd
+                data["open_interest_usd"] += oi_usd
+        except Exception:
+            logger.warning("%s: Binance OI (OI-прикордонний Tier A) не вдалось отримати", symbol, exc_info=True)
+    if binance_oi_cache:
+        logger.info("OI-прикордонні символи, врятовані Binance OI перед Tier A: %d", len(binance_oi_cache))
+
     eligible = [
         symbol
         for symbol, data in aggregated.items()
@@ -213,8 +252,13 @@ def run_screening(limit: Optional[int] = None) -> dict[str, list]:
     try:
         # Binance OI — per-symbol, ЛИШЕ для Tier A-виживших (не для
         # всього ринку, той самий принцип, що сам адаптер документує).
+        # Пропускаємо символи, уже збагачені вище (binance_oi_cache) —
+        # інакше enrich_with_binance_oi() (+= нижче) додав би Binance
+        # OI ВДРУГЕ.
         binance_oi_usd: dict[str, Decimal] = {}
         for symbol in eligible:
+            if symbol in binance_oi_cache:
+                continue
             binance_data = aggregated[symbol]["per_exchange"].get("binance_futures")
             if binance_data is None:
                 continue
@@ -243,6 +287,13 @@ def run_screening(limit: Optional[int] = None) -> dict[str, list]:
                     funding_rate=data["funding_rate_avg"],
                 )
                 if long_signal.qualifies:
+                    # Проставляємо тут, не в screen_long() — чиста
+                    # функція рішення отримує ці значення як аргументи,
+                    # не повинна сама знати про персистування
+                    # (long_screen.py docstring, rule 1 CLAUDE.md).
+                    long_signal.oi_change_pct = oi_change_long
+                    long_signal.rsi_value = price["rsi"]
+                    long_signal.funding_rate = data["funding_rate_avg"]
                     results["long"].append(long_signal)
 
                 short_watch_signal = screen_short_or_watch(
@@ -272,6 +323,14 @@ def run_screening(limit: Optional[int] = None) -> dict[str, list]:
                     )
             except Exception:
                 logger.error("%s: скринінг провалився", symbol, exc_info=True)
+
+        # Один run_at на весь прогін (save_long_run()) — той самий
+        # append-only-знімок принцип, що screening_results (акції).
+        # Раніше LONG лише логувався нижче (main()), ніколи не йшов у
+        # БД — reporting/crypto_long_notify.py (2026-10-02) читає звідси.
+        saved_long = save_long_run(conn, results["long"])
+        if saved_long:
+            logger.info("Збережено LONG-кандидатів: %d", saved_long)
     finally:
         conn.close()
 

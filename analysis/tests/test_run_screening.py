@@ -125,6 +125,12 @@ def _patch_sources(monkeypatch):
     monkeypatch.setattr("crypto_screening.run_screening.fetch_okx_snapshot", lambda session: OKX_SNAPSHOT)
     monkeypatch.setattr("crypto_screening.run_screening.fetch_binance_oi", lambda session, symbol: Decimal("50000"))
     monkeypatch.setattr("crypto_screening.run_screening.get_connection", lambda: FakeConn())
+    # save_long_run() пише в БД через conn.cursor() — FakeConn вище не
+    # реалізує cursor() (той самий принцип, що upsert_candidate, який
+    # теж не торкається реальної БД у цих тестах, лише перевіряють
+    # саму логіку сигналів, не персистування).
+    monkeypatch.setattr("crypto_screening.run_screening.save_long_run", lambda conn, signals: len(signals))
+    monkeypatch.setattr("crypto_screening.run_screening.upsert_candidate", lambda *args, **kwargs: None)
 
 
 def test_run_screening_wires_tier_a_survivor_into_long_signal(monkeypatch):

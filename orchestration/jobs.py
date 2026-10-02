@@ -369,6 +369,18 @@ JOBS = {
     "screening_composite_score": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "screening" / "composite_score.py"), "--top", "10"),
     },
+    "notify_screening": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "screening_notify.py")),
+    },
+    "notify_crypto_screening": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "crypto_screening_notify.py")),
+    },
+    "notify_crypto_long": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "crypto_long_notify.py")),
+    },
+    "notify_watchlist": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "watchlist_notify.py")),
+    },
     "companies_universe_refresh": {
         # Весь S&P 500 (503 тикери), SEC EDGAR — живо виміряно
         # 2026-09-27: ~26 хв, дефолтний runner.py timeout (30 хв) лишає
