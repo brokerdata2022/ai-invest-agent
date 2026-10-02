@@ -85,15 +85,29 @@ def save_synthesis(
 ) -> int:
     """UPSERT — один рядок на (asset_id, день): повторний прогін того
     самого активу того самого дня оновлює вже наявний рядок, не
-    дублює (db/schema.sql:idx_news_synthesis_asset_per_day)."""
+    дублює (db/schema.sql:idx_news_synthesis_asset_per_day).
+
+    `notified_at = NULL` у DO UPDATE (2026-09-29, критичний фікс, живий
+    фідбек користувача): без цього актив, уже надісланий сьогодні,
+    ставав НАЗАВЖДИ невидимим для notify_synthesis.py при повторному
+    синтезі того самого дня — вміст (direction/confidence/summary)
+    оновлювався, а `notified_at` лишався зі старого відправлення, тож
+    `WHERE notified_at IS NULL` більше ніколи не бачив рядок аж до
+    наступної доби.
+
+    `confirmation_factors` (2026-10-02, живий фідбек користувача) —
+    окреме поле LLM-висновку (synthesize.py:PriceNewsSynthesisResult):
+    конкретні фактори/дані, які підтвердили б чи спростували гіпотезу
+    тренд/корекція з summary. Качина типізація нижче (`result.summary`
+    тощо) тому й не ловить відсутність цього атрибута статично."""
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO news_synthesis
                 (asset_id, window_days, cluster_count, net_lean, price_pct_change,
-                 price_start_date, price_end_date, summary, direction, confidence,
-                 reasoning, source_refs, llm_call_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 price_start_date, price_end_date, summary, confirmation_factors,
+                 direction, confidence, reasoning, source_refs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (asset_id, ((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
                 window_days = EXCLUDED.window_days,
                 cluster_count = EXCLUDED.cluster_count,
@@ -102,12 +116,14 @@ def save_synthesis(
                 price_start_date = EXCLUDED.price_start_date,
                 price_end_date = EXCLUDED.price_end_date,
                 summary = EXCLUDED.summary,
+                confirmation_factors = EXCLUDED.confirmation_factors,
                 direction = EXCLUDED.direction,
                 confidence = EXCLUDED.confidence,
                 reasoning = EXCLUDED.reasoning,
                 source_refs = EXCLUDED.source_refs,
                 llm_call_id = EXCLUDED.llm_call_id,
-                created_at = now()
+                created_at = now(),
+                notified_at = NULL
             RETURNING id
             """,
             (
@@ -119,6 +135,7 @@ def save_synthesis(
                 price.start_date,
                 price.end_date,
                 result.summary,
+                result.confirmation_factors,
                 result.direction,
                 result.confidence,
                 result.reasoning,
@@ -139,7 +156,10 @@ def save_market_synthesis(
     result,  # SynthesisResult (synthesize_market.py) — качина типізація, див. коментар вище
     llm_call_id: int,
 ) -> int:
-    """UPSERT — один рядок на день (db/schema.sql:idx_market_synthesis_per_day)."""
+    """UPSERT — один рядок на день (db/schema.sql:idx_market_synthesis_per_day).
+
+    `notified_at = NULL` у DO UPDATE — той самий фікс і причина, що
+    save_synthesis() вище (2026-09-29)."""
     source_refs = [{"title": c.representative_title, "source_count": c.source_count} for c in clusters]
     with conn.cursor() as cur:
         cur.execute(
@@ -158,7 +178,8 @@ def save_market_synthesis(
                 reasoning = EXCLUDED.reasoning,
                 source_refs = EXCLUDED.source_refs,
                 llm_call_id = EXCLUDED.llm_call_id,
-                created_at = now()
+                created_at = now(),
+                notified_at = NULL
             RETURNING id
             """,
             (
@@ -187,7 +208,10 @@ def save_candidate(
     llm_call_id: int,
 ) -> int:
     """UPSERT — один рядок на (ticker, день)
-    (db/schema.sql:idx_candidate_assets_ticker_per_day)."""
+    (db/schema.sql:idx_candidate_assets_ticker_per_day).
+
+    `notified_at = NULL` у DO UPDATE — той самий фікс і причина, що
+    save_synthesis() у цьому ж файлі (2026-09-29)."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -199,7 +223,8 @@ def save_candidate(
                 reasoning = EXCLUDED.reasoning,
                 source_refs = EXCLUDED.source_refs,
                 llm_call_id = EXCLUDED.llm_call_id,
-                discovered_at = now()
+                discovered_at = now(),
+                notified_at = NULL
             RETURNING id
             """,
             (ticker, company_name, reasoning, json.dumps(source_refs), llm_call_id),

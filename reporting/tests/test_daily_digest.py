@@ -22,16 +22,38 @@ def test_format_news_synthesis_message():
         "cluster_count": 3,
         "net_lean": 2,
         "price_pct_change": Decimal("-1.64"),
+        "price_start_date": date(2026, 9, 23),
+        "price_end_date": date(2026, 9, 30),
         "direction": "down",
         "confidence": Decimal("0.55"),
         "summary": "Ціна впала на 1.64%, новинний сигнал змішаний.",
+        "confirmation_factors": "Якщо падіння продовжиться без нових ведмежих новин — це вже не корекція.",
     }
     text = format_news_synthesis_message(row)
     assert "xauusd" in text
     assert "-1.64%" in text
+    assert "2026-09-23" in text and "2026-09-30" in text
     assert "+2" in text
     assert "3 історій" in text
     assert "Ціна впала на 1.64%" in text
+    assert "Перевірити: Якщо падіння продовжиться" in text
+
+
+def test_format_news_synthesis_message_omits_confirmation_line_when_absent():
+    row = {
+        "asset_id": "wti_crude",
+        "cluster_count": 1,
+        "net_lean": 0,
+        "price_pct_change": Decimal("0.0"),
+        "price_start_date": date(2026, 9, 23),
+        "price_end_date": date(2026, 9, 30),
+        "direction": "neutral",
+        "confidence": Decimal("0.3"),
+        "summary": "Без руху.",
+        "confirmation_factors": None,
+    }
+    text = format_news_synthesis_message(row)
+    assert "Перевірити:" not in text
 
 
 def test_format_market_synthesis_message():
@@ -156,8 +178,11 @@ def test_fetch_functions_filter_out_already_notified_rows(fetch_fn, extra_args):
 def _news_row(id=1):
     return {
         "id": id, "asset_id": "xauusd", "cluster_count": 1, "net_lean": 1,
-        "price_pct_change": Decimal("-1.33"), "direction": "up", "confidence": Decimal("0.6"),
+        "price_pct_change": Decimal("-1.33"),
+        "price_start_date": date(2026, 9, 23), "price_end_date": date(2026, 9, 30),
+        "direction": "up", "confidence": Decimal("0.6"),
         "summary": "Бичача новина суперечить падінню ціни.",
+        "confirmation_factors": "Перевірити, чи рух продовжиться без нових новин.",
     }
 
 

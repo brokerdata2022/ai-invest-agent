@@ -453,3 +453,14 @@ ALTER TABLE raw_news ADD COLUMN IF NOT EXISTS consolidated_at TIMESTAMPTZ;
 ALTER TABLE news_analysis DROP CONSTRAINT IF EXISTS news_analysis_raw_news_id_fkey;
 ALTER TABLE news_analysis ADD CONSTRAINT news_analysis_raw_news_id_fkey
     FOREIGN KEY (raw_news_id) REFERENCES raw_news(id) ON DELETE CASCADE;
+
+-- Причинна атрибуція ціна/новини (news_synthesis) була примітивною
+-- (живий фідбек користувача, 2026-10-02): "ціна -5%, новини +4" саме
+-- собою не пояснює нічого й не дає гіпотези, яку можна перевірити.
+-- confirmation_factors — окреме поле LLM-висновку (synthesize.py:
+-- PriceNewsSynthesisResult) поруч із summary: конкретні фактори/дані,
+-- які підтвердили б чи спростували гіпотезу тренд/корекція (НЕ
+-- прогноз ціни і НЕ торгова рекомендація — описова характеристика,
+-- analysis/CLAUDE.md "Заборонені формулювання"). NULL дозволено — рядки
+-- до цієї зміни лишаються без нового поля, не зникають.
+ALTER TABLE news_synthesis ADD COLUMN IF NOT EXISTS confirmation_factors TEXT;

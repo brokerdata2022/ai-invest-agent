@@ -69,7 +69,9 @@ def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
     return fetch_dicts(
         conn,
         """
-        SELECT id, asset_id, cluster_count, net_lean, price_pct_change, direction, confidence, summary
+        SELECT id, asset_id, cluster_count, net_lean, price_pct_change,
+               price_start_date, price_end_date, direction, confidence,
+               summary, confirmation_factors
         FROM news_synthesis
         WHERE created_at >= now() - (%s || ' hours')::interval
           AND notified_at IS NULL
@@ -134,12 +136,22 @@ def fetch_recent_candidates(conn, hours: int) -> list[dict]:
 
 
 def format_news_synthesis_message(row: dict) -> str:
+    """2026-10-02, живий фідбек користувача: без періоду й
+    confirmation_factors повідомлення було нерозбірливим "ціна -5%,
+    новини +4" без жодного пояснення. Дати й гіпотеза-що-перевірити
+    вже рахувались (price_start_date/end_date, confirmation_factors —
+    LLM-поле поруч із summary), просто не доходили до самого
+    повідомлення."""
     emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
-    return (
-        f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}%, "
-        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)\n"
-        f"{row['summary']}"
-    )
+    lines = [
+        f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}% "
+        f"({row['price_start_date']} → {row['price_end_date']}), "
+        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)",
+        row["summary"],
+    ]
+    if row.get("confirmation_factors"):
+        lines.append(f"Перевірити: {row['confirmation_factors']}")
+    return "\n".join(lines)
 
 
 def format_market_synthesis_message(row: dict) -> str:
@@ -203,7 +215,7 @@ def main() -> None:
 
         if not items:
             send_telegram_message(token, chat_id, "Сьогодні суттєвих подій не було.")
-            logger.info("Надіслано в Telegram: 0 повідомлень дайджесту (нового немає)")
+            logger.info("Надіслано в Telegram: контрольне повідомлення (нового немає)")
             return
 
         for text, mark_fn in items:

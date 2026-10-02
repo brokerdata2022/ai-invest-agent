@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 def fetch_unnotified_synthesis(conn, limit: int = 5) -> list[dict]:
     query = """
         SELECT id, asset_id, cluster_count, net_lean, price_pct_change,
-               direction, confidence, summary, created_at
+               price_start_date, price_end_date, direction, confidence,
+               summary, confirmation_factors, created_at
         FROM news_synthesis
         WHERE notified_at IS NULL
         ORDER BY created_at DESC
@@ -41,20 +42,29 @@ def fetch_unnotified_synthesis(conn, limit: int = 5) -> list[dict]:
     return fetch_dicts(conn, query, (limit,))
 
 
-def format_message(rows: list[dict]) -> str:
-    if not rows:
-        return "🔍 Нових синтезів ціна/новини немає."
-
-    lines = [f"🔍 Причинна атрибуція ціна/новини ({len(rows)}):", ""]
-    for row in rows:
-        emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
-        lines.append(
-            f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}%, "
-            f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)"
-        )
-        lines.append(row["summary"])
-        lines.append("")
-    return "\n".join(lines).rstrip()
+def format_synthesis_message(row: dict) -> str:
+    """2026-10-02, живий фідбек користувача: період і
+    confirmation_factors (той самий фікс, що reporting/daily_digest.py:
+    format_news_synthesis_message()). ОДНЕ повідомлення на ОДИН
+    рядок — регресія того самого дня, окремо: разом із новим ширшим
+    SYSTEM_PROMPT (analysis/news_analysis/synthesize.py, довші summary/
+    confirmation_factors) старий batch-формат (усі рядки в ОДНЕ
+    повідомлення) реально впирався в ліміт Telegram 4096 символів на
+    кількох рядках одразу (HTTP 400,
+    "message is too long") — живо підтверджено користувачем. Той самий
+    принцип, що вже є в daily_digest.py: кожна подія окремим
+    повідомленням, природно короткий за конструкцією, ліміт ніколи не
+    досягається."""
+    emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
+    lines = [
+        f"🔍 {emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}% "
+        f"({row['price_start_date']} → {row['price_end_date']}), "
+        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)",
+        row["summary"],
+    ]
+    if row.get("confirmation_factors"):
+        lines.append(f"Перевірити: {row['confirmation_factors']}")
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -73,9 +83,15 @@ def main() -> None:
             logger.info("Нових синтезів немає — сповіщення не надсилається")
             return
 
-        text = format_message(rows)
-        send_telegram_message(token, chat_id, text)
-        mark_notified(conn, "news_synthesis", [row["id"] for row in rows])
+        # Позначаємо notified_at ОДРАЗУ після кожного успішного
+        # надсилання (не одним батчем наприкінці) — той самий принцип,
+        # що daily_digest.py: мережевий збій на половині списку не
+        # повинен змусити наступний прогін надіслати вже надіслані
+        # рядки вдруге.
+        for row in rows:
+            text = format_synthesis_message(row)
+            send_telegram_message(token, chat_id, text)
+            mark_notified(conn, "news_synthesis", [row["id"]])
         logger.info("Надіслано в Telegram: %d синтезів", len(rows))
     finally:
         conn.close()

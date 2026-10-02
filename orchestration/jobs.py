@@ -92,14 +92,25 @@ def _crypto_derivatives_collect() -> None:
 # asset_id (Twelve Data джерело в ASSET_PRICE_SOURCES) → тикер, яким
 # TwelveDataAdapter реально треба викликати (не сам metric_id —
 # "xauusd_close" не відновити назад у "XAU/USD", слеш уже втрачено
-# нормалізацією адаптера). Лише один запис — xauusd єдиний
-# twelvedata-актив у ASSET_PRICE_SOURCES.
-_TWELVEDATA_TICKER_BY_ASSET = {"xauusd": "XAU/USD"}
+# нормалізацією адаптера). eurusd/usdjpy додані 2026-10-02 — перейшли
+# з FRED (DEXUSEU/DEXJPUS), де публікація зависла на 2026-09-25 попри
+# заявлену щоденну частоту (docs/decisions.md 2026-10-02, живо
+# підтверджено на fred.stlouisfed.org).
+_TWELVEDATA_TICKER_BY_ASSET = {
+    "xauusd": "XAU/USD",
+    "eurusd": "EUR/USD",
+    "usdjpy": "USD/JPY",
+}
+
+# Джерела в ASSET_PRICE_SOURCES, які ця джоба НЕ збирає сама — btc/eth/
+# sol/xagusd (2026-10-02) уже збираються _crypto_prices()@щогодини.
+_CRYPTO_OWNED_SOURCES = {"binance", "coingecko"}
 
 
 def _watchlist_prices() -> None:
     """Збирає ціни watchlist-товарів/форексу/золота (FredAdapter для
-    fred-джерел, TwelveDataAdapter для xauusd), ПОТІМ логує % зміни.
+    fred-джерел, TwelveDataAdapter для xauusd/eurusd/usdjpy), ПОТІМ
+    логує % зміни.
 
     Живо виявлено 2026-09-27 (перевірка "з нуля" на новому Docker
     Engine): ця функція раніше лише ЧИТАЛА fetch_all_price_changes(),
@@ -132,6 +143,12 @@ def _watchlist_prices() -> None:
                         continue
                     ticker = _TWELVEDATA_TICKER_BY_ASSET[asset_id]
                     records = TwelveDataAdapter(api_key=twelvedata_key, ticker=ticker).collect(limit=10)
+                elif source in _CRYPTO_OWNED_SOURCES:
+                    # btc/eth/sol/xagusd (2026-10-02, prices.py:ASSET_PRICE_SOURCES) —
+                    # уже збираються _crypto_prices()@щогодини, не тут;
+                    # без цього кожен прогін цієї джоби логував би
+                    # хибне "невідоме джерело" на ці чотири активи.
+                    continue
                 else:
                     logger.warning("%s: невідоме джерело %r — пропущено", asset_id, source)
                     continue

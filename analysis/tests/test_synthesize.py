@@ -9,10 +9,13 @@ call_deepseek — той самий підхід, що test_relevance_filter.py.
 import json
 from decimal import Decimal
 
+import pytest
+
 import llm_common
+from llm_common import SynthesisResponseError
 from news_analysis.aggregate import AssetSignal
 from news_analysis.prices import compute_pct_change
-from news_analysis.synthesize import build_prompt, synthesize_asset
+from news_analysis.synthesize import build_prompt, parse_price_news_response, synthesize_asset
 
 SIGNAL = AssetSignal(
     asset_id="xauusd",
@@ -28,6 +31,7 @@ VALID_RESPONSE = {
     "direction": "up",
     "confidence": 0.75,
     "summary": "Зростання ціни золота узгоджується з новинним сигналом про високі ставки.",
+    "confirmation_factors": "Якщо ріст продовжиться без нових новин про ставки — це вже не просто реакція.",
     "reasoning": "Новини й рух ціни в одному напрямку, 3 незалежні джерела.",
 }
 
@@ -50,6 +54,21 @@ def test_build_prompt_omits_facts_section_when_no_summaries():
     assert "Факти з новин:" not in prompt
 
 
+def test_build_prompt_states_explicitly_when_no_news_at_all():
+    # 2026-10-02, живий фідбек користувача: синтез тепер МОЖЕ
+    # запускатись без жодної новини (тригер -- аномальний рух ціни,
+    # prices.py:is_anomalous_move()) -- LLM має явно побачити "новин
+    # немає", не вгадувати це з дампу нульового direction_counts.
+    empty_signal = AssetSignal(
+        asset_id="btc", cluster_count=0,
+        direction_counts={"up": 0, "down": 0, "neutral": 0, "unclear": 0},
+        net_lean=0, summaries=[],
+    )
+    prompt = build_prompt("btc", empty_signal, PRICE)
+    assert "новин про цей актив не знайдено" in prompt.lower()
+    assert "net_lean" not in prompt
+
+
 def test_synthesize_asset_calls_llm_and_parses(monkeypatch):
     def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
         return json.dumps(VALID_RESPONSE)
@@ -59,5 +78,21 @@ def test_synthesize_asset_calls_llm_and_parses(monkeypatch):
     result, prompt, raw_content = synthesize_asset("xauusd", SIGNAL, PRICE, api_key="fake-key")
 
     assert result.direction == "up"
+    assert result.confirmation_factors == VALID_RESPONSE["confirmation_factors"]
     assert "xauusd" in prompt
     assert raw_content == json.dumps(VALID_RESPONSE)
+
+
+def test_parse_price_news_response_requires_confirmation_factors():
+    # 2026-10-02: confirmation_factors -- нове обов'язкове поле поруч
+    # із direction/confidence/summary/reasoning (synthesize.py:
+    # PRICE_NEWS_FIELDS), без нього гіпотеза тренд/корекція лишається
+    # без того, що її підтвердить чи спростує.
+    incomplete = {k: v for k, v in VALID_RESPONSE.items() if k != "confirmation_factors"}
+    with pytest.raises(SynthesisResponseError):
+        parse_price_news_response(json.dumps(incomplete))
+
+
+def test_parse_price_news_response_returns_confirmation_factors():
+    result = parse_price_news_response(json.dumps(VALID_RESPONSE))
+    assert result.confirmation_factors == VALID_RESPONSE["confirmation_factors"]
