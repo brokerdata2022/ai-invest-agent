@@ -7,10 +7,12 @@ release_log — I/O + чиста логіка для двофазного цик
    next_scheduled_release()`), збагачену часом/impact/forecast з
    `economic_calendar.py`, коли є збіг. `should_seed_new_cycle()` —
    чиста логіка "чи цей цикл уже заведено".
-2. **Check (часто, `monitoring/check_releases.py`):** дивимось на вже
-   заведені 'pending' рядки, чий scheduled_at (+буфер на затримку
-   публікації) уже минув — і для них АКТИВНО йдемо забирати нові дані.
-   `is_past_buffer()` — чиста логіка "чи вже час пробувати".
+2. **Check (щохвилини, `monitoring/check_releases.py`):** дивимось на
+   вже заведені 'pending' рядки, чий scheduled_at уже настав — і для
+   них АКТИВНО йдемо забирати нові дані, щохвилини, доки не з'являться
+   (або назавжди, якщо джерело затримало публікацію — append-only
+   дедуп робить повтор безпечним). `is_past_buffer()` — чиста логіка
+   "чи вже час пробувати".
 
 Той самий підхід, що common/db.py (data-ingestion): чиста логіка
 рішення винесена окремо від SQL, тестується без реальної БД.
@@ -29,7 +31,18 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUFFER_MINUTES = 30
+# 0 (2026-10-02, живий фідбек користувача — "сама логіка джоби
+# неправильна": check_releases раніше чекав 30 хв ПІСЛЯ scheduled_at,
+# перш ніж ЗАГАЛОМ почати пробувати, а бігав лише раз на 15 хв —
+# комбінація давала затримку детекції до ~44 хв навіть коли scheduler
+# живий. Тепер check_releases сам крутиться щохвилини
+# (orchestration/schedule.py), тому буфер-затримка перед першою спробою
+# більше не потрібна — пробуємо РІВНО в scheduled_at і далі щохвилини,
+# доки джерело не опублікує дані (якщо публікація сама запізнилась —
+# це не помилка, просто кілька порожніх спроб поспіль: адаптер
+# повертає 0 нових записів, рядок лишається pending). docs/decisions.md
+# 2026-10-02.
+DEFAULT_BUFFER_MINUTES = 0
 
 
 def should_seed_new_cycle(existing_scheduled_at: Optional[datetime], due_date: date) -> bool:
@@ -46,9 +59,9 @@ def should_seed_new_cycle(existing_scheduled_at: Optional[datetime], due_date: d
 
 
 def is_past_buffer(scheduled_at: datetime, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES) -> bool:
-    """Чиста логіка: чи вже минув запланований час публікації + буфер
-    на затримку (monitoring/CLAUDE.md: "невеликий буфер на затримку
-    публікації")."""
+    """Чиста логіка: чи вже настав запланований час публікації (+
+    buffer_minutes, якщо викликач хоче навмисну затримку — за
+    замовчуванням 0, див. коментар біля DEFAULT_BUFFER_MINUTES)."""
     return now >= scheduled_at + timedelta(minutes=buffer_minutes)
 
 

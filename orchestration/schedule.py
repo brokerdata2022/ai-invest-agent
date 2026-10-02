@@ -12,8 +12,22 @@ SCHEDULE — {назва джоби: {"trigger": {...аргументи APSchedu
 CronTrigger...}, "why": "одне речення чому саме такий інтервал"}}.
 Назва джоби має точно збігатися з ключем у jobs.py:JOBS (перевіряється
 tests/test_schedule.py). Аргументи "trigger" — та сама мова, що звичний
-cron (minute/hour/day/day_of_week/day, "*/15" — кожні 15 хв):
+cron (minute/hour/day/day_of_week/day, "*/15" — кожні 15 хв), включно з
+"second" (0-59, за замовчуванням 0):
 https://apscheduler.readthedocs.io/en/3.x/modules/triggers/cron.html
+
+"second" (2026-10-02, живий фідбек користувача — "запускати збір рівно
+в час релізу, щохвилини") використовується для ланцюжка
+check_releases→update_forecasts→compare_expectations→
+synthesize_expectations→notify_expectations: усі п'ять тепер щохвилини
+(було: зсуви В МЕЖАХ 15-хв вікна), порядок виконання в межах ТІЄЇ
+САМОЇ хвилини підтримується зсувом по секундах замість зсуву по
+хвилинах. Де порядок критичний (update_forecasts ПЕРЕД
+compare_expectations — див. "why" нижче), секундного зазору (10с)
+достатньо: обидві джоби — дешеві детерміновані SQL/обчислення без
+мережі, живі логи показують ~0.1-0.3с виконання. Де є LLM-виклик
+(synthesize_expectations перед notify_expectations) — зазор ширший
+(30с), бо мережевий виклик DeepSeek не настільки передбачуваний.
 """
 
 import os
@@ -22,28 +36,32 @@ TIMEZONE = os.environ.get("SCHEDULER_TIMEZONE", "Europe/Kyiv")
 
 SCHEDULE = {
     "check_releases": {
-        "trigger": {"minute": "*/15"},
-        "why": "Часто, з буфером на затримку публікації — щоб не пропустити момент виходу показника.",
+        "trigger": {"minute": "*"},
+        "why": "Щохвилини, не раз на 15 хв (2026-10-02, живий фідбек користувача: 'запускати збір рівно в час релізу, щохвилини, а не моніторити вроздріб' — попередня комбінація 15-хв цикл + 30-хв буфер давала затримку детекції до ~44 хв навіть при живому scheduler, хоча точний scheduled_at уже відомий з тижневого calendar-seed). НЕ навантаження 24/7: коли pending-рядків із настаним часом немає, check_releases.py робить лише один дешевий SELECT і виходить — реальний виклик адаптера відбувається тільки для показників, час яких дійсно настав. docs/decisions.md.",
     },
     "refresh_calendar": {
         "trigger": {"day_of_week": "mon", "hour": 6, "minute": 0},
         "why": "refresh_calendar.py сам розрахований на тижневу періодичність — заводить наперед на наступний тиждень.",
     },
     "update_forecasts": {
-        "trigger": {"minute": "1-59/15"},
-        "why": "+1 хв після check_releases (те саме 15-хв вікно) — читає ті самі 'detected' release_log-рядки, що compare_expectations (+5 хв), але статус НЕ чіпає, тому має встигнути ДО compare_expectations, поки рядки ще 'detected' (перехід у 'processed' — виключно compare_releases.py).",
+        "trigger": {"minute": "*", "second": 10},
+        "why": "Щохвилини, +10с після check_releases (second=0) — 2026-10-02, той самий перехід на щохвилинний ритм, що й check_releases (docs/decisions.md). Читає ті самі 'detected' release_log-рядки, що compare_expectations (+15с), але статус НЕ чіпає, тому МАЄ встигнути ДО compare_expectations, поки рядки ще 'detected' (перехід у 'processed' — виключно compare_releases.py); якщо не встигне в ЦЮ хвилину (рідкісний повільний check_releases) — рядок лишається 'detected' до НАСТУПНОЇ хвилини, де update_forecasts знову має пріоритет перед compare_expectations, то й не губиться (не одноразове вікно, як було на 15-хв сітці).",
     },
     "compare_expectations": {
-        "trigger": {"minute": "5-59/15"},
-        "why": "+5 хв після check_releases (те саме 15-хв вікно) — дає час insert_observations() зафіксуватись, перш ніж порівнювати факт.",
+        "trigger": {"minute": "*", "second": 15},
+        "why": "Щохвилини, +15с після check_releases (2026-10-02, docs/decisions.md) — 5с після update_forecasts (second=10), якому МАЄ поступитись чергою (див. update_forecasts:why); insert_observations() коміт synchronous у тому самому процесі check_releases, тож 15с — не очікування фіксації, а просто порядок черги в межах хвилини.",
     },
     "synthesize_expectations": {
-        "trigger": {"minute": "8-59/15"},
-        "why": "+3 хв після compare_expectations — LLM-синтез причинного висновку поверх уже готового сюрпризу (detected/processed рідкісні, зазвичай 0-1 показник за цикл, 3 хв достатньо на один LLM-виклик), перед notify_expectations.",
+        "trigger": {"minute": "*", "second": 20},
+        "why": "Щохвилини, +20с після check_releases, +5с після compare_expectations (2026-10-02, docs/decisions.md) — LLM-синтез причинного висновку поверх уже готового сюрпризу (порівняння — рідкісна подія, зазвичай 0 нових за хвилину, тож прогін майже завжди лише дешевий SELECT 'нема нових' без LLM-виклику), перед notify_expectations.",
     },
     "notify_expectations": {
-        "trigger": {"minute": "12-59/15"},
-        "why": "+4 хв після synthesize_expectations (+7 після compare_expectations) — надсилає вже готові порівняння разом із синтезом, якщо встиг; LEFT JOIN у expectations_notify.py не блокується, якщо ні.",
+        "trigger": {"minute": "*", "second": 50},
+        "why": "Щохвилини, +50с після check_releases, +30с після synthesize_expectations (2026-10-02, docs/decisions.md) — надсилає вже готові порівняння разом із синтезом, якщо встиг (30с — щедрий запас на DeepSeek-виклик, типово кілька секунд); LEFT JOIN у expectations_notify.py не блокується, якщо ні — ЦЯ хвилина піде без синтезу, але сам факт/сюрприз все одно надійде без затримки (синтез-текст для такого рідкісного запізнення не повторюється повторно, той самий компроміс, що був і на 15-хв сітці, лише тепер рідший завдяки ширшому відносному запасу).",
+    },
+    "notify_release_impact": {
+        "trigger": {"minute": "*", "second": 55},
+        "why": "Щохвилини, +5с після notify_expectations (2026-10-02, рішення користувача: 'сюрприз лишається сюрпризом, а широкий аналіз ринку — це новий звіт') — ОКРЕМЕ Telegram-повідомлення з комплексним розбором впливу (expectation_synthesis.asset_impacts), свій дедуп (impact_notified_at), не блокує й не вповільнює короткий сюрприз-звіт вище. Читає вже готовий synthesize_expectations (20с), жодного нового обчислення — лише форматування й відправка, 5с більш ніж достатньо.",
     },
     "news_collect_watchlist": {
         "trigger": {"hour": "0,6,12,18", "minute": 0},
@@ -164,5 +182,9 @@ SCHEDULE = {
     "prune_raw_news": {
         "trigger": {"hour": 4, "minute": 35},
         "why": "Раз на добу, той самий тихий слот, що prune_logs (+5 хв) — видаляє raw_news старші за 48г (rішення користувача 2026-09-28, common/news_db.py:RETENTION_HOURS). Раз на добу досить: колекція вже обмежена 24г (MAX_ARTICLE_AGE_HOURS), 48г-вікно дає запас на день без вибуху обсягу БД.",
+    },
+    "scheduler_heartbeat": {
+        "trigger": {"minute": "*/5"},
+        "why": "Власний пульс планувальника (docs/production-readiness.md, P0) — main.py звіряє розрив при старті процесу, щоб ненормально довгий простій контейнера/хоста більше не лишався непоміченим мовчки (живий випадок 2026-10-02: реліз о 15:30 опрацьовано лише о 17:57 через непомічену ~11-год простою scheduler). 5 хв — частіше, ніж поріг алерту в main.py (20 хв), щоб кілька пропущених тиків поспіль (напр. misfire_grace_time) не виглядали як справжній простій.",
     },
 }

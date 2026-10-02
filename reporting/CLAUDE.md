@@ -29,10 +29,16 @@
 
 ## Контейнерна незалежність
 reporting/ не імпортує з analysis/ — підписи показників
-(`telegram_notify.py:METRIC_LABELS`) і запити дублюються свідомо. Єдиний
-виняток: `expectations_notify.py` (пише `notified_at` через
-`expectations._db.mark_notified`) — і саме тому `sys.path`-вставка для
-`analysis/` живе в ньому, а не в `_common.py`.
+(`telegram_notify.py:METRIC_LABELS`) і запити дублюються свідомо. Два
+винятки, обидва пишуть у `analysis/expectations/`-таблиці й тому самі
+несуть `sys.path`-вставку для `analysis/` (не в `_common.py`):
+- `expectations_notify.py` — пише `notified_at` через
+  `expectations._db.mark_notified`.
+- `release_impact_notify.py` (2026-10-02) — пише `impact_notified_at`
+  через `expectations._db.mark_impact_notified` (окремий дедуп від
+  попереднього — два незалежні звіти з того самого
+  `expectation_synthesis`, рішення користувача: "сюрприз лишається
+  сюрпризом, а широкий аналіз ринку — це новий звіт").
 
 ## Дедуплікація сповіщень
 Скрипт, що стоїть у частому розкладі, ОБОВ'ЯЗКОВО має відрізняти "є нове"

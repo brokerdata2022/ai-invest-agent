@@ -10,7 +10,11 @@ test_synthesize.py (monkeypatch call_deepseek, без мережі/БД).
 import json
 
 import llm_common
-from expectations.synthesize import build_prompt, synthesize_comparison
+from expectations.synthesize import (
+    build_prompt,
+    parse_expectation_synthesis_response,
+    synthesize_comparison,
+)
 
 COMPARISON = {
     "comparison_id": 1,
@@ -58,5 +62,37 @@ def test_synthesize_comparison_calls_llm_and_parses(monkeypatch):
     result, prompt, raw_content = synthesize_comparison(COMPARISON, api_key="fake-key")
 
     assert result.direction == "up"
+    assert result.impacts == []  # VALID_RESPONSE без impacts — список порожній, не падає
     assert "cpi" in prompt
     assert raw_content == json.dumps(VALID_RESPONSE)
+
+
+def test_parse_keeps_only_well_formed_impacts():
+    """2026-10-02, живий фідбек користувача: комплексний розбір впливу
+    на ставку/економіку/валюту/акції/крипту/золото. Некоректний елемент
+    масиву (бракує explanation) не повинен валити весь синтез —
+    основний висновок (summary/direction) лишається корисним без нього."""
+    response = dict(
+        VALID_RESPONSE,
+        impacts=[
+            {
+                "category": "крипта",
+                "assets": "BTC, ETH",
+                "direction": "down",
+                "explanation": "Вищий за прогноз CPI підвищує шанс довшого утримання ставки — тиск на risk-on активи.",
+            },
+            {"category": "золото", "direction": "up"},  # без explanation — пропускається
+            {"category": "", "direction": "up", "explanation": "без категорії"},  # пропускається
+        ],
+    )
+
+    result = parse_expectation_synthesis_response(json.dumps(response))
+
+    assert len(result.impacts) == 1
+    assert result.impacts[0]["category"] == "крипта"
+    assert result.impacts[0]["direction"] == "down"
+
+
+def test_parse_defaults_impacts_to_empty_list_when_absent():
+    result = parse_expectation_synthesis_response(json.dumps(VALID_RESPONSE))
+    assert result.impacts == []

@@ -203,6 +203,35 @@ def _prune_logs() -> None:
     )
 
 
+def _scheduler_heartbeat() -> None:
+    """Власний "пульс" планувальника (docs/production-readiness.md, P0
+    "Heartbeat планувальника") — UPSERT одного рядка з now() у
+    scheduler_heartbeat (db/schema.sql). main.py звіряє його з
+    поточним часом ПРИ СТАРТІ процесу: великий розрив означає, що
+    контейнер/хост був недоступний ненормально довго, і про це варто
+    дізнатись одразу, а не постфактум через запізнілий звіт (живий
+    випадок 2026-10-02: NFP/Unemployment о 15:30 опрацьовано лише о
+    17:57 — сам конвеєр check_releases→...→notify_expectations займає
+    ~15 хв, причина затримки була в ~11-год простої scheduler, про яку
+    ніхто не знав)."""
+    sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
+    from common.db import get_connection  # noqa: E402
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scheduler_heartbeat (id, last_tick_at)
+                VALUES (1, now())
+                ON CONFLICT (id) DO UPDATE SET last_tick_at = now()
+                """
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _prune_raw_news() -> None:
     """Видаляє raw_news, старші за RETENTION_HOURS (2026-09-28,
     рішення користувача — raw_news НЕ append-only-вічний, свідомий
@@ -239,6 +268,9 @@ JOBS = {
     },
     "notify_expectations": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "expectations_notify.py")),
+    },
+    "notify_release_impact": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "release_impact_notify.py")),
     },
     "news_collect_watchlist": {
         # retries=3 (не дефолтний 1) — 2026-09-29, живо: двічі за добу
@@ -371,5 +403,8 @@ JOBS = {
     },
     "prune_raw_news": {
         "callable": _prune_raw_news,
+    },
+    "scheduler_heartbeat": {
+        "callable": _scheduler_heartbeat,
     },
 }

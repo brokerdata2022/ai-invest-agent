@@ -24,3 +24,21 @@ def test_every_job_is_subprocess_or_callable():
         assert ("subprocess" in spec) ^ ("callable" in spec), (
             f"{name}: рівно один із 'subprocess'/'callable', не обидва й не жоден"
         )
+
+
+def test_expectations_chain_second_offsets_preserve_order():
+    """Регресія 2026-10-02: весь ланцюжок check_releases→update_forecasts→
+    compare_expectations→synthesize_expectations→notify_expectations
+    тепер щохвилини (було: зсуви в межах 15-хв вікна) — порядок у межах
+    ОДНІЄЇ хвилини тепер тримається на "second", не "minute". Критично:
+    update_forecasts МАЄ йти перед compare_expectations (інакше
+    'detected'-рядок, який update_forecasts ще не встиг прочитати,
+    стане 'processed' і зникне з вибірки НАЗАВЖДИ — не самолікується
+    наступного тику, на відміну від решти пар)."""
+    chain = [
+        "check_releases", "update_forecasts", "compare_expectations",
+        "synthesize_expectations", "notify_expectations",
+    ]
+    seconds = [SCHEDULE[name]["trigger"].get("second", 0) for name in chain]
+    assert seconds == sorted(seconds), f"{chain} мають зростаючий 'second': {seconds}"
+    assert len(set(seconds)) == len(seconds), "кожен крок ланцюжка має власний 'second', без колізій"

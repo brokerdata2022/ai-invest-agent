@@ -14,13 +14,21 @@ LLM"): сам сюрприз (surprise/surprise_pct) уже пораховани
 Формат виходу — analysis/CLAUDE.md "Формат виходу LLM-аналізу":
 summary/direction/confidence/reasoning від LLM; source_refs (сам
 показник/метод порівняння, на якому базується висновок) приєднує код,
-не LLM — той самий принцип, що news_analysis/synthesize.py.
+не LLM — той самий принцип, що news_analysis/synthesize.py. Додатково
+(2026-10-02, живий фідбек користувача) — `impacts`: розбір впливу
+релізу на ІНШІ категорії активів (ставка/економіка/валюта/акції/
+крипта/золото/інший_актив), що НЕ вписується в стандартний
+SynthesisResult (llm_common.py) — тому власний клас
+ExpectationSynthesisResult і власний парсер тут
+(parse_expectation_synthesis_response), а не
+llm_common.parse_synthesis_response().
 
 Межа шарів / формат виходу — той самий принцип, що
 news_analysis/synthesize.py; провайдер (SYNTHESIS_LLM_PROVIDER, дефолт
-"deepseek"), розбір відповіді й аудит-лог виклику — спільний код
-`llm_common.py`, тут лишається тільки своє: SYSTEM_PROMPT і
-build_prompt().
+"deepseek"), сам виклик і аудит-лог — спільний код `llm_common.py`
+(call_llm/log_llm_call/parse_json_object/parse_confidence); тут
+лишається своє: SYSTEM_PROMPT, build_prompt() і розбір розширеної
+форми відповіді (impacts).
 
 Використання (після analysis/expectations/compare_releases.py):
     python synthesize.py
@@ -31,6 +39,7 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 import requests
@@ -41,10 +50,13 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from llm_common import (  # noqa: E402
+    DIRECTIONS,
+    SYNTHESIS_FIELDS,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
-    parse_synthesis_response,
+    parse_confidence,
+    parse_json_object,
     require_api_key,
     resolve_provider,
 )
@@ -53,6 +65,15 @@ from expectations._db import fetch_unsynthesized_comparisons, save_synthesis  # 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Категорії для розбору міжактивного впливу (impacts нижче) — той самий
+# перелік, що просив користувач 2026-10-02: ставка/економіка/валюта/
+# акції/крипта/золото + "інший_актив" для всього іншого (товари,
+# конкретні тикери поза списком). Вільний текст, не enum у БД — LLM
+# сам пише конкретику в "assets", категорія лише групує для читабельності.
+IMPACT_CATEGORIES = (
+    "ставка", "економіка", "валюта", "акції", "крипта", "золото", "інший_актив",
+)
 
 SYSTEM_PROMPT = (
     "Ти макро-аналітик. Тобі дають один макроекономічний реліз: яке "
@@ -67,14 +88,94 @@ SYSTEM_PROMPT = (
     "і який напрямок ринкового сигналу для пов'язаної валюти/активу це "
     "імовірно означає."
     "\n\n"
+    "Додатково — розпиши ПОВНИЙ вплив цього релізу на ІНШІ категорії "
+    "активів, не тільки на пов'язану валюту: "
+    f"{', '.join(IMPACT_CATEGORIES)}. Для кожної категорії подумай, чи "
+    "цей конкретний реліз логічно й змістовно на неї впливає (напр. "
+    "сюрприз по інфляції/зайнятості змінює очікування щодо ставки "
+    "ФРС/ЄЦБ → це впливає на ризикові активи (акції, крипта) і на "
+    "захисні (золото), а не лише на валюту випуску)."
+    "\n\n"
+    "КРИТИЧНО: включай у impacts ТІЛЬКИ категорії з РЕАЛЬНИМ і "
+    "змістовним впливом. Якщо на якусь категорію реліз не впливає або "
+    "вплив незначний — НЕ згадуй її в impacts взагалі (не пиши "
+    "'не впливає'/'нейтрально без причини' — просто пропусти). Якщо "
+    "впливає — опиши конкретно: які саме активи/валюти/сектори і чому."
+    "\n\n"
     "НІКОЛИ не давай прямих торгових рекомендацій ('купити'/'продати'/"
     "'входити в позицію') — тільки описові характеристики. Відповідай "
     "ЛИШЕ JSON-об'єктом з полями: direction (одне з: up, down, neutral, "
-    "unclear — напрямок ринкового сигналу, не просто знак сюрпризу), "
-    "confidence (число від 0 до 1 — наскільки однозначний висновок), "
-    "summary (1-2 речення у форматі 'вийшло X, очікувалось Y, це "
-    "означає Z'), reasoning (коротке обґрунтування для аудиту)."
+    "unclear — напрямок ринкового сигналу для основного пов'язаного "
+    "активу/валюти, не просто знак сюрпризу), confidence (число від 0 "
+    "до 1 — наскільки однозначний висновок), summary (1-2 речення у "
+    "форматі 'вийшло X, очікувалось Y, це означає Z'), reasoning "
+    "(коротке обґрунтування для аудиту), impacts (МАСИВ об'єктів, може "
+    "бути порожнім — по одному на кожну РЕАЛЬНО зачеплену категорію; "
+    "кожен об'єкт: category — одне з "
+    f"{', '.join(IMPACT_CATEGORIES)}; assets — конкретні назви "
+    "активів/валют/тикерів, яких стосується; direction — "
+    "up/down/neutral/unclear; explanation — 1-2 речення чому саме так)."
 )
+
+
+@dataclass
+class ExpectationSynthesisResult:
+    """Розширений вихід синтезу факт/очікування — ІНША форма за
+    llm_common.SynthesisResult (додає impacts), тому свій клас і свій
+    парсер тут, а не parse_synthesis_response() (analysis/CLAUDE.md:
+    "форма результату лишається в скрипті, коли вона інша")."""
+
+    direction: str
+    confidence: float
+    summary: str
+    reasoning: str
+    impacts: list = field(default_factory=list)
+
+
+def _parse_impacts(raw_impacts) -> list[dict]:
+    """Валідує масив impacts з відповіді LLM. На відміну від основних
+    полів (direction/confidence/summary/reasoning), тут НЕ валимо весь
+    синтез через один некоректний елемент масиву — некоректний запис
+    просто пропускається з логом, бо основний висновок (summary/
+    direction) лишається корисним і без повного розбору impacts."""
+    impacts = []
+    for item in raw_impacts or []:
+        if not isinstance(item, dict):
+            logger.warning("impacts: елемент не є об'єктом, пропущено: %r", item)
+            continue
+        direction = item.get("direction")
+        category = str(item.get("category") or "").strip()
+        explanation = str(item.get("explanation") or "").strip()
+        if direction not in DIRECTIONS or not category or not explanation:
+            logger.warning("impacts: некоректний елемент, пропущено: %r", item)
+            continue
+        impacts.append({
+            "category": category,
+            "assets": str(item.get("assets") or "").strip(),
+            "direction": direction,
+            "explanation": explanation,
+        })
+    return impacts
+
+
+def parse_expectation_synthesis_response(raw_content: str) -> ExpectationSynthesisResult:
+    data = parse_json_object(raw_content, error_class=SynthesisResponseError)
+
+    missing = [f for f in SYNTHESIS_FIELDS if f not in data]
+    if missing:
+        raise SynthesisResponseError(f"У відповіді LLM бракує полів {missing}: {data!r}")
+
+    direction = data["direction"]
+    if direction not in DIRECTIONS:
+        raise SynthesisResponseError(f"Неочікуване значення direction: {direction!r}")
+
+    return ExpectationSynthesisResult(
+        direction=direction,
+        confidence=parse_confidence(data["confidence"], error_class=SynthesisResponseError),
+        summary=data["summary"],
+        reasoning=data["reasoning"],
+        impacts=_parse_impacts(data.get("impacts")),
+    )
 
 
 def build_prompt(comparison: dict) -> str:
@@ -102,7 +203,7 @@ def synthesize_comparison(comparison: dict, api_key: str):
     (rule 5), той самий контракт, що news_analysis/synthesize.py."""
     prompt = build_prompt(comparison)
     raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_synthesis_response(raw_content)
+    result = parse_expectation_synthesis_response(raw_content)
     return result, prompt, raw_content
 
 

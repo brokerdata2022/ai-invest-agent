@@ -49,8 +49,11 @@ def test_is_past_buffer_well_after():
 
 
 def test_is_past_buffer_uses_default_buffer():
+    """Дефолт — 0 (2026-10-02): check_releases тепер крутиться щохвилини
+    (orchestration/schedule.py), тому пробуємо РІВНО в scheduled_at, без
+    навмисної затримки перед першою спробою (docs/decisions.md)."""
     scheduled_at = datetime(2026, 9, 24, 8, 30, tzinfo=timezone.utc)
-    just_before_default = datetime(2026, 9, 24, 8, 59, tzinfo=timezone.utc)
-    just_after_default = datetime(2026, 9, 24, 9, 1, tzinfo=timezone.utc)
-    assert is_past_buffer(scheduled_at, just_before_default) is False
-    assert is_past_buffer(scheduled_at, just_after_default) is True
+    just_before = datetime(2026, 9, 24, 8, 29, 59, tzinfo=timezone.utc)
+    at_scheduled_time = datetime(2026, 9, 24, 8, 30, tzinfo=timezone.utc)
+    assert is_past_buffer(scheduled_at, just_before) is False
+    assert is_past_buffer(scheduled_at, at_scheduled_time) is True

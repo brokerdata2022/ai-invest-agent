@@ -41,13 +41,31 @@ def save_comparison(conn, result) -> int:
 def mark_notified(conn, comparison_ids: list[int]) -> None:
     """Проставляє notified_at = now() — виклик reporting/expectations_notify.py
     одразу після успішної відправки в Telegram, щоб наступний цикл
-    (кожні 15 хв) не надіслав ті самі рядки повторно."""
+    (щохвилини) не надіслав ті самі рядки повторно."""
     if not comparison_ids:
         return
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE expectation_comparisons SET notified_at = now() WHERE id = ANY(%s)",
             (comparison_ids,),
+        )
+    conn.commit()
+
+
+def mark_impact_notified(conn, synthesis_ids: list[int]) -> None:
+    """Проставляє expectation_synthesis.impact_notified_at = now() —
+    виклик reporting/release_impact_notify.py одразу після успішної
+    відправки. ОКРЕМИЙ дедуп від mark_notified() вище (та окрема
+    колонка): 2026-10-02, рішення користувача — короткий сюрприз-звіт
+    (expectations_notify.py) і широкий розбір міжактивного впливу
+    (release_impact_notify.py) це два незалежні повідомлення з
+    незалежними "вже надіслано"."""
+    if not synthesis_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE expectation_synthesis SET impact_notified_at = now() WHERE id = ANY(%s)",
+            (synthesis_ids,),
         )
     conn.commit()
 
@@ -78,9 +96,10 @@ def fetch_unsynthesized_comparisons(conn, limit: int = 20) -> list[dict]:
 def save_synthesis(
     conn,
     comparison_id: int,
-    result,  # SynthesisResult (synthesize.py) — качина типізація: лише
-             # .direction/.confidence/.summary/.reasoning, той самий
-             # принцип, що news_analysis/_db.py:save_synthesis().
+    result,  # ExpectationSynthesisResult (synthesize.py) — качина
+             # типізація: .direction/.confidence/.summary/.reasoning
+             # (той самий принцип, що news_analysis/_db.py:save_synthesis())
+             # + .impacts (2026-10-02, комплексний міжактивний вплив).
     source_refs: list,
     llm_call_id: int,
 ) -> int:
@@ -92,14 +111,16 @@ def save_synthesis(
         cur.execute(
             """
             INSERT INTO expectation_synthesis
-                (comparison_id, summary, direction, confidence, reasoning, source_refs, llm_call_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (comparison_id, summary, direction, confidence, reasoning,
+                 source_refs, asset_impacts, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (comparison_id) DO UPDATE SET
                 summary = EXCLUDED.summary,
                 direction = EXCLUDED.direction,
                 confidence = EXCLUDED.confidence,
                 reasoning = EXCLUDED.reasoning,
                 source_refs = EXCLUDED.source_refs,
+                asset_impacts = EXCLUDED.asset_impacts,
                 llm_call_id = EXCLUDED.llm_call_id,
                 created_at = now()
             RETURNING id
@@ -111,6 +132,7 @@ def save_synthesis(
                 result.confidence,
                 result.reasoning,
                 json.dumps(source_refs),
+                json.dumps(getattr(result, "impacts", [])),
                 llm_call_id,
             ),
         )

@@ -464,3 +464,39 @@ ALTER TABLE news_analysis ADD CONSTRAINT news_analysis_raw_news_id_fkey
 -- analysis/CLAUDE.md "Заборонені формулювання"). NULL дозволено — рядки
 -- до цієї зміни лишаються без нового поля, не зникають.
 ALTER TABLE news_synthesis ADD COLUMN IF NOT EXISTS confirmation_factors TEXT;
+
+-- Комплексний міжактивний вплив релізу (2026-10-02, живий фідбек
+-- користувача): попередній синтез давав напрямок лише для ОДНОГО
+-- пов'язаного активу/валюти — користувач просив розбір впливу на
+-- ставку/економіку/валюту/акції/крипту/золото/будь-який інший актив,
+-- і ЛИШЕ для категорій, які реліз РЕАЛЬНО зачіпає (без "не впливає"-
+-- заповнювачів). asset_impacts — масив {category, assets, direction,
+-- explanation} від LLM (analysis/expectations/synthesize.py); NULL/[]
+-- дозволено — рядки до цієї зміни лишаються без нового поля.
+ALTER TABLE expectation_synthesis ADD COLUMN IF NOT EXISTS asset_impacts JSONB;
+
+-- impact_notified_at (2026-10-02, рішення користувача того самого дня:
+-- "сюрприз лишається сюрпризом, а широкий аналіз ринку — це новий
+-- [звіт]") — ОКРЕМИЙ дедуп від expectation_comparisons.notified_at
+-- (яким керує expectations_notify.py, короткий сюрприз-звіт).
+-- reporting/release_impact_notify.py (новий, окремий Telegram-звіт із
+-- розбором asset_impacts вище) проставляє цю колонку одразу після
+-- успішної відправки — той самий принцип NULL = ще не надіслано, що
+-- всюди в проєкті (reporting/CLAUDE.md "Дедуплікація сповіщень").
+ALTER TABLE expectation_synthesis ADD COLUMN IF NOT EXISTS impact_notified_at TIMESTAMPTZ;
+
+-- Heartbeat планувальника (2026-10-02, живий випадок користувача:
+-- реліз NFP/Unemployment о 15:30 опрацьовано лише о 17:57 —
+-- розслідування показало, що сам конвеєр check_releases→...→
+-- notify_expectations займає ~15 хв, а причина затримки була в тому,
+-- що контейнер scheduler був недоступний ~11 годин (докер/хост не
+-- піднятий) і ніхто про це не дізнався, поки звіт не прийшов із
+-- запізненням. Один рядок (id=1): jobs.py:_scheduler_heartbeat
+-- оновлює last_tick_at кожні 5 хв; orchestration/main.py звіряє
+-- розрив при старті процесу й шле один Telegram-алерт, якщо простій
+-- був ненормально довгим (docs/production-readiness.md, P0 "Heartbeat
+-- планувальника" — перший практичний крок).
+CREATE TABLE IF NOT EXISTS scheduler_heartbeat (
+    id           SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_tick_at TIMESTAMPTZ NOT NULL
+);
