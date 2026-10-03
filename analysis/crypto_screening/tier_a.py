@@ -6,29 +6,20 @@ Tier A — спільний фільтр допуску для крипто-ск
 сигналу. Чиста функція (rule 1) — приймає вже агреговані дані
 (aggregate_sources.py), не звертається до БД/API.
 
-Критерії (значення — початкові орієнтири, підлягають калібруванню на
-живих прогонах, той самий чесний підхід, що аналогічні пороги в
-analysis/screening/):
-- `MIN_QUOTE_VOLUME_24H` — мін. агрегований $-обсяг за добу (та сама
-  планка, що Tier A акцій: $10 млн/добу).
-- `MIN_OPEN_INTEREST_USD` — мін. агрегований Open Interest.
-- `MIN_EXCHANGE_COUNT` — присутність щонайменше на 2 з 3 бірж —
-  безкоштовний proxy "легітимності" (не фінансова оцінка, лише факт
-  лістингу на кількох незалежних майданчиках одночасно).
-- `MIN_LISTING_AGE_DAYS` — мін. вік лістингу (найстаріший з `onboard_date`
-  серед бірж, де символ присутній) — відсіює щойно-лістовані/
-  маніпульовані контракти.
+Критерії — значення й пояснення кожного: `crypto_screening/config.py`
+(єдиний файл для ручного редагування порогів, 2026-10-03).
 """
 
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
-MIN_QUOTE_VOLUME_24H = Decimal("10000000")   # $10 млн/добу
-MIN_OPEN_INTEREST_USD = Decimal("5000000")   # $5 млн
-MIN_EXCHANGE_COUNT = 2
-MIN_LISTING_AGE_DAYS = 30
+from crypto_screening.config import (
+    MIN_EXCHANGE_COUNT,
+    MIN_LISTING_AGE_DAYS,
+    MIN_OPEN_INTEREST_USD,
+    MIN_QUOTE_VOLUME_24H,
+)
 
 
 @dataclass

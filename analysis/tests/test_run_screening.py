@@ -13,6 +13,7 @@ import pytest
 
 from crypto_screening.run_screening import (
     _pct_change,
+    compute_monitoring_indicators,
     compute_oi_change_pct,
     compute_price_indicators,
     compute_volume_spike_pct,
@@ -80,6 +81,37 @@ def test_compute_price_indicators_computes_rsi_and_trend_confirmed(monkeypatch):
 
     assert result["rsi"] == 100.0  # монотонне зростання -> RSI=100 (test_indicators.py)
     assert result["trend_confirmed"] is True  # ідеально лінійний ряд б'є naive
+
+
+def test_compute_monitoring_indicators_returns_none_when_not_enough_candles(monkeypatch):
+    captured = {}
+
+    def fake_fetch_klines(session, symbol, limit, interval):
+        captured["interval"] = interval
+        captured["limit"] = limit
+        return [{"value": 1.0, "volume": 10.0, "observed_at": date(2026, 1, 1)}] * 5
+
+    monkeypatch.setattr("crypto_screening.run_screening.fetch_klines", fake_fetch_klines)
+    result = compute_monitoring_indicators(session=None, symbol="BTCUSDT")
+
+    assert result == {"rsi": None, "volume_spike_pct": None}
+    # Коротший ТФ (4г), не денний (2026-10-03, config.py:MONITORING_KLINE_INTERVAL)
+    assert captured["interval"] == "4h"
+
+
+def test_compute_monitoring_indicators_computes_rsi_and_volume_spike(monkeypatch):
+    # 20 свічок однакового обсягу (10.0), остання -- сплеск у 10 разів.
+    candles = [
+        {"value": 100.0 + i, "volume": 10.0, "observed_at": date(2026, 1, 1) + timedelta(hours=4 * i)}
+        for i in range(19)
+    ]
+    candles.append({"value": 119.0, "volume": 100.0, "observed_at": date(2026, 1, 4)})
+    monkeypatch.setattr("crypto_screening.run_screening.fetch_klines", lambda session, symbol, limit, interval: candles)
+
+    result = compute_monitoring_indicators(session=None, symbol="BTCUSDT")
+
+    assert result["rsi"] == 100.0  # монотонне зростання -> RSI=100 (той самий, що денний тест)
+    assert result["volume_spike_pct"] == pytest.approx(900.0)  # 10 -> 100, +900%
 
 
 BINANCE_SYMBOLS = [{"symbol": "BTCUSDT", "onboard_date": date(2019, 1, 1)}]

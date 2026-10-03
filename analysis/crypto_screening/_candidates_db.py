@@ -19,11 +19,19 @@ def upsert_candidate(
     pump_pct: float,
     funding_rate,
     oi_usd,
-    quote_volume,
+    price=None,
 ) -> int:
     """Якщо для symbol уже є АКТИВНИЙ (не closed) рядок — нічого не
     змінює, повертає його id (денний скан не повинен затирати прогрес
-    погодинного моніторингу). Інакше заводить новий 'candidate'."""
+    погодинного моніторингу). Інакше заводить новий 'candidate'.
+
+    `price` — Binance mark_price на момент детекції (None, якщо символ
+    відсутній на Binance) — перша точка відліку для погодинної
+    %-зміни ціни (`monitor_candidates.py`, 2026-10-03). Без
+    `quote_volume` (2026-10-03) — сплеск обсягу тепер рахується з 4г-
+    Binance klines "на льоту" (`run_screening.py:
+    compute_monitoring_indicators`), не зі збереженого 24h-знімка, тож
+    `last_quote_volume` більше ніде не читався."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM crypto_screening_candidates WHERE symbol = %s AND status != 'closed'",
@@ -37,11 +45,11 @@ def upsert_candidate(
             """
             INSERT INTO crypto_screening_candidates
                 (symbol, status, pump_pct_at_detection, last_pump_pct,
-                 last_funding_rate, last_oi_usd, last_quote_volume, last_checked_at)
+                 last_funding_rate, last_oi_usd, last_price, last_checked_at)
             VALUES (%s, 'candidate', %s, %s, %s, %s, %s, now())
             RETURNING id
             """,
-            (symbol, pump_pct, pump_pct, funding_rate, oi_usd, quote_volume),
+            (symbol, pump_pct, pump_pct, funding_rate, oi_usd, price),
         )
         new_id = cur.fetchone()[0]
     conn.commit()
@@ -57,7 +65,7 @@ def fetch_active_candidates(conn) -> list[dict]:
         cur.execute(
             """
             SELECT id, symbol, status, pump_pct_at_detection, last_pump_pct,
-                   last_funding_rate, last_oi_usd, last_quote_volume, detected_at
+                   last_funding_rate, last_oi_usd, last_price, detected_at
             FROM crypto_screening_candidates
             WHERE status != 'closed'
             ORDER BY detected_at
@@ -74,13 +82,15 @@ def update_candidate(
     pump_pct: float,
     funding_rate,
     oi_usd,
-    quote_volume,
     reason: str,
+    price=None,
 ) -> None:
     """Оновлює знімок ("минулого разу") для наступної погодинної
     дельти, і статус. `closed_at` проставляється лише при переході в
     'closed' (COALESCE — повторний перехід у closed не перезаписує
-    оригінальний момент закриття).
+    оригінальний момент закриття). `price` — поточний Binance
+    mark_price (None, якщо символ відсутній на Binance) — стає
+    `last_price` для НАСТУПНОЇ погодинної дельти (2026-10-03).
 
     `notified_at` скидається на NULL, коли status РЕАЛЬНО змінився
     (напр. candidate→short) — 2026-10-02, той самий принцип, що вже
@@ -98,13 +108,16 @@ def update_candidate(
                 last_pump_pct = %s,
                 last_funding_rate = %s,
                 last_oi_usd = %s,
-                last_quote_volume = %s,
+                last_price = %s,
                 reason = %s,
                 last_checked_at = now(),
                 closed_at = CASE WHEN %s = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END,
                 notified_at = CASE WHEN %s != %s THEN NULL ELSE notified_at END
             WHERE id = %s
             """,
-            (status, pump_pct, funding_rate, oi_usd, quote_volume, reason, status, status, old_status, candidate_id),
+            (
+                status, pump_pct, funding_rate, oi_usd, price, reason,
+                status, status, old_status, candidate_id,
+            ),
         )
     conn.commit()

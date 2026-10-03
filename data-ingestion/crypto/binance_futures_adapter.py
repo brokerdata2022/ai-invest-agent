@@ -132,8 +132,8 @@ def fetch_open_interest(session: requests.Session, symbol: str) -> Optional[Deci
         return None
 
 
-def fetch_klines(session: requests.Session, symbol: str, limit: int = 30) -> list[dict]:
-    """Денні свічки (той самий ендпоінт-стиль, що спотовий
+def fetch_klines(session: requests.Session, symbol: str, limit: int = 30, interval: str = "1d") -> list[dict]:
+    """Свічки (той самий ендпоінт-стиль, що спотовий
     `binance_adapter.py:fetch()`, тут — futures) — ЦІНА-ІСТОРІЯ для
     RSI/тренду/пампу (crypto_screening/, крок 4.5). На відміну від
     OI/funding/обсягу (які наша власна `raw_observations`-історія лише
@@ -142,11 +142,27 @@ def fetch_klines(session: requests.Session, symbol: str, limit: int = 30) -> lis
     зберігається в raw_observations (свідомо — screen-скрипт рахує
     індикатори "на льоту", не зберігає ряд; сама точка-снапшот
     (`fetch_market_snapshot()`) зберігається, цього досить для аудиту).
-    Повертає [{"value": float, "observed_at": date}, ...] у ХРОНОЛОГІЧНОМУ
-    порядку (найстаріше перше) — той самий формат, що forecasting/trend.py
-    очікує, і той самий порядок, що `backtest.py:backtest_metric()`
-    приймає ПІСЛЯ розвороту (тут розворот не потрібен — Binance klines
-    самі йдуть у хронологічному порядку, на відміну від fetch_recent()).
+
+    `interval` — Binance kline interval ("1d" за замовчуванням для
+    первинного скану/LONG, "4h" для погодинного моніторингу вже
+    активних кандидатів, `crypto_screening/config.py:
+    MONITORING_KLINE_INTERVAL` — рішення користувача, 2026-10-03:
+    "денний ТФ підходить для глобальних висновків, моніторинг уже
+    відібраних активів потрібно на меншому"). Стандартні значення
+    Binance (`1m`/`5m`/`1h`/`4h`/`1d`/...) — caller відповідає за
+    валідність.
+
+    Повертає [{"value": float, "volume": float, "observed_at": date}, ...]
+    у ХРОНОЛОГІЧНОМУ порядку (найстаріше перше) — той самий формат,
+    що forecasting/trend.py очікує, і той самий порядок, що
+    `backtest.py:backtest_metric()` приймає ПІСЛЯ розвороту (тут
+    розворот не потрібен — Binance klines самі йдуть у хронологічному
+    порядку, на відміну від fetch_recent()). `observed_at` — дата
+    ВІДКРИТТЯ свічки навіть для `interval` коротшого за добу (лише
+    `rsi()`/`backtest_metric()` використовують `value`, `observed_at`
+    тут не критична точність для внутрішньодобових інтервалів).
+    `volume` — обсяг САМЕ цієї свічки (не 24h rolling, на відміну від
+    `fetch_market_snapshot()`) — для сплеску обсягу на короткому ТФ.
 
     Живо виявлено 2026-09-27 (crypto_screening/run_screening.py, повний
     прогін по 141 Tier A-виживших): символи, узгоджені через Bybit/OKX
@@ -159,7 +175,7 @@ def fetch_klines(session: requests.Session, symbol: str, limit: int = 30) -> lis
     трактують як "критерій не пройдено", не падають)."""
     try:
         response = session.get(
-            KLINES_URL, params={"symbol": symbol, "interval": "1d", "limit": limit}, timeout=30
+            KLINES_URL, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=30
         )
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -174,9 +190,10 @@ def fetch_klines(session: requests.Session, symbol: str, limit: int = 30) -> lis
     closes = []
     for row in raw:
         try:
-            open_time_ms, close = row[0], row[4]
+            open_time_ms, close, volume = row[0], row[4], row[5]
             closes.append({
                 "value": float(close),
+                "volume": float(volume),
                 "observed_at": datetime.fromtimestamp(open_time_ms / 1000, tz=timezone.utc).date(),
             })
         except (IndexError, TypeError, ValueError):

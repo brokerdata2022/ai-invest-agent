@@ -13,13 +13,18 @@ PLAN.md, Фаза 4, Крок 5: "Telegram-сповіщення про SHORT/WAT
 персистуються в БД (окреме рішення, потребує власної таблиці — не
 зроблено цією сесією).
 
-Дедуп: той самий принцип notified_at IS NULL, але рядок тут
-МУТАБЕЛЬНИЙ (monitor_candidates.py оновлює status щогодини, на
-відміну від append-only screening_results) —
-analysis/crypto_screening/_candidates_db.py:update_candidate() скидає
-notified_at на NULL, коли status РЕАЛЬНО змінився (напр. candidate→
-short), щоб значущий перехід не загубився під уже проставленим
-notified_at.
+**Без дедупу notified_at — ПОВНИЙ активний список щоразу (рішення
+користувача, 2026-10-03, dev-версія):** живий кейс показав, що дедуп
+"лише нове/змінене" (попередня версія цього скрипта) ховав уже
+активних кандидатів (MAGMAUSDT/SANDUSDT лишались 'candidate' і не
+показувались повторно, хоча й далі пампили) — для короткоживучого
+спостереження за пампами користувачу потрібен ПОВНИЙ поточний список
+кожного разу, не лише дельта. **В продакшені це рішення планується
+переглянути** (можливо повернути дедуп, можливо інший підхід) — див.
+docs/decisions.md, 2026-10-03. Колонка `notified_at` і скидання при
+зміні статусу (_candidates_db.py:update_candidate()) лишені в БД
+незачепленими — просто не читаються й не пишуться тут, щоб дедуп
+можна було повернути пізніше без міграції схеми.
 
 Використання (після run_screening.py і/або monitor_candidates.py):
     python crypto_screening_notify.py
@@ -32,7 +37,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -49,16 +54,17 @@ STATUS_LABEL = {
 }
 
 
-def fetch_unnotified_crypto_candidates(conn) -> list[dict]:
-    """Усі активні (не closed), ще не надіслані кандидати — SHORT і
-    WATCH першими (найважливіші), потім candidate."""
+def fetch_active_crypto_candidates(conn) -> list[dict]:
+    """УСІ активні (не closed) кандидати, кожен виклик — не лише нові/
+    змінені (2026-10-03, рішення користувача — docstring модуля). SHORT
+    і WATCH першими (найважливіші), потім candidate."""
     return fetch_dicts(
         conn,
         """
         SELECT id, symbol, status, pump_pct_at_detection, last_pump_pct,
                last_funding_rate, reason, detected_at
         FROM crypto_screening_candidates
-        WHERE status != 'closed' AND notified_at IS NULL
+        WHERE status != 'closed'
         ORDER BY
             CASE status WHEN 'short' THEN 0 WHEN 'watch' THEN 1 ELSE 2 END,
             detected_at DESC
@@ -68,7 +74,7 @@ def fetch_unnotified_crypto_candidates(conn) -> list[dict]:
 
 def format_message(rows: list[dict]) -> str:
     if not rows:
-        return "🪙 Нових крипто-кандидатів SHORT/WATCH немає."
+        return "🪙 Активних крипто-кандидатів SHORT/WATCH немає."
 
     lines = [f"🪙 Крипто-скринінг ф'ючерсів — {len(rows)} кандидатів:", ""]
     for row in rows:
@@ -94,14 +100,13 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        rows = fetch_unnotified_crypto_candidates(conn)
+        rows = fetch_active_crypto_candidates(conn)
         if not rows:
-            logger.info("Нових крипто-кандидатів немає — сповіщення не надсилається")
+            logger.info("Активних крипто-кандидатів немає — сповіщення не надсилається")
             return
 
         text = format_message(rows)
         send_telegram_message(token, chat_id, text)
-        mark_notified(conn, "crypto_screening_candidates", [row["id"] for row in rows])
         logger.info("Надіслано в Telegram: %d крипто-кандидатів", len(rows))
     finally:
         conn.close()

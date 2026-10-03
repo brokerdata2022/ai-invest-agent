@@ -11,13 +11,23 @@
 активні кандидати (зазвичай одиниці-десятки, не тисячі) — дешево,
 можна щогодини без навантаження на API.
 
-**Дельта без фіксованого вікна годин:** OI/обсяг порівнюються не за
-"останні N годин", а з тим, що зафіксовано МИНУЛОГО разу
-(`last_oi_usd`/`last_quote_volume` у самому рядку кандидата) — пряма
-вказівка користувача: "тримати монету в статусі, поки дані
+**Дельта без фіксованого вікна годин (OI, ціна):** OI/ціна
+порівнюються не за "останні N годин", а з тим, що зафіксовано
+МИНУЛОГО разу (`last_oi_usd`/`last_price` у самому рядку кандидата)
+— пряма вказівка користувача: "тримати монету в статусі, поки дані
 відповідають", без таймера. Перший прогін після додавання кандидата
 дельту порахувати не може (немає "минулого разу") — це очікувано, не
 помилка.
+
+**RSI/сплеск обсягу — ІНШИЙ ТФ, не "з минулого разу" (2026-10-03):**
+на відміну від OI/ціни вище, ці два рахуються з Binance 4г-klines
+"на льоту" (`run_screening.py:compute_monitoring_indicators`), не зі
+збереженого знімка кандидата — користувач, 2026-10-03: "денний ТФ
+підходить для глобальних висновків, моніторинг уже відібраних активів
+потрібно на меншому ТФ". Колишня дельта `last_quote_volume` "з
+минулого разу" (фактично зсув 24h-показника біржі на 1г, не реальний
+сплеск) прибрана — замінена прямим вимірюванням обсягу за коротший
+період.
 
 **Коли кандидат закривається (`status='closed'`):** памп більше не
 тримається (поточний памп впав нижче порогу) або символ зник із
@@ -47,11 +57,12 @@ from crypto.bybit_futures_adapter import fetch_market_snapshot as fetch_bybit_sn
 from crypto.okx_futures_adapter import fetch_market_snapshot as fetch_okx_snapshot  # noqa: E402
 
 from crypto_screening.aggregate_sources import aggregate_snapshots  # noqa: E402
-from crypto_screening.short_watch_screen import screen_short_or_watch, PUMP_THRESHOLD_PCT  # noqa: E402
+from crypto_screening.short_watch_screen import screen_short_or_watch  # noqa: E402
 from crypto_screening._candidates_db import fetch_active_candidates, update_candidate  # noqa: E402
+from crypto_screening.config import PUMP_THRESHOLD_PCT  # noqa: E402
 from crypto_screening.run_screening import (  # noqa: E402
     _pct_change,
-    compute_price_indicators,
+    compute_monitoring_indicators,
     pump_pct_from_aggregated,
 )
 
@@ -79,42 +90,60 @@ def monitor_once(conn, session: requests.Session) -> dict[str, int]:
             if data is None:
                 logger.warning("%s: зник з агрегованого знімку — закриваю", symbol)
                 update_candidate(
-                    conn, candidate["id"], old_status, "closed", None, None, None, None,
+                    conn, candidate["id"], old_status, "closed", None, None, None,
                     "символ зник із ринку",
                 )
                 counts["closed"] += 1
                 continue
 
             pump_pct = pump_pct_from_aggregated(data)
+            binance_data = data["per_exchange"].get("binance_futures")
+            price_now = binance_data["mark_price"] if binance_data else None
+
             if pump_pct is None or pump_pct < PUMP_THRESHOLD_PCT:
                 update_candidate(
                     conn, candidate["id"], old_status, "closed", pump_pct, data["funding_rate_avg"],
-                    data["open_interest_usd"], data["quote_volume_24h"],
+                    data["open_interest_usd"],
                     "памп вичерпався — нижче порогу",
+                    price=price_now,
                 )
                 counts["closed"] += 1
                 continue
 
-            # Дельта "з минулого разу" — не за фіксоване вікно годин
-            # (докладніше docstring модуля). None у першому прогоні
+            # OI — дельта "з минулого разу" (~1г, докладніше docstring
+            # модуля), не за фіксоване вікно. None у першому прогоні
             # після додавання кандидата — очікувано, не помилка.
             oi_change_pct = None
             if candidate["last_oi_usd"] is not None and data["open_interest_usd"] is not None:
                 oi_change_pct = _pct_change(float(candidate["last_oi_usd"]), float(data["open_interest_usd"]))
 
-            volume_spike_pct = None
-            if candidate["last_quote_volume"] is not None and data["quote_volume_24h"] is not None:
-                volume_spike_pct = _pct_change(float(candidate["last_quote_volume"]), float(data["quote_volume_24h"]))
+            # Погодинна %-зміна ціни (2026-10-03, живий кейс користувача
+            # — MAGMAUSDT не підхоплений на SHORT вчасно). None у
+            # першому прогоні (немає last_price) або коли символу
+            # немає на Binance.
+            price_change_pct_1h = None
+            if candidate["last_price"] is not None and price_now is not None:
+                price_change_pct_1h = _pct_change(float(candidate["last_price"]), float(price_now))
 
-            price = compute_price_indicators(session, symbol)
+            # RSI/сплеск обсягу — НА КОРОТШОМУ ТФ (4г, не денному), бо
+            # це моніторинг уже активного кандидата, не первинний
+            # широкий скан (рішення користувача, 2026-10-03: "денний ТФ
+            # підходить для глобальних висновків, моніторинг уже
+            # відібраних активів потрібно на меншому ТФ" —
+            # config.py:MONITORING_KLINE_INTERVAL). Замінює колишню
+            # дельту 24h-ticker-показника "з минулого разу", яка
+            # фактично була зсувом добового вікна на 1г, не реальним
+            # сплеском обсягу за короткий період.
+            monitoring = compute_monitoring_indicators(session, symbol)
 
             signal = screen_short_or_watch(
                 symbol=symbol,
                 pump_pct=pump_pct,
                 oi_change_pct_after_pump=oi_change_pct,
-                volume_spike_pct=volume_spike_pct,
-                rsi_value=price["rsi"],
+                volume_spike_pct=monitoring["volume_spike_pct"],
+                rsi_value=monitoring["rsi"],
                 funding_rate=data["funding_rate_avg"],
+                price_change_pct_1h=price_change_pct_1h,
             )
 
             # "none" -> памп ще тримається, але критерії SHORT/WATCH ще
@@ -123,8 +152,9 @@ def monitor_once(conn, session: requests.Session) -> dict[str, int]:
             new_status = signal.category if signal.category != "none" else "candidate"
             update_candidate(
                 conn, candidate["id"], old_status, new_status, pump_pct, data["funding_rate_avg"],
-                data["open_interest_usd"], data["quote_volume_24h"],
+                data["open_interest_usd"],
                 "; ".join(signal.reasons),
+                price=price_now,
             )
             counts[new_status] += 1
             logger.info("%s: %s — %s", symbol, new_status, "; ".join(signal.reasons))

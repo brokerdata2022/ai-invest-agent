@@ -6,6 +6,7 @@
 
 from decimal import Decimal
 
+from crypto_screening.config import CRITICAL_NEGATIVE_FUNDING
 from crypto_screening.short_watch_screen import screen_short_or_watch
 
 SHORT_ARGS = dict(
@@ -47,7 +48,10 @@ def test_watch_when_funding_critically_negative_after_pump():
 
 
 def test_watch_triggers_at_exact_critical_funding_threshold():
-    signal = screen_short_or_watch(**{**SHORT_ARGS, "funding_rate": Decimal("-0.02")})
+    # Поріг читається з config.py (пом'якшено до -1% 2026-10-03, живий
+    # кейс SANDUSDT) -- тест не хардкодить значення, щоб не розійтись
+    # із config.py при наступному калібруванні.
+    signal = screen_short_or_watch(**{**SHORT_ARGS, "funding_rate": CRITICAL_NEGATIVE_FUNDING})
 
     assert signal.category == "watch"
 
@@ -89,3 +93,33 @@ def test_funding_rate_none_does_not_trigger_watch():
     signal = screen_short_or_watch(**{**SHORT_ARGS, "funding_rate": None})
 
     assert signal.category == "short"  # немає даних funding -> не блокує ризик-гейтом, але й не заважає short
+
+
+def test_short_qualifies_via_hourly_price_drop_even_without_volume_spike():
+    # Живий кейс 2026-10-03 (MAGMAUSDT): 24h-обсяг не встиг
+    # відреагувати, але ціна різко впала за останню годину -- цього
+    # досить для SHORT без сплеску обсягу.
+    signal = screen_short_or_watch(**{
+        **SHORT_ARGS, "volume_spike_pct": 2.0, "price_change_pct_1h": -6.0,
+    })
+
+    assert signal.category == "short"
+    assert "годину" in signal.reasons[0]
+
+
+def test_none_when_neither_volume_spike_nor_hourly_drop_confirm():
+    signal = screen_short_or_watch(**{
+        **SHORT_ARGS, "volume_spike_pct": 2.0, "price_change_pct_1h": -1.0,
+    })
+
+    assert signal.category == "none"
+    assert any("підтвердження розвороту" in r for r in signal.reasons)
+
+
+def test_price_change_pct_1h_defaults_to_none_and_does_not_break_existing_short():
+    # run_screening.py (перша детекція) не передає price_change_pct_1h
+    # -- старий шлях підтвердження (сплеск обсягу) має й далі працювати
+    # сам, без жодного впливу нового параметра.
+    signal = screen_short_or_watch(**SHORT_ARGS)
+
+    assert signal.category == "short"

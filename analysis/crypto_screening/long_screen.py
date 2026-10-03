@@ -21,17 +21,16 @@ LONG-скринінг — окремий алгоритм від SHORT/WATCH (п
 результат — лише "бичачий нахил" (direction="up"), НІКОЛИ "купуй"/
 "входь у лонг". `reasons` — для аудиту (чому пройшло/не пройшло), не
 для показу користувачу як інструкція.
+
+Пороги — значення й пояснення кожного: `crypto_screening/config.py`
+(єдиний файл для ручного редагування, 2026-10-03).
 """
 
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
-RSI_HEALTHY_MIN = 50.0
-RSI_HEALTHY_MAX = 75.0
-# Поріг перегріву funding rate для лонгу — довільний старт, калібрувати
-# на живих даних (той самий чесний підхід, що пороги в analysis/screening/).
-MAX_FUNDING_RATE_LONG = Decimal("0.0005")  # 0.05% за період
+from crypto_screening.config import MAX_FUNDING_RATE_LONG, RSI_HEALTHY_MAX, RSI_HEALTHY_MIN
 
 
 @dataclass

@@ -79,9 +79,19 @@ from crypto_screening.aggregate_sources import (  # noqa: E402
 from crypto_screening.tier_a import check_tier_a  # noqa: E402
 from crypto_screening.indicators import rsi  # noqa: E402
 from crypto_screening.long_screen import screen_long  # noqa: E402
-from crypto_screening.short_watch_screen import screen_short_or_watch, PUMP_THRESHOLD_PCT  # noqa: E402
+from crypto_screening.short_watch_screen import screen_short_or_watch  # noqa: E402
 from crypto_screening._candidates_db import upsert_candidate  # noqa: E402
 from crypto_screening._long_db import save_long_run  # noqa: E402
+from crypto_screening.config import (  # noqa: E402
+    KLINES_LIMIT,
+    OI_WINDOW_DAYS_LONG,
+    MONITORING_KLINE_INTERVAL,
+    MONITORING_KLINES_LIMIT,
+    OI_WINDOW_DAYS_SHORT,
+    PUMP_THRESHOLD_PCT,
+    RSI_PERIOD,
+    VOLUME_LOOKBACK_DAYS,
+)
 
 from forecasting.backtest import backtest_metric  # noqa: E402
 
@@ -90,11 +100,9 @@ logger = logging.getLogger(__name__)
 
 # v1-спрощення: історія OI/обсягу — лише з Bybit (див. docstring модуля).
 HISTORY_SOURCE = "bybit_futures"
-OI_WINDOW_DAYS_LONG = 7        # "OI росте разом із ціною" — той самий горизонт, що тренд
-OI_WINDOW_DAYS_SHORT = 2       # "OI падає ПІСЛЯ пампу" — короткий, свіжий відкат
-VOLUME_LOOKBACK_DAYS = 7
-KLINES_LIMIT = 30
-RSI_PERIOD = 14
+# Пороги (OI_WINDOW_DAYS_*/VOLUME_LOOKBACK_DAYS/KLINES_LIMIT/RSI_PERIOD/
+# PUMP_THRESHOLD_PCT) — crypto_screening/config.py, єдиний файл для
+# ручного редагування (2026-10-03).
 
 
 def _pct_change(old: float, new: float) -> Optional[float]:
@@ -168,6 +176,38 @@ def compute_price_indicators(session: requests.Session, symbol: str) -> dict:
     )
 
     return {"rsi": rsi_value, "trend_confirmed": trend_confirmed}
+
+
+def compute_monitoring_indicators(session: requests.Session, symbol: str) -> dict:
+    """RSI і сплеск обсягу на КОРОТШОМУ ТФ (MONITORING_KLINE_INTERVAL,
+    4г) — для monitor_candidates.py (погодинний моніторинг УЖЕ
+    активного кандидата), на відміну від compute_price_indicators()
+    вище (денний ТФ, первинний скан/LONG). Рішення користувача
+    2026-10-03: "денний ТФ підходить для глобальних висновків,
+    моніторинг уже відібраних активів потрібно на меншому ТФ" — 4г дає
+    стійкіший сигнал, ніж 1г (менше шуму), усе ще в ~6 разів швидший
+    за денний.
+
+    Повертає {"rsi": Optional[float], "volume_spike_pct": Optional[float]}.
+    `volume_spike_pct` тут — остання 4г-свічка проти середнього за
+    решту вікна (НЕ 24h rolling-показник біржі, на відміну від
+    monitor_candidates.py-дельти "з минулого разу" для OI) — пряме
+    вимірювання обсягу в коротшому вікні, не зсув добового."""
+    candles = fetch_klines(
+        session, symbol, limit=MONITORING_KLINES_LIMIT, interval=MONITORING_KLINE_INTERVAL
+    )
+    if len(candles) < RSI_PERIOD + 1:
+        return {"rsi": None, "volume_spike_pct": None}
+
+    values = [c["value"] for c in candles]
+    rsi_value = rsi(values, period=RSI_PERIOD)
+
+    volumes = [c["volume"] for c in candles]
+    latest_volume = volumes[-1]
+    baseline = volumes[:-1]
+    volume_spike_pct = _pct_change(sum(baseline) / len(baseline), latest_volume) if baseline else None
+
+    return {"rsi": rsi_value, "volume_spike_pct": volume_spike_pct}
 
 
 def run_screening(limit: Optional[int] = None) -> dict[str, list]:
@@ -317,9 +357,11 @@ def run_screening(limit: Optional[int] = None) -> dict[str, list]:
                 # одноразовий висновок). upsert_candidate() сам не
                 # чіпає вже активний рядок.
                 if pump_pct is not None and pump_pct >= PUMP_THRESHOLD_PCT:
+                    binance_data = data["per_exchange"].get("binance_futures")
                     upsert_candidate(
                         conn, symbol, pump_pct, data["funding_rate_avg"],
-                        data["open_interest_usd"], data["quote_volume_24h"],
+                        data["open_interest_usd"],
+                        price=binance_data["mark_price"] if binance_data else None,
                     )
             except Exception:
                 logger.error("%s: скринінг провалився", symbol, exc_info=True)

@@ -168,9 +168,20 @@ def test_fetch_klines_returns_chronological_close_history():
 
     assert len(closes) == 3
     assert closes[0]["value"] == 60500.00
+    assert closes[0]["volume"] == 1000.0
     assert closes[0]["observed_at"] == date(2025, 9, 25)
     assert closes[-1]["value"] == 62900.00
+    assert closes[-1]["volume"] == 1500.0
     assert closes[-1]["observed_at"] == date(2025, 9, 27)
+
+
+def test_fetch_klines_passes_through_requested_interval():
+    session = FakeSession({"https://fapi.binance.com/fapi/v1/klines": KLINES_RESPONSE})
+
+    fetch_klines(session, "BTCUSDT", limit=3, interval="4h")
+
+    _, params = session.calls[-1]
+    assert params["interval"] == "4h"
 
 
 def test_fetch_klines_handles_unexpected_response_gracefully():

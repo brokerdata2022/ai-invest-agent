@@ -357,10 +357,13 @@ ORDER BY source, metric_id, observed_at DESC, revision DESC;
 -- 'candidate' при виявленні пампу; погодинний моніторинг
 -- (monitor_candidates.py) оновлює той самий рядок і переводить статус
 -- (candidate -> short/watch, або candidate/watch -> closed, коли памп
--- вичерпався). last_oi_usd/last_quote_volume — знімок з ПОПЕРЕДНЬОЇ
--- погодинної перевірки, потрібен для рахування дельти "з минулого разу"
--- (не з фіксованого вікна годин — користувач, 2026-09-27: "тримати,
--- поки дані відповідають", без таймера).
+-- вичерпався). last_oi_usd — знімок з ПОПЕРЕДНЬОЇ погодинної
+-- перевірки, потрібен для рахування дельти "з минулого разу" (не з
+-- фіксованого вікна годин — користувач, 2026-09-27: "тримати, поки
+-- дані відповідають", без таймера). last_quote_volume НЕ створюємо
+-- тут (2026-10-03) — сплеск обсягу тепер рахується з 4г-Binance
+-- klines "на льоту" (compute_monitoring_indicators), не зі
+-- збереженого 24h-знімка.
 CREATE TABLE IF NOT EXISTS crypto_screening_candidates (
     id                     BIGSERIAL PRIMARY KEY,
     symbol                 TEXT NOT NULL,
@@ -372,7 +375,6 @@ CREATE TABLE IF NOT EXISTS crypto_screening_candidates (
     last_pump_pct          NUMERIC,
     last_funding_rate      NUMERIC,
     last_oi_usd            NUMERIC,
-    last_quote_volume      NUMERIC,
     reason                 TEXT,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -574,3 +576,23 @@ CREATE TABLE IF NOT EXISTS crypto_long_candidates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_crypto_long_candidates_run_at ON crypto_long_candidates (run_at);
+
+-- last_price для crypto_screening_candidates (2026-10-03, живий кейс
+-- користувача: MAGMAUSDT не підхоплений на SHORT, хоча реальний
+-- розворот стався в межах години — pump_pct/volume_spike_pct, які
+-- вже є, рахуються з 24-ГОДИННИХ rolling-показників самих бірж
+-- (price24hPcnt/priceChangePercent), тож свіжий розворот В МЕЖАХ
+-- ГОДИНИ розмивається добовим вікном і може лишатись непоміченим
+-- кілька годин. last_price — ціна (Binance mark_price) на момент
+-- ПОПЕРЕДНЬОЇ погодинної перевірки — monitor_candidates.py рахує
+-- price_change_pct_1h = (поточна - last_price) / last_price, і це
+-- йде в short_watch_screen.py як ДОДАТКОВИЙ (не єдиний) шлях
+-- підтвердження розвороту, поруч із volume_spike_pct.
+ALTER TABLE crypto_screening_candidates ADD COLUMN IF NOT EXISTS last_price NUMERIC;
+
+-- last_quote_volume (2026-10-03): сплеск обсягу під час моніторингу
+-- тепер рахується з 4г-Binance klines "на льоту"
+-- (run_screening.py:compute_monitoring_indicators), не зі збереженого
+-- 24h-знімка біржі — колонка ніде більше не читалась (ані для
+-- рішення, ані у Telegram-виводі), прибрано, не лишено мертвою.
+ALTER TABLE crypto_screening_candidates DROP COLUMN IF EXISTS last_quote_volume;
