@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from screening_notify import format_message
@@ -27,9 +27,9 @@ def test_format_message_known_rows():
     rows = [_row("AAPL", "Apple Inc.", "1.23", "15.5"), _row("MSFT", "Microsoft Corp.", "-0.45", "-8.2")]
     text = format_message(rows)
 
-    assert "AAPL — Apple Inc." in text
+    assert "<b>AAPL</b> — Apple Inc." in text
     assert "+1.23%" in text
-    assert "MSFT — Microsoft Corp." in text
+    assert "<b>MSFT</b> — Microsoft Corp." in text
     assert "-0.45%" in text
     assert "2 тикерів" in text
     assert "дані на 2026-10-02" in text
@@ -58,13 +58,31 @@ def test_format_message_falls_back_to_ticker_when_name_missing():
     row = _row("ACME")
     row["company_name"] = None
     text = format_message([row])
-    assert "ACME — ACME" in text
+    assert "<b>ACME</b> — ACME" in text
 
 
 def test_format_message_uses_latest_price_date_when_rows_diverge():
     rows = [_row("AAPL", price_date=date(2026, 10, 1)), _row("MSFT", price_date=date(2026, 10, 2))]
     text = format_message(rows)
     assert "дані на 2026-10-02" in text
+
+
+def test_format_message_flags_stale_ticker_even_if_header_date_is_fresh():
+    # 2026-10-04, той самий принцип, що watchlist_notify.py: заголовок
+    # бере НАЙСВІЖІШУ дату серед рядків -- тикер, застряглий через
+    # ліміт Twelve Data, не повинен ховатись за цим свіжим заголовком.
+    stale_date = date.today() - timedelta(days=10)
+    rows = [_row("AAPL", price_date=date.today()), _row("ACME", price_date=stale_date)]
+    text = format_message(rows)
+
+    assert "⚠️ Застарілі ціни: ACME" in text
+    assert "AAPL" not in text.split("Застарілі ціни")[1]
+
+
+def test_format_message_no_stale_section_when_all_fresh():
+    rows = [_row("AAPL", price_date=date.today())]
+    text = format_message(rows)
+    assert "Застарілі ціни" not in text
 
 
 def test_format_message_respects_limit_but_keeps_total_count():

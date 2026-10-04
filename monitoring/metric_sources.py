@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from macro.boj_adapter import BojAdapter  # noqa: E402
 from macro.ecb_adapter import EcbAdapter  # noqa: E402
 from macro.estat_adapter import EstatAdapter  # noqa: E402
-from macro.fred_adapter import FredAdapter  # noqa: E402
+from macro.fred_adapter import DAILY_MACRO_METRICS, FredAdapter  # noqa: E402
 
 from release_calendar import RELEASE_IDS  # noqa: E402
 
@@ -35,6 +35,20 @@ ADAPTER_BY_METRIC.update({
     "japan_policy_rate": (BojAdapter, None),
     "japan_cpi": (EstatAdapter, "ESTAT_APP_ID"),
 })
+
+# ДЕННІ серії без жодного календаря релізів (не плутати з
+# CALENDAR_ONLY_METRICS нижче — там календар Є, просто не FRED-ний).
+# СВІДОМО окремий словник, а НЕ додавання в ADAPTER_BY_METRIC вище:
+# `refresh_calendar.py:126` робить `sorted(ADAPTER_BY_METRIC)` і
+# намагається завести календарний рядок для КОЖНОГО ключа — для денних
+# серій це означало б вічне "немає збігу в economic_calendar" на
+# кожному тижневому прогоні. Потрібен цей перелік для двох речей:
+# щоденного збору (orchestration/jobs.py:_macro_daily_series) і
+# прогнозу за розкладом (analysis/forecasting/forecast_daily.py) —
+# 2026-10-04, рішення користувача "облігації це обовязково".
+DAILY_ADAPTER_BY_METRIC: dict[str, tuple[type, str | None]] = {
+    metric_id: (FredAdapter, "FRED_API_KEY") for metric_id in DAILY_MACRO_METRICS
+}
 
 # Показники без FRED release-календаря — economic_calendar.py дає
 # дату напряму (find_upcoming_event()), не тільки збагачує вже відому

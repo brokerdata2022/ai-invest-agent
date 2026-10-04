@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import DIRECTION_EMOJI, fetch_dicts, resolve_telegram_credentials  # noqa: E402
+from _common import DIRECTION_EMOJI, bold, escape_html, fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 from telegram_notify import METRIC_LABELS  # noqa: E402
@@ -82,18 +82,18 @@ def _format_category(category: str) -> str:
 def format_impact_message(row: dict) -> str:
     label = METRIC_LABELS.get(row["metric_id"], row["metric_id"])
     lines = [
-        f"🌐 Вплив релізу на ринок: {label} — {row['observed_at']}",
-        row["summary"],
+        bold(f"🌐 Вплив релізу на ринок: {label} — {row['observed_at']}"),
+        escape_html(row["summary"]),
         "",
     ]
     for impact in row["asset_impacts"]:
         emoji = DIRECTION_EMOJI.get(impact.get("direction"), "❓")
         category = _format_category(impact.get("category", ""))
         assets = impact.get("assets")
-        header = f"{emoji} {category}" + (f" ({assets})" if assets else "")
+        header = f"{emoji} {bold(category)}" + (f" ({escape_html(assets)})" if assets else "")
         lines.append(header)
         if impact.get("explanation"):
-            lines.append(f"  {impact['explanation']}")
+            lines.append(f"  {escape_html(impact['explanation'])}")
     return "\n".join(lines).rstrip()
 
 
@@ -119,7 +119,7 @@ def main() -> None:
         # повинен дублювати вже надіслане на ретраї).
         for row in rows:
             text = format_impact_message(row)
-            send_telegram_message(token, chat_id, text)
+            send_telegram_message(token, chat_id, text, parse_mode="HTML")
             mark_impact_notified(conn, [row["synthesis_id"]])
         logger.info("Надіслано в Telegram: %d розборів впливу", len(rows))
     finally:

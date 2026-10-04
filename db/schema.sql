@@ -233,7 +233,9 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа'),
     ('binance_futures', 'crypto', 'official_primary', 'Binance USDⓈ-M Futures public API — bulk-знімок ринку (обсяг/funding rate) для крипто-скринінгу лонг/шорт/спостереження, без ключа (docs/decisions.md 2026-09-27)'),
     ('bybit_futures', 'crypto', 'official_primary', 'Bybit v5 public API (linear perpetual) — bulk-знімок ринку (обсяг/funding rate/Open Interest, усе в одному запиті), без ключа'),
-    ('okx_futures', 'crypto', 'official_primary', 'OKX v5 public API (SWAP) — bulk-знімок ринку (обсяг/Open Interest), без ключа')
+    ('okx_futures', 'crypto', 'official_primary', 'OKX v5 public API (SWAP) — bulk-знімок ринку (обсяг/Open Interest), без ключа'),
+    ('web_crosscheck', 'commodities', 'unofficial', 'ОСТАННІЙ резерв (2026-10-04, rule 7 CLAUDE.md) — лише коли для watchlist-активу НЕМАЄ жодного автоматизованого джерела (ні структурований API, ні скрапінг-адаптер типу tradingeconomics_adapter.py). Значення — ручний/LLM-веб-пошук, звірений МІНІМУМ на 2 сайтах (common/manual_observation.py), raw_payload містить source_refs. НЕ в розкладі APScheduler — вимагає LLM-сесію на КОЖНЕ оновлення (живий урок: coffee/wti_crude/brent_crude/natgas протрималися тут лише кілька годин цієї сесії, доки не знайшовся справжній автоматизований tradingeconomics-скрапінг, на який їх і перемкнуто — UPDATE нижче).'),
+    ('tradingeconomics', 'commodities', 'unofficial', 'Скрапінг tradingeconomics.com/commodity/<slug> (2026-10-04, commodities/tradingeconomics_adapter.py) — ціна+дата парситься з <meta name="description"> (живо підтверджено стабільний формат на 5 товарах, звичайний requests.get(), жодного JS/бот-захисту, на відміну від Stooq, відкинутого 2026-09-20). Джерело для watchlist-товарів, яким основне джерело не дає надійної щоденної ціни: coffee (FRED — місячна серія), wti_crude/brent_crude/natgas (FRED живо застряг на кілька днів), xauusd (ІНША причина — Twelve Data forex-OTC ревізії того самого дня розходились на 80+ пунктів заднім числом, docs/decisions.md). На розкладі _watchlist_prices — автоматично, без людини, на відміну від web_crosscheck вище.')
 ON CONFLICT (name) DO NOTHING;
 
 -- Порівняння факту з ринковим очікуванням для одного циклу релізу
@@ -595,4 +597,160 @@ ALTER TABLE crypto_screening_candidates ADD COLUMN IF NOT EXISTS last_price NUME
 -- (run_screening.py:compute_monitoring_indicators), не зі збереженого
 -- 24h-знімка біржі — колонка ніде більше не читалась (ані для
 -- рішення, ані у Telegram-виводі), прибрано, не лишено мертвою.
+
+-- Ранковий огляд календаря релізів (analysis/calendar_outlook/,
+-- docs/decisions.md 2026-10-03): у понеділок — огляд на весь тиждень
+-- (scope='week'), в інший робочий день — лише на сьогодні
+-- (scope='day'). release_log_ids — які 'pending'-рядки release_log
+-- увійшли в огляд (для форматування деталей у Telegram, reporting/
+-- не рахує нічого самостійно). Один рядок на (outlook_date, scope) —
+-- idempotent: повторний прогін тієї самої доби (напр. ретрай
+-- orchestration/runner.py) не дублює LLM-виклик.
+CREATE TABLE IF NOT EXISTS calendar_outlook (
+    id              BIGSERIAL PRIMARY KEY,
+    outlook_date    DATE NOT NULL,
+    scope           TEXT NOT NULL,       -- week | day
+    release_log_ids BIGINT[] NOT NULL,
+    direction       TEXT NOT NULL,       -- up | down | neutral | unclear
+    confidence      NUMERIC NOT NULL,
+    summary         TEXT NOT NULL,
+    reasoning       TEXT NOT NULL,
+    llm_call_id     BIGINT REFERENCES llm_call_log(id),
+    notified_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (outlook_date, scope)
+);
 ALTER TABLE crypto_screening_candidates DROP COLUMN IF EXISTS last_quote_volume;
+
+-- Telegram-команди людською мовою (orchestration/telegram_commands.py,
+-- docs/decisions.md 2026-10-03) — ручний запуск джоб через Telegram
+-- замість `docker compose exec app python orchestration/run_job.py`.
+-- Один рядок (id=1), той самий принцип, що scheduler_heartbeat:
+-- last_update_id — update_id останнього вже ОБРОБЛЕНОГО Telegram-
+-- оновлення (getUpdates offset = last_update_id + 1 для наступного
+-- опитування, щоб не обробити те саме повідомлення двічі).
+CREATE TABLE IF NOT EXISTS telegram_command_offset (
+    id             SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_update_id BIGINT NOT NULL DEFAULT 0
+);
+
+-- Watchlist — активи поза акціями S&P 500 (docs/watchlist.md, закрито
+-- 2026-09-25), тепер ОДНЕ джерело істини для news/queries.py
+-- (GDELT query), analysis/news_analysis/prices.py (ціна↔новини,
+-- tracked_assets), orchestration/jobs.py (_watchlist_prices) і
+-- reporting/watchlist_notify.py — раніше один і той самий набір був
+-- хардкоджений окремо в кожному з цих файлів (docs/decisions.md
+-- 2026-10-03, рішення користувача: "редагування списку обраних
+-- активів через Telegram"). Seed нижче — БУКВ-У-БУКВУ той самий
+-- список, що був хардкоджений — нуль зміни поведінки "з коробки".
+--
+-- ticker — потрібен лише для source='twelvedata' (адаптер бере тикер
+-- як параметр конструктора, напр. "GBP/USD" — єдине джерело, де
+-- Telegram-команда може додати НОВИЙ актив БЕЗ зміни коду:
+-- fred/binance/coingecko мають фіксований словник METRICS у своєму
+-- адаптері, новий актив там так і вимагає коду).
+CREATE TABLE IF NOT EXISTS watchlist_assets (
+    asset_id    TEXT PRIMARY KEY,
+    source      TEXT NOT NULL,       -- fred | twelvedata | binance | coingecko
+    metric_id   TEXT NOT NULL,
+    ticker      TEXT,
+    label       TEXT NOT NULL,
+    search_term TEXT,                -- GDELT-термін для новин (news/queries.py); NULL = не бере участі в GDELT-запиті
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    added_via   TEXT NOT NULL DEFAULT 'seed',  -- seed | telegram
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 2026-10-04 (docs/decisions.md, живий кейс "BNB" зламав ЦІЛИЙ
+-- watchlist GDELT-запит): search_term тепер МОЖЕ бути NULL — коли
+-- /watchlist_add live-перевірив термін через GDELT і він НЕ пройшов
+-- (навіть після спроби розширити), актив усе одно додається (ціна й
+-- далі збирається), просто без участі в новинному запиті. ALTER, не
+-- тільки CREATE — таблиця вже існувала з NOT NULL до цієї зміни.
+ALTER TABLE watchlist_assets ALTER COLUMN search_term DROP NOT NULL;
+
+INSERT INTO watchlist_assets (asset_id, source, metric_id, ticker, label, search_term) VALUES
+    ('xauusd', 'tradingeconomics', 'xauusd', 'gold', 'Золото (XAU/USD)', '"gold price"'),
+    ('xagusd', 'coingecko', 'xagusd_close', NULL, 'Срібло (XAG/USD)', '"silver price"'),
+    ('wti_crude', 'tradingeconomics', 'wti_crude', 'crude-oil', 'Нафта WTI', '"WTI crude"'),
+    ('brent_crude', 'tradingeconomics', 'brent_crude', 'brent-crude-oil', 'Нафта Brent', '"Brent crude"'),
+    ('coffee', 'tradingeconomics', 'coffee', 'coffee', 'Кава', '"coffee futures"'),
+    ('eurusd', 'twelvedata', 'eurusd_close', 'EUR/USD', 'EUR/USD', '"EUR/USD"'),
+    ('usdjpy', 'twelvedata', 'usdjpy_close', 'USD/JPY', 'USD/JPY', '"USD/JPY"'),
+    ('btc', 'binance', 'btc_close', NULL, 'BTC/USDT', 'Bitcoin'),
+    ('eth', 'binance', 'eth_close', NULL, 'ETH/USDT', 'Ethereum'),
+    ('sol', 'binance', 'sol_close', NULL, 'SOL/USDT', 'Solana')
+ON CONFLICT (asset_id) DO NOTHING;
+
+-- 2026-10-04 (critical rule 7, CLAUDE.md): /watchlist_add NATGAS не
+-- підтвердився ні на Twelve Data, ні на Binance (живий тест
+-- користувача) — додано кодом, не через Telegram.
+-- search_term — live-перевірка GDELT ще НЕ пройдена (на відміну від
+-- seed-рядків вище, перевірених при оригінальному watchlist 2026-09-25) —
+-- якщо GDELT відхилить, викликати common/watchlist_db.py:set_search_term(conn, 'natgas', None).
+INSERT INTO watchlist_assets (asset_id, source, metric_id, ticker, label, search_term) VALUES
+    ('natgas', 'tradingeconomics', 'natgas', 'natural-gas', 'Природний газ (Henry Hub)', '"natural gas price"')
+ON CONFLICT (asset_id) DO NOTHING;
+
+-- 2026-10-04 (критичне правило 7 — три послідовні живі скарги
+-- користувача того самого дня, докладно docs/decisions.md): coffee/
+-- wti_crude/brent_crude/natgas — ВСІ ЧОТИРИ товарні FRED-серії
+-- застрягли на 2026-09-29 одночасно (FRED-публікація зупинилась, не
+-- наш збір), coffee до того ж genuinely МІСЯЧНА (PCOFFOTMUSDM).
+-- Проміжний крок (ручний крос-чек, source='web_crosscheck',
+-- common/manual_observation.py) сам протримався лише кілька годин
+-- цієї сесії — вимагав LLM-сесію на КОЖНЕ оновлення, тому фінальне
+-- джерело — commodities/tradingeconomics_adapter.py (справжній
+-- автоматизований скрапінг, на розкладі `_watchlist_prices`, щодня,
+-- без людини). `source IN ('fred', 'web_crosscheck')` -- покриває і
+-- БД, що ніколи не бачила проміжного кроку, і цю сесію, що вже на
+-- ньому встигла побувати. UPDATE, не лише змінений seed вище
+-- (ON CONFLICT DO NOTHING не чіпає рядок, що вже існує в БД).
+UPDATE watchlist_assets
+SET source = 'tradingeconomics',
+    ticker = CASE asset_id
+        WHEN 'coffee' THEN 'coffee'
+        WHEN 'wti_crude' THEN 'crude-oil'
+        WHEN 'brent_crude' THEN 'brent-crude-oil'
+        WHEN 'natgas' THEN 'natural-gas'
+    END
+WHERE asset_id IN ('coffee', 'wti_crude', 'brent_crude', 'natgas')
+  AND source IN ('fred', 'web_crosscheck');
+
+-- 2026-10-04 (той самий механізм, ІНША причина — живий фідбек
+-- користувача: синтез показав "+0.55%" для золота за тиждень, коли
+-- реальний рух — зниження). Корінь — НЕ застарілість (xauusd
+-- оновлювався кожен день), а НЕСТАБІЛЬНІ ревізії Twelve Data
+-- forex-OTC котирування: той самий 2026-09-28 живо підтверджено
+-- отримав дві ревізії з різницею 81 пункт (4196.13 -> 4115.08) ВЖЕ
+-- ПІСЛЯ закриття дня -- v_observations_latest_revision бере останню,
+-- не обов'язково точнішу (докладніше docs/decisions.md). ticker 'gold' —
+-- URL-слаг TradingEconomics; metric_id без "_close"-суфіксу (той
+-- самий принцип, що решта tradingeconomics-активів) -- стара
+-- twelvedata-історія (metric_id='xauusd_close') лишається в
+-- raw_observations назавжди (rule 6), просто більше не читається.
+UPDATE watchlist_assets
+SET source = 'tradingeconomics', metric_id = 'xauusd', ticker = 'gold'
+WHERE asset_id = 'xauusd' AND source = 'twelvedata';
+
+-- 2026-10-04: metric_forecasts — LLM-прогноз замість Python-моделі
+-- (рішення користувача 2026-09-28, docs/decisions.md; PLAN.md Фаза 2 +
+-- Фаза 5 "Прогнозування — LLM замість Python-моделі"). Таблиця вже
+-- існувала під `method='linear_trend'` і містила ЛИШЕ число
+-- (forecast_value) — для LLM-прогнозу цього мало: потрібне те саме
+-- структуроване обґрунтування, що в решти LLM-виходів проєкту
+-- (analysis/CLAUDE.md "Формат виходу LLM-аналізу": direction/
+-- confidence/summary/reasoning + аудит-лог виклику, rule 5).
+-- Усі колонки NULLABLE — старі `linear_trend`-рядки (і сам
+-- `linear_trend`, що лишається naive-базовою лінією для backtest)
+-- їх не мають і не повинні мати.
+-- notified_at — той самий дедуп-патерн, що expectation_comparisons/
+-- calendar_outlook (reporting/_common.py:mark_notified): до цієї зміни
+-- metric_forecasts НІКУДИ не виходила (жодного notify-скрипта) —
+-- явний пропуск, зафіксований у PLAN.md Фаза 2.
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS direction TEXT;
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS confidence NUMERIC;
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS reasoning TEXT;
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS llm_call_id BIGINT REFERENCES llm_call_log (id);
+ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;

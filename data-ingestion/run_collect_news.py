@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.db import get_connection  # noqa: E402
 from common.news_db import insert_news_batch  # noqa: E402
+from common.watchlist_db import fetch_terms  # noqa: E402
 from news.gdelt_adapter import GdeltAdapter, GdeltError  # noqa: E402
 from news.queries import (  # noqa: E402
     build_general_queries,
@@ -35,12 +36,27 @@ from news.queries import (  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _build_watchlist_queries() -> list[str]:
+    """Власне, коротке з'єднання лише для читання живих watchlist-
+    термінів (common/watchlist_db.py:fetch_terms, редагується через
+    Telegram, docs/decisions.md 2026-10-03) — окремо від головного
+    conn нижче (insert_news_batch), щоб не змінювати структуру main()
+    заради одного раннього читання."""
+    conn = get_connection()
+    try:
+        terms = fetch_terms(conn)
+    finally:
+        conn.close()
+    return [build_watchlist_query(terms)]
+
+
 # Кожен білдер повертає list[str] — один чи кілька окремих GDELT-запитів
 # для того самого стріму (general — два, через ліміт довжини GDELT,
 # news/queries.py). watchlist лишається одним, обгорнутим у список для
 # однакової обробки нижче.
 QUERY_BUILDERS = {
-    "watchlist": lambda: [build_watchlist_query()],
+    "watchlist": _build_watchlist_queries,
     "general": build_general_queries,
 }
 

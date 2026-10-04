@@ -49,7 +49,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import fetch_dicts, resolve_telegram_credentials  # noqa: E402
+from _common import bold, escape_html, fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 from telegram_notify import METRIC_LABELS  # noqa: E402
@@ -94,18 +94,18 @@ def format_message(rows: list[dict]) -> str:
     if not rows:
         return "📊 Нових порівнянь факт/очікування немає."
 
-    lines = [f"📊 Факт vs очікування ({len(rows)}):", ""]
+    lines = [bold(f"📊 Факт vs очікування ({len(rows)}):"), ""]
     for row in rows:
         label = METRIC_LABELS.get(row["metric_id"], row["metric_id"])
         pct_suffix = f" ({row['surprise_pct']:+.1f}%)" if row["surprise_pct"] is not None else ""
-        lines.append(f"{label} — {row['observed_at']}")
+        lines.append(bold(f"{label} — {row['observed_at']}"))
         lines.append(
             f"Факт {float(row['actual_value']):.4g} vs очікування "
-            f"{float(row['expected_value_parsed']):.4g} (прогноз: {row['expected_value_raw']})"
+            f"{float(row['expected_value_parsed']):.4g} (прогноз: {escape_html(row['expected_value_raw'])})"
         )
         lines.append(f"Сюрприз: {float(row['surprise']):+.4g}{pct_suffix}")
         if row.get("synthesis_summary"):
-            lines.append(f"→ {row['synthesis_summary']}")
+            lines.append(f"→ {escape_html(row['synthesis_summary'])}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -131,7 +131,7 @@ def main() -> None:
             return
 
         text = format_message(rows)
-        send_telegram_message(token, chat_id, text)
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, [row["id"] for row in rows])
         logger.info("Надіслано в Telegram: %d порівнянь", len(rows))
     finally:

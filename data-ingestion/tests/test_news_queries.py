@@ -34,6 +34,13 @@ def test_watchlist_asset_ids_match_watchlist_terms_keys():
     assert WATCHLIST_ASSET_IDS == list(WATCHLIST_TERMS)
 
 
+def test_build_watchlist_query_uses_explicit_terms_when_given():
+    # 2026-10-03: run_collect_news.py передає живий словник з БД
+    # (common/watchlist_db.py:fetch_terms) замість статичного фолбеку.
+    query = build_watchlist_query({"gbpusd": '"GBP/USD"'})
+    assert query == '("GBP/USD")'
+
+
 def test_build_stocks_query_uses_company_name_when_known():
     query = build_stocks_query({"NVDA": "NVIDIA Corporation", "AAPL": "Apple Inc."})
     assert '"NVIDIA Corporation"' in query

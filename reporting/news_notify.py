@@ -38,7 +38,15 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import DIRECTION_EMOJI, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    DIRECTION_EMOJI,
+    bold,
+    escape_html,
+    fetch_dicts,
+    link,
+    mark_notified,
+    resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -164,8 +172,13 @@ def format_item(row: dict) -> str:
     emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
     asset = row["asset_id"] or "—"
     source_note = f" ({row['source_count']} джерел)" if row["source_count"] > 1 else ""
-    lines = [f"{emoji} [{asset}] {row['summary']}{source_note}"]
-    lines.extend(row["source_urls"][:3])  # не роздувати повідомлення, якщо джерел багато
+    header = f"{emoji} {bold(f'[{asset}]')} {escape_html(row['summary'])}{source_note}"
+    lines = [header]
+    # Клікабельні посилання замість голих URL — не роздувати повідомлення,
+    # якщо джерел багато (той самий ліміт [:3], що був).
+    lines.extend(
+        f"🔗 {link(f'Джерело {i}', url)}" for i, url in enumerate(row["source_urls"][:3], start=1)
+    )
     return "\n".join(lines)
 
 
@@ -176,7 +189,7 @@ def batch_messages(rows: list[dict], max_chars: int = MAX_MESSAGE_CHARS) -> list
     if not rows:
         return []
 
-    header = f"📰 Важливі новини ({len(rows)}):"
+    header = bold(f"📰 Важливі новини ({len(rows)}):")
     messages: list[str] = []
     current = [header]
     current_len = len(header)
@@ -234,7 +247,7 @@ def main() -> None:
 
         token, chat_id = resolve_telegram_credentials()
         for text in messages:
-            send_telegram_message(token, chat_id, text)
+            send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "news_consolidated", [row["id"] for row in rows])
 
         logger.info("Надіслано в Telegram: %d новин, %d повідомлень", len(rows), len(messages))

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import news_analysis.prices as prices_module
@@ -8,6 +8,7 @@ from news_analysis.prices import (
     _resolve_price_source,
     compute_pct_change,
     fetch_latest_observed_at,
+    fetch_price_change,
     fetch_price_history,
     is_anomalous_move,
 )
@@ -41,8 +42,21 @@ def test_compute_pct_change_no_movement():
 
 
 def test_asset_price_sources_known_watchlist_assets():
-    assert ASSET_PRICE_SOURCES["xauusd"] == ("twelvedata", "xauusd_close")
-    assert ASSET_PRICE_SOURCES["coffee"] == ("fred", "coffee")  # IMF/FRED, genuinely monthly -- лишено як є
+    # 2026-10-04: xauusd перемкнуто з twelvedata на tradingeconomics --
+    # НЕ через застарілість, а через нестабільні заднім числом ревізії
+    # Twelve Data forex-OTC котирування (той самий 2026-09-28 отримав
+    # 2 ревізії з різницею 81 пункт).
+    assert ASSET_PRICE_SOURCES["xauusd"] == ("tradingeconomics", "xauusd")
+    # 2026-10-04 (critical rule 7, CLAUDE.md): coffee/wti_crude/
+    # brent_crude/natgas -- усі чотири товарні FRED-серії застрягли чи
+    # мали принципово недостатню частоту -- перемкнуто на
+    # tradingeconomics (commodities/tradingeconomics_adapter.py,
+    # справжній автоматизований скрапінг на розкладі, не ручний
+    # крос-чек) -- "один працюючий код", не разовий фікс на кожен актив.
+    assert ASSET_PRICE_SOURCES["coffee"] == ("tradingeconomics", "coffee")
+    assert ASSET_PRICE_SOURCES["wti_crude"] == ("tradingeconomics", "wti_crude")
+    assert ASSET_PRICE_SOURCES["brent_crude"] == ("tradingeconomics", "brent_crude")
+    assert ASSET_PRICE_SOURCES["natgas"] == ("tradingeconomics", "natgas")
 
 
 def test_asset_price_sources_eurusd_usdjpy_use_twelvedata_not_fred():
@@ -85,6 +99,19 @@ def test_resolve_price_source_falls_back_to_twelvedata_convention_for_ticker():
 
 def test_resolve_price_source_fallback_lowercases_ticker():
     assert _resolve_price_source("NVDA") == ("twelvedata", "nvda_close")
+
+
+def test_resolve_price_source_uses_explicit_price_sources_when_given():
+    # 2026-10-03: живий (редагований через Telegram) список —
+    # common/watchlist_db.py:fetch_price_sources(conn) — перекриває
+    # статичний ASSET_PRICE_SOURCES, коли переданий явно.
+    live_sources = {"gbpusd": ("twelvedata", "gbpusd_close")}
+    assert _resolve_price_source("gbpusd", live_sources) == ("twelvedata", "gbpusd_close")
+
+
+def test_resolve_price_source_explicit_price_sources_still_falls_back_for_unknown():
+    live_sources = {"gbpusd": ("twelvedata", "gbpusd_close")}
+    assert _resolve_price_source("AAPL", live_sources) == ("twelvedata", "aapl_close")
 
 
 # --- Регресія 2026-09-29: fetch_price_change() поверне None однаково і
@@ -135,7 +162,68 @@ def test_fetch_latest_observed_at_uses_resolved_source_and_no_days_filter():
     fetch_latest_observed_at(conn, "wti_crude")
     query, params = conn.cursor_obj.executed
     assert "days" not in query  # на відміну від fetch_price_change — вікно тут навмисно не застосовується
-    assert params == ("fred", "wti_crude")
+    assert params == ("tradingeconomics", "wti_crude")  # 2026-10-04: wti_crude перемкнуто на tradingeconomics
+
+
+def test_fetch_latest_observed_at_honors_explicit_price_sources():
+    conn = _FakeConn((None,))
+    fetch_latest_observed_at(conn, "gbpusd", price_sources={"gbpusd": ("twelvedata", "gbpusd_close")})
+    _, params = conn.cursor_obj.executed
+    assert params == ("twelvedata", "gbpusd_close")
+
+
+# --- 2026-10-04, живий фідбек користувача: synthesize.py видав "Brent
+# -5.01%" з пари точок 6-денної давнини -- технічно "в межах" 7-денного
+# вікна `days`, але вже не поточний стан ринку. fetch_price_change()
+# тепер додатково вимагає, щоб НАЙНОВІША точка сама не була застарілою
+# (common/freshness.py:is_stale(), БУДНІ дні відносно date.today()).
+
+
+class _FakeRowsCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self.executed = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, query, params):
+        self.executed = (query, params)
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeRowsConn:
+    def __init__(self, rows):
+        self.cursor_obj = _FakeRowsCursor(rows)
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def test_fetch_price_change_returns_none_when_latest_point_is_stale():
+    # 10 календарних днів -- мінімум 6 будніх днів за будь-якого
+    # вирівнювання тижня, гарантовано понад STALE_THRESHOLD_BUSINESS_DAYS
+    # незалежно від того, яким днем тижня є date.today() під час прогону.
+    stale_end = date.today() - timedelta(days=10)
+    stale_start = stale_end - timedelta(days=1)
+    conn = _FakeRowsConn([(stale_start, "120.00"), (stale_end, "113.96")])
+    assert fetch_price_change(conn, "brent_crude") is None
+
+
+def test_fetch_price_change_returns_result_when_latest_point_is_fresh():
+    # observed_at = сьогодні -- 0 будніх днів розриву за будь-якого дня
+    # тижня, трівіально не застаріло.
+    fresh_end = date.today()
+    fresh_start = fresh_end - timedelta(days=1)
+    conn = _FakeRowsConn([(fresh_start, "100.00"), (fresh_end, "105.00")])
+    change = fetch_price_change(conn, "brent_crude")
+    assert change is not None
+    assert change.pct_change == Decimal("5")
 
 
 # --- 2026-10-02, живий фідбек користувача: синтез не має залежати

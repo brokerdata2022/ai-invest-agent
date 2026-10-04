@@ -24,8 +24,19 @@ Telegram-креденшелів, словники емодзі напрямку,
   `expectations_notify.py`/`expectations._db.mark_notified` — тут
   узагальнено на решту 4 notify-скриптів, СВОЇМ кодом (не імпортом з
   analysis/, contained independence нижче).
+- `escape_html()`/`bold()`/`link()` — хелпери для Telegram
+  `parse_mode="HTML"` (2026-10-03, рішення користувача: гарне
+  форматування усіх повідомлень — заголовки/списки/посилання/емодзі).
+  `escape_html()` ОБОВ'ЯЗКОВИЙ навколо будь-якого динамічного тексту
+  (LLM summary/reasoning, назви компаній, заголовки новин) перед
+  вставкою в HTML-рядок — інакше символ "<"/"&" у тексті ламає парсинг
+  Telegram (400 Bad Request). Сам Telegram HTML підтримує лише вузький
+  набір тегів (b/i/u/s/a/code/pre/blockquote) — немає <ul>/<li>/<h1>,
+  тому "заголовки" тут — жирний рядок, а "списки" — рядки з емодзі-
+  маркером (той самий принцип, що вже був у форматі повідомлень).
 """
 
+import html
 import logging
 import os
 import sys
@@ -87,8 +98,28 @@ def fetch_one_dict(conn, query: str, params: tuple = ()):
 _NOTIFIABLE_TABLES = frozenset({
     "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
     "news_consolidated", "screening_results", "crypto_screening_candidates",
-    "crypto_long_candidates",
+    "crypto_long_candidates", "calendar_outlook", "metric_forecasts",
 })
+
+
+def escape_html(value) -> str:
+    """Екранує '&'/'<'/'>' для Telegram parse_mode="HTML" — обов'язково
+    навколо будь-якого динамічного тексту (не навколо тегів, які
+    будуємо самі). `quote=False` — лапки в тексті ("), не в атрибутах
+    тегів, екранувати не треба (єдине місце з атрибутом — href у
+    link() нижче, де escape_html() застосовується саме до URL)."""
+    return html.escape(str(value), quote=False)
+
+
+def bold(value) -> str:
+    """'<b>текст</b>' із заголовком (ескейпнутим) усередині."""
+    return f"<b>{escape_html(value)}</b>"
+
+
+def link(text, url) -> str:
+    """Клікабельне посилання '<a href="...">текст</a>' — і текст, і URL
+    ескейпнуті (href теж може містити "&" у query-рядку)."""
+    return f'<a href="{escape_html(url)}">{escape_html(text)}</a>'
 
 
 def mark_notified(conn, table: str, ids: list[int]) -> None:

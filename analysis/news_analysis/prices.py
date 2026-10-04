@@ -23,6 +23,22 @@ from decimal import Decimal
 from typing import Optional
 
 from common.db import fetch_recent
+from common.freshness import is_stale as _is_stale
+
+# Критичне правило 7 (CLAUDE.md, 2026-10-04) — "свіжість даних,
+# предмет постійної перевірки" стосується НЕ ЛИШЕ reporting/
+# watchlist_notify.py (де вже є такий самий поріг), а й САМОГО аналізу:
+# живий кейс користувача — synthesize.py видав висновок "Brent -5.01%"
+# з пари точок 2026-09-28/29, хоча на момент прогону (2026-10-04) це
+# вже 6-денної давнини дані. Корінь причини: fetch_price_change() нижче
+# фільтрував лише "чи є 2+ точки ДЕСЬ у вікні `days`" — пара точок,
+# застрягла на 6 днів тому, і далі технічно "в межах" 7-денного вікна,
+# тому проходила як ніби свіжий сигнал. Поріг — `common/freshness.py:
+# is_stale()` (той самий спільний модуль, що reporting/watchlist_notify.py
+# імпортує — 2026-10-04, доповнення: "три дні це багато" — фіксовані 3
+# КАЛЕНДАРНІ дні замінено на БУДНІ дні, щоб не карати форекс/товари за
+# закритий у вихідні ринок, і водночас ловити 2-денну застарілість на
+# буднях, яку 3 календарні дні пропускали б).
 
 # Скільки стандартних відхилень денного руху вважати "аномальним" за
 # вікно — не підтверджено backtest'ом (це сповіщувальний порІг, не
@@ -62,14 +78,42 @@ ANOMALY_HISTORY_LOOKBACK = 90
 # форекс-символу зі слешем (xauusd нижче), EUR/USD і USD/JPY —
 # мейнстрім-пари, мають бути як мінімум не гірше покриті.
 #
-# coffee — FRED (PCOFFOTMUSDM, IMF) ЗАЛИШЕНО як є: живо підтверджено на
-# fred.stlouisfed.org — серія genuinely МІСЯЧНА ("Monthly", останнє
-# спостереження липень 2026, "Next Release Date: Not Available"), липень
-# -- не застаріла колекція, а справді найновіша доступна точка. Вікно
-# синтезу 7 днів (`synthesize.py --max-age-days`) структурно ніколи не
-# покриє місячний ряд — відома, свідома прогалина, не виправляється
-# зміною джерела (кращого безкоштовного ЩОДЕННОГО джерела кави не
-# шукали — поза обсягом цієї зміни).
+# coffee/wti_crude/brent_crude/natgas — УСІ ЧОТИРИ товарні FRED-серії
+# watchlist ПЕРЕМКНУТО на tradingeconomics (2026-10-04, critical rule 7
+# CLAUDE.md, рішення користувача: "мені не потрібні фікси на окремі
+# дані, мені потрібний один працюючий код — основне джерело + резерв +
+# працювати тільки з свіжими даними"). coffee — FRED (PCOFFOTMUSDM,
+# IMF) живо підтверджено МІСЯЧНА серія; wti_crude/brent_crude/natgas —
+# формально ЩОДЕННІ FRED-серії, але живо підтверджено жодна НЕ
+# публікувала нових точок 3+ бізнес-дні поспіль (застрягли на
+# 2026-09-29 одночасно). Проміжний крок (ручний крос-чек,
+# source="web_crosscheck", common/manual_observation.py) вимагав LLM-
+# сесію на КОЖНЕ оновлення — протримався лише кілька годин цієї сесії.
+# Фінальне джерело — commodities/tradingeconomics_adapter.py: справжній
+# автоматизований скрапінг tradingeconomics.com/commodity/<slug> (ціна+
+# дата з <meta name="description">, живо підтверджено стабільний
+# формат, requests.get() без JS/бот-захисту), на розкладі
+# `_watchlist_prices`, ЩОДНЯ, без людини — закриває прогалину
+# НАЗАВЖДИ, не разово. `web_crosscheck` лишається ОСТАННІМ резервом
+# (db/schema.sql) для гіпотетичного майбутнього активу, якому немає
+# жодного автоматизованого джерела взагалі. reporting/watchlist_notify.py
+# додатково й надалі АКТИВНО позначає застарілі рядки
+# (common/freshness.py:is_stale()) — захист навіть якщо
+# tradingeconomics колись сам застрягне. Стара fred-історія
+# лишається в raw_observations назавжди для всіх чотирьох (rule 6).
+#
+# xauusd — ТЕЖ tradingeconomics (2026-10-04), але ІНША причина, не
+# застарілість (twelvedata оновлювався щодня): живий фідбек
+# користувача — синтез порахував "+0.55%" за тиждень, коли золото
+# РЕАЛЬНО впало. Корінь — Twelve Data forex-OTC котирування нестабільне
+# ЗАДНІМ ЧИСЛОМ: той самий 2026-09-28 отримав дві ревізії з різницею
+# 81 пункт (4196.13 -> 4115.08), і `v_observations_latest_revision`
+# бере останню, не обов'язково точнішу (звірка з investing.com
+# futures показала — жодна з двох ревізій не була стабільно ближчою
+# до реальності, це властивість джерела — немає єдиного офіційного
+# сетлменту в OTC, не помилка парсингу). TradingEconomics дає ОДНЕ
+# число на день без цього внутрішнього дрейфу. Стара twelvedata-
+# історія (metric_id="xauusd_close") лишається назавжди (rule 6).
 #
 # btc/eth/sol — crypto/binance_adapter.py (metric_id=f"{id}_close",
 # source="binance"), той самий ключ, що WATCHLIST_ASSET_IDS
@@ -85,12 +129,13 @@ ANOMALY_HISTORY_LOOKBACK = 90
 # завжди повертав None — синтез (synthesize.py) ЦІЛКОМ пропускав усі
 # чотири активи watchlist, хоча ціна насправді вже збиралась.
 ASSET_PRICE_SOURCES: dict[str, tuple[str, str]] = {
-    "xauusd": ("twelvedata", "xauusd_close"),
+    "xauusd": ("tradingeconomics", "xauusd"),
     "xagusd": ("coingecko", "xagusd_close"),
-    "wti_crude": ("fred", "wti_crude"),
-    "brent_crude": ("fred", "brent_crude"),
+    "wti_crude": ("tradingeconomics", "wti_crude"),
+    "brent_crude": ("tradingeconomics", "brent_crude"),
     "eurusd": ("twelvedata", "eurusd_close"),
-    "coffee": ("fred", "coffee"),
+    "coffee": ("tradingeconomics", "coffee"),
+    "natgas": ("tradingeconomics", "natgas"),
     "usdjpy": ("twelvedata", "usdjpy_close"),
     "btc": ("binance", "btc_close"),
     "eth": ("binance", "eth_close"),
@@ -98,15 +143,20 @@ ASSET_PRICE_SOURCES: dict[str, tuple[str, str]] = {
 }
 
 
-def _resolve_price_source(asset_id: str) -> tuple[str, str]:
-    """Для watchlist-товарів/форексу — явний мапінг вище. Для БУДЬ-ЯКОГО
-    іншого asset_id (тикери акцій зі скринінгу, docs/news-purpose.md
-    "Ціль 2") — здогад за конвенцією, якою quotes/twelvedata_adapter.py
-    сам будує metric_id (`f"{ticker.lower()}_close"`). Безпечно: якщо
-    здогад хибний (актив насправді з іншого джерела, напр. крипта) —
-    просто не знайдеться жодного спостереження, fetch_price_change()
-    поверне None, як і раніше."""
-    mapping = ASSET_PRICE_SOURCES.get(asset_id)
+def _resolve_price_source(asset_id: str, price_sources: dict[str, tuple[str, str]] = None) -> tuple[str, str]:
+    """Для watchlist-товарів/форексу — явний мапінг (`price_sources`,
+    None=дефолт падає на ASSET_PRICE_SOURCES нижче — викликач, що хоче
+    ЖИВИЙ, редагований через Telegram список, передає
+    `common/watchlist_db.py:fetch_price_sources(conn)` явно, 2026-10-03,
+    docs/decisions.md). Для БУДЬ-ЯКОГО іншого asset_id (тикери акцій зі
+    скринінгу, docs/news-purpose.md "Ціль 2") — здогад за конвенцією,
+    якою quotes/twelvedata_adapter.py сам будує metric_id
+    (`f"{ticker.lower()}_close"`). Безпечно: якщо здогад хибний (актив
+    насправді з іншого джерела, напр. крипта) — просто не знайдеться
+    жодного спостереження, fetch_price_change() поверне None, як і
+    раніше."""
+    effective_sources = price_sources if price_sources is not None else ASSET_PRICE_SOURCES
+    mapping = effective_sources.get(asset_id)
     if mapping is not None:
         return mapping
     return ("twelvedata", f"{asset_id.lower()}_close")
@@ -140,13 +190,22 @@ def compute_pct_change(
     )
 
 
-def fetch_price_change(conn, asset_id: str, days: int = 7) -> Optional[PriceChange]:
+def fetch_price_change(
+    conn, asset_id: str, days: int = 7, price_sources: dict[str, tuple[str, str]] = None
+) -> Optional[PriceChange]:
     """Перше й останнє значення (v_observations_latest_revision) за
     останні `days` днів для asset_id — None, якщо немає даних у вікні
-    (для watchlist-товарів/форексу — ASSET_PRICE_SOURCES; для інших
-    asset_id, напр. тикерів акцій — здогад _resolve_price_source(),
-    теж природно дає None за відсутності даних)."""
-    source, metric_id = _resolve_price_source(asset_id)
+    (для watchlist-товарів/форексу — price_sources/ASSET_PRICE_SOURCES;
+    для інших asset_id, напр. тикерів акцій — здогад
+    _resolve_price_source(), теж природно дає None за відсутності
+    даних), І None, якщо найновіша точка сама застаріла
+    (common/freshness.py:is_stale() — докстрінг модуля вище) — вікно
+    `days` саме по собі НЕ гарантує свіжості: пара точок, застрягла
+    6 днів тому, технічно "в межах" 7-денного вікна, але вже не
+    відображає поточний стан ринку. Викликач (synthesize.py) трактує
+    None так само, як "даних у вікні немає" — fetch_latest_observed_at()
+    окремо дає чесне "ЗАСТАРІЛА" замість мовчазного пропуску."""
+    source, metric_id = _resolve_price_source(asset_id, price_sources)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -165,26 +224,29 @@ def fetch_price_change(conn, asset_id: str, days: int = 7) -> Optional[PriceChan
         return None
 
     (start_date, start_value), (end_date, end_value) = rows[0], rows[-1]
+    if _is_stale(end_date):
+        return None
+
     return compute_pct_change(
         asset_id, Decimal(start_value), str(start_date), Decimal(end_value), str(end_date)
     )
 
 
 def fetch_all_price_changes(
-    conn, asset_ids: list[str], days: int = 7
+    conn, asset_ids: list[str], days: int = 7, price_sources: dict[str, tuple[str, str]] = None
 ) -> dict[str, PriceChange]:
     """Те саме для списку активів одразу — пропускає ті, для яких
     немає джерела чи даних (не помилка, просто немає числового
     контексту для цього активу поки що)."""
     result = {}
     for asset_id in asset_ids:
-        change = fetch_price_change(conn, asset_id, days=days)
+        change = fetch_price_change(conn, asset_id, days=days, price_sources=price_sources)
         if change is not None:
             result[asset_id] = change
     return result
 
 
-def fetch_latest_observed_at(conn, asset_id: str):
+def fetch_latest_observed_at(conn, asset_id: str, price_sources: dict[str, tuple[str, str]] = None):
     """Дата НАЙСВІЖІШОГО спостереження для asset_id, БЕЗ обмеження
     вікном `days` (на відміну від fetch_price_change) — або None, якщо
     для цього джерела взагалі ще ніколи нічого не збирали.
@@ -196,7 +258,7 @@ def fetch_latest_observed_at(conn, asset_id: str):
     — ці два випадки принципово різні для діагностики, тому
     synthesize.py викликає цю функцію окремо, щоб сказати чесно, ЯКИЙ
     це випадок."""
-    source, metric_id = _resolve_price_source(asset_id)
+    source, metric_id = _resolve_price_source(asset_id, price_sources)
     with conn.cursor() as cur:
         cur.execute(
             """

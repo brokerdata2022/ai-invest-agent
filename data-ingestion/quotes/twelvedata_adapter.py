@@ -61,10 +61,49 @@ FIELDS: dict[str, str] = {
 }
 
 
+SYMBOL_SEARCH_URL = "https://api.twelvedata.com/symbol_search"
+
+
+def search_symbol(query: str, api_key: str, session: Optional[requests.Session] = None) -> Optional[str]:
+    """Twelve Data symbol_search — довідниковий пошук, приймає
+    ПРИБЛИЗНУ назву чи неточний формат тикера (напр. "NATGAS" замість
+    точного каталожного символу) і повертає symbol САМЕ так, як його
+    називає Twelve Data, або None, якщо нічого не знайдено чи запит
+    провалився.
+
+    Додано 2026-10-03 (docs/decisions.md, orchestration/
+    telegram_commands.py:/watchlist_add) — живий кейс "NATGAS": точний
+    рядок дав 404 (time_series), хоча інструмент, можливо, є в
+    каталозі під іншим кодом — без symbol_search користувач мусив би
+    вгадувати формат навмання. Перший результат пошуку беремо як
+    найкращий збіг (Twelve Data сам сортує за релевантністю) —
+    викликач (validate_symbol у тому самому модулі чи інший) МАЄ ще
+    підтвердити, що символ реально має дані, перш ніж довіряти йому."""
+    session = session or requests.Session()
+    try:
+        response = session.get(
+            SYMBOL_SEARCH_URL, params={"symbol": query, "apikey": api_key}, timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException:
+        logger.warning("Twelve Data symbol_search провалився для %r", query, exc_info=True)
+        return None
+
+    matches = data.get("data") if isinstance(data, dict) else None
+    if not matches:
+        return None
+    symbol = matches[0].get("symbol")
+    logger.info("Twelve Data symbol_search %r → %r (%s)", query, symbol, matches[0].get("instrument_name"))
+    return symbol
+
+
 class TwelveDataAdapter(BaseAdapter):
     source = "twelvedata"
 
-    def __init__(self, api_key: str, ticker: str, session: Optional[requests.Session] = None):
+    def __init__(
+        self, api_key: str, ticker: str, metric_id: Optional[str] = None, session: Optional[requests.Session] = None,
+    ):
         if not api_key:
             raise ValueError(
                 "TWELVEDATA_API_KEY не задано. Безкоштовна реєстрація: "
@@ -74,6 +113,20 @@ class TwelveDataAdapter(BaseAdapter):
             raise ValueError(f"Некоректний тикер для Twelve Data: {ticker!r}")
         self.api_key = api_key
         self.ticker = ticker.strip().upper()
+        # metric_id override (2026-10-04, той самий принцип, що
+        # crypto/binance_adapter.py:metric_id= для watchlist-активів,
+        # доданих через Telegram): None (дефолт, усі існуючі виклики —
+        # screening/discover_candidates/run_collect.py) лишає стару
+        # поведінку — normalize() сам виводить базу з ticker. Явний
+        # override потрібен ЛИШЕ orchestration/jobs.py:_watchlist_prices
+        # — коли /watchlist_add резолвнув тикер через symbol_search
+        # (напр. "NATGAS" -> "NG"), DB-рядок watchlist_assets.metric_id
+        # лишається "natgas_close" (на asset_id, не на резолвлений
+        # тикер), а виведена з ticker база дала б "ng_close" — розбіжність
+        # мовчки губила б усі зібрані ціни з жодної подальшої функції,
+        # що читає watchlist_assets.metric_id (prices.py/watchlist_notify.py/
+        # synthesize.py), ніколи не падаючи явно.
+        self.metric_base = metric_id if metric_id is not None else self.ticker.lower().replace("/", "")
         self.session = session or requests.Session()
 
     def fetch(
@@ -152,7 +205,7 @@ class TwelveDataAdapter(BaseAdapter):
                 records.append(
                     NormalizedRecord(
                         source=self.source,
-                        metric_id=f"{self.ticker.lower().replace('/', '')}_{suffix}",
+                        metric_id=f"{self.metric_base}_{suffix}",
                         value=value,
                         observed_at=observed_at,
                         fetched_at=fetched_at,

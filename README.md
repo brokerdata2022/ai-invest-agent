@@ -118,6 +118,10 @@ docker compose exec app python data-ingestion/run_collect.py --metric eurozone_h
 # Надіслати останнє зібране значення в Telegram
 docker compose exec app python reporting/telegram_notify.py --metric cpi
 
+# Разово (і після кожної нової джоби) — зареєструвати Telegram-команди
+# (назва+опис кожної джоби в "/"-меню бота)
+docker compose exec app python orchestration/register_telegram_commands.py
+
 # Прогнати тести
 docker compose exec app pytest
 ```

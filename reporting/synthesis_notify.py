@@ -21,7 +21,14 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import DIRECTION_EMOJI, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    DIRECTION_EMOJI,
+    bold,
+    escape_html,
+    fetch_dicts,
+    mark_notified,
+    resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -56,14 +63,14 @@ def format_synthesis_message(row: dict) -> str:
     повідомленням, природно короткий за конструкцією, ліміт ніколи не
     досягається."""
     emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
-    lines = [
+    header = (
         f"🔍 {emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}% "
         f"({row['price_start_date']} → {row['price_end_date']}), "
-        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)",
-        row["summary"],
-    ]
+        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)"
+    )
+    lines = [bold(header), escape_html(row["summary"])]
     if row.get("confirmation_factors"):
-        lines.append(f"Перевірити: {row['confirmation_factors']}")
+        lines.append(f"🔎 Перевірити: {escape_html(row['confirmation_factors'])}")
     return "\n".join(lines)
 
 
@@ -90,7 +97,7 @@ def main() -> None:
         # рядки вдруге.
         for row in rows:
             text = format_synthesis_message(row)
-            send_telegram_message(token, chat_id, text)
+            send_telegram_message(token, chat_id, text, parse_mode="HTML")
             mark_notified(conn, "news_synthesis", [row["id"]])
         logger.info("Надіслано в Telegram: %d синтезів", len(rows))
     finally:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Автоматично оновлює прогноз (forecast_metric.py:run_forecast) для
-показників із зареєстрованим методом прогнозування (FORECASTABLE_METRICS)
-одразу після того, як monitoring/check_releases.py задетектував нові
-дані — замикає сигнал "щось нове вийшло" на прогнозну модель (PLAN.md,
-Фаза 3: "автоматичне оновлення прогнозів після кожного релізу").
+Автоматично оновлює LLM-прогноз (forecast_metric.py:run_forecast) для
+показників, по яких monitoring/check_releases.py щойно задетектував нові
+дані — замикає сигнал "щось нове вийшло" на прогноз наступного періоду
+(PLAN.md, Фаза 3: "автоматичне оновлення прогнозів після кожного
+релізу").
 
 Незалежний консьюмер того самого 'detected'-сигналу (release_log), що
 й analysis/expectations/compare_releases.py — обидва лише ЧИТАЮТЬ
@@ -14,10 +14,12 @@
 НЕ чіпає, тому має бути в розкладі ДО compare_expectations, інакше
 'detected'-рядки вже стануть 'processed' і зникнуть з вибірки.
 
-Обмежено FORECASTABLE_METRICS (зараз лише `cpi`) свідомо — лінійний
-тренд поки підтверджений backtest лише на одному показнику; розширення
-на решту 14 — окрема задача (PLAN.md, Фаза 2), не мовчазний побічний
-ефект цієї джоби.
+Покриття: усі 15 показників календаря
+(forecast_metric.py:FORECASTABLE_METRICS = monitoring/metric_sources.py).
+Раніше було {"cpi"} — обмеження лінійної моделі, яка пройшла backtest
+лише на одному показнику; LLM-прогноз такого обмеження не має
+(докладніше — forecast_metric.py). Реальна кількість викликів LLM за
+прогін дорівнює кількості ЩОЙНО вийшлих релізів (зазвичай 1-3), не 15.
 
 Використання:
     python update_forecasts.py
@@ -35,6 +37,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "monitoring"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection  # noqa: E402
+from llm_common import require_api_key  # noqa: E402
 from release_log import get_detected_entries  # noqa: E402
 
 from forecasting.forecast_metric import FORECASTABLE_METRICS, run_forecast  # noqa: E402
@@ -43,19 +46,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-def update_forecasts_cycle(conn) -> list[str]:
+def update_forecasts_cycle(conn, api_key: str) -> list[str]:
     entries = get_detected_entries(conn)
     metric_ids = sorted({e["metric_id"] for e in entries if e["metric_id"] in FORECASTABLE_METRICS})
 
     updated = []
     for metric_id in metric_ids:
         try:
-            forecast_id = run_forecast(conn, metric_id)
+            forecast_id = run_forecast(conn, metric_id, api_key)
             if forecast_id is not None:
                 updated.append(metric_id)
         except Exception:
             # Один показник не повинен валити весь цикл (той самий
-            # патерн, що compare_releases.py/check_releases.py).
+            # патерн, що compare_releases.py/check_releases.py) — тим
+            # паче з LLM у ланцюжку, де збійна відповідь чи таймаут по
+            # одному показнику звичайна справа.
             logger.error("%s: оновлення прогнозу провалилось", metric_id, exc_info=True)
             conn.rollback()
     return updated
@@ -64,9 +69,11 @@ def update_forecasts_cycle(conn) -> list[str]:
 def main() -> None:
     load_dotenv()
 
+    api_key = require_api_key()
+
     conn = get_connection()
     try:
-        updated = update_forecasts_cycle(conn)
+        updated = update_forecasts_cycle(conn, api_key)
         logger.info(
             "Оновлено прогнозів: %d (%s)", len(updated), ", ".join(updated) if updated else "-"
         )

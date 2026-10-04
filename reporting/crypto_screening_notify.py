@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import fetch_dicts, resolve_telegram_credentials  # noqa: E402
+from _common import bold, escape_html, fetch_dicts, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -76,16 +76,16 @@ def format_message(rows: list[dict]) -> str:
     if not rows:
         return "🪙 Активних крипто-кандидатів SHORT/WATCH немає."
 
-    lines = [f"🪙 Крипто-скринінг ф'ючерсів — {len(rows)} кандидатів:", ""]
+    lines = [bold(f"🪙 Крипто-скринінг ф'ючерсів — {len(rows)} кандидатів:"), ""]
     for row in rows:
         label = STATUS_LABEL.get(row["status"], row["status"])
         pump = row["last_pump_pct"] if row["last_pump_pct"] is not None else row["pump_pct_at_detection"]
-        lines.append(f"{row['symbol']} — {label}")
-        lines.append(f"  памп {float(pump):+.1f}%")
+        lines.append(bold(f"{row['symbol']} — {label}"))
+        lines.append(f"• памп {float(pump):+.1f}%")
         if row["last_funding_rate"] is not None:
-            lines.append(f"  funding {float(row['last_funding_rate']) * 100:+.3f}%")
+            lines.append(f"• funding {float(row['last_funding_rate']) * 100:+.3f}%")
         if row["reason"]:
-            lines.append(f"  {row['reason']}")
+            lines.append(f"• {escape_html(row['reason'])}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -106,7 +106,7 @@ def main() -> None:
             return
 
         text = format_message(rows)
-        send_telegram_message(token, chat_id, text)
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
         logger.info("Надіслано в Telegram: %d крипто-кандидатів", len(rows))
     finally:
         conn.close()

@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import bold, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -64,13 +64,13 @@ def format_message(rows: list[dict], limit: int = 30) -> str:
     header = f"📈 Крипто-скринінг LONG (бичачий нахил, тренд підтверджений) — {total} символів"
     if total > limit:
         header += f" (топ {limit})"
-    lines = [header, ""]
+    lines = [bold(header), ""]
     for row in shown:
         oi = row.get("oi_change_pct")
         rsi = row.get("rsi_value")
         oi_str = f"{float(oi):+.1f}%" if oi is not None else "н/д"
         rsi_str = f"{float(rsi):.0f}" if rsi is not None else "н/д"
-        lines.append(f"{row['symbol']} — OI {oi_str}, RSI {rsi_str}")
+        lines.append(f"• {bold(row['symbol'])} — OI {oi_str}, RSI {rsi_str}")
     return "\n".join(lines).rstrip()
 
 
@@ -93,7 +93,7 @@ def main() -> None:
             return
 
         text = format_message(rows, limit=args.limit)
-        send_telegram_message(token, chat_id, text)
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "crypto_long_candidates", [row["id"] for row in rows])
         logger.info("Надіслано в Telegram: LONG-скринінг, %d символів", len(rows))
     finally:

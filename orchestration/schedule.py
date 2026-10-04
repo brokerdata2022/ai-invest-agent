@@ -39,13 +39,29 @@ SCHEDULE = {
         "trigger": {"minute": "*"},
         "why": "Щохвилини, не раз на 15 хв (2026-10-02, живий фідбек користувача: 'запускати збір рівно в час релізу, щохвилини, а не моніторити вроздріб' — попередня комбінація 15-хв цикл + 30-хв буфер давала затримку детекції до ~44 хв навіть при живому scheduler, хоча точний scheduled_at уже відомий з тижневого calendar-seed). НЕ навантаження 24/7: коли pending-рядків із настаним часом немає, check_releases.py робить лише один дешевий SELECT і виходить — реальний виклик адаптера відбувається тільки для показників, час яких дійсно настав. docs/decisions.md.",
     },
+    "telegram_commands": {
+        "trigger": {"minute": "*"},
+        "why": "Щохвилини (2026-10-03, Telegram-команди людською мовою замість docker exec run_job.py) — короткий polling (getUpdates, timeout=0), дешевий цикл коли нових повідомлень немає (один HTTP-запит, виходить). Та сама частота, що check_releases — команда має підхопитись швидко, не через 15 хв.",
+    },
     "refresh_calendar": {
         "trigger": {"day_of_week": "mon", "hour": 6, "minute": 0},
         "why": "refresh_calendar.py сам розрахований на тижневу періодичність — заводить наперед на наступний тиждень.",
     },
+    "calendar_outlook": {
+        "trigger": {"day_of_week": "mon-fri", "hour": 7, "minute": 0},
+        "why": "Ранкове повідомлення (рішення користувача, 2026-10-03): у понеділок — огляд на весь тиждень, інші робочі дні — на сьогодні (analysis/calendar_outlook/run_outlook.py:determine_scope). 7:00 — за годину після refresh_calendar@mon 6:00, щоб тижневий seed уже встиг завершитись; вихідні не заводяться — determine_scope() сам повертає None, якщо все ж запущено вручну.",
+    },
+    "notify_calendar_outlook": {
+        "trigger": {"day_of_week": "mon-fri", "hour": 7, "minute": 5},
+        "why": "+5 хв після calendar_outlook, щоб надсилати вже готовий огляд.",
+    },
     "update_forecasts": {
         "trigger": {"minute": "*", "second": 10},
         "why": "Щохвилини, +10с після check_releases (second=0) — 2026-10-02, той самий перехід на щохвилинний ритм, що й check_releases (docs/decisions.md). Читає ті самі 'detected' release_log-рядки, що compare_expectations (+15с), але статус НЕ чіпає, тому МАЄ встигнути ДО compare_expectations, поки рядки ще 'detected' (перехід у 'processed' — виключно compare_releases.py); якщо не встигне в ЦЮ хвилину (рідкісний повільний check_releases) — рядок лишається 'detected' до НАСТУПНОЇ хвилини, де update_forecasts знову має пріоритет перед compare_expectations, то й не губиться (не одноразове вікно, як було на 15-хв сітці).",
+    },
+    "notify_forecasts": {
+        "trigger": {"minute": "*", "second": 55},
+        "why": "Щохвилини, +55с після check_releases — остання ланка релізного ланцюжка, після notify_expectations (second=50). 45с запасу від update_forecasts (second=10) — свідомо ширший зазор, ніж між детермінованими джобами (10-15с): update_forecasts тепер робить LLM-виклик на кожен щойно вийшлий реліз (прогноз формує ШІ, не лінійна регресія — 2026-10-04), а мережевий виклик DeepSeek не настільки передбачуваний. Не встиг — прогноз лишається notified_at IS NULL і піде НАСТУПНОЮ хвилиною (той самий дедуп-патерн, що решта notify-скриптів), нічого не губиться. Прогін без нових прогнозів — дешевий SELECT 'нема нових' без Telegram-виклику.",
     },
     "compare_expectations": {
         "trigger": {"minute": "*", "second": 15},
@@ -186,6 +202,14 @@ SCHEDULE = {
     "companies_universe_refresh": {
         "trigger": {"day_of_week": "sun", "hour": 8, "minute": 0},
         "why": "SEC-звіти (10-Q/10-K) виходять щоквартально — щотижневого прогону більш ніж достатньо, не бити SEC даремно.",
+    },
+    "macro_daily_series": {
+        "trigger": {"day_of_week": "mon-fri", "hour": 15, "minute": 20},
+        "why": "Будні 15:20 — ДЕННІ макро-серії без календаря релізів (облігації treasury_10y/treasury_2y, fed_funds_rate, usdjpy_fx_rate). Рішення користувача 2026-10-04: 'облігації це обовязково'. До цієї джоби їх НЕ брав жоден щоденний конвеєр (check_releases тригериться календарем, якого в них немає; _watchlist_prices — лише watchlist-активи), тож єдиним шляхом у БД був safety_net_collect_all РАЗ НА МІСЯЦЬ — живий стан 2026-10-04: 5 днів застарілості на ДЕННОМУ показнику. Час: FRED оновлює H.15/H.10 у другій половині дня ET (~16:15 ET = 23:15 Києва), тож 15:20 Києва бере ВЧОРАШНЮ опубліковану точку — свідомо не ганяємося за сьогоднішньою (її ще немає), а гарантовано не пропускаємо жодного буднього дня. Вихідні не потрібні — FRED їх не публікує.",
+    },
+    "forecast_daily_series": {
+        "trigger": {"day_of_week": "mon-fri", "hour": 15, "minute": 35},
+        "why": "Будні 15:35 — +15 хв після macro_daily_series, щоб прогноз будувався на щойно зібраній точці, а не на вчорашній. Окрема джоба від update_forecasts (той тригериться ПОДІЄЮ релізу, якої в денних серій не існує — analysis/forecasting/forecast_daily.py). LLM-виклик робиться лише коли останнє спостереження НОВЕ (--skip-existing за замовчуванням): FRED публікує з лагом день-два, тож без цієї перевірки ми платили б за однаковий прогноз щодня. Доставку бере на себе notify_forecasts@щохвилини:55 — той самий notified_at-дедуп, окремої notify-джоби не потрібно.",
     },
     "safety_net_collect_all": {
         "trigger": {"day": 1, "hour": 7, "minute": 0},

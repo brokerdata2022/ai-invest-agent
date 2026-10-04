@@ -4,13 +4,21 @@ from decimal import Decimal
 from watchlist_notify import format_message
 
 
-def _row(label, price="100.5", change_pct="1.23", observed_at=None):
+def _row(
+    label, price="100.5", change_pct="1.23", observed_at=None, change_days=1,
+    source="twelvedata", staleness_days=1, is_stale=False, is_volatile=False,
+):
     return {
         "asset_id": label.lower(),
         "label": label,
         "price": Decimal(price),
         "observed_at": observed_at or date(2026, 10, 2),
         "change_pct": Decimal(change_pct) if change_pct is not None else None,
+        "change_days": change_days if change_pct is not None else None,
+        "source": source,
+        "staleness_days": staleness_days,
+        "is_stale": is_stale,
+        "is_volatile": is_volatile,
     }
 
 
@@ -22,11 +30,10 @@ def test_format_message_known_rows():
     rows = [_row("Золото (XAU/USD)", "2650.30", "0.85"), _row("EUR/USD", "1.0862", "-0.12")]
     text = format_message(rows)
 
-    assert "Золото (XAU/USD) — 2,650.30" in text
-    assert "+0.85%" in text
-    assert "EUR/USD — 1.0862" in text
-    assert "-0.12%" in text
-    assert "дані на 2026-10-02" in text
+    assert "<b>Золото (XAU/USD)</b> — 2,650.30 (2026-10-02)" in text
+    assert "24г: +0.85%" in text
+    assert "<b>EUR/USD</b> — 1.0862 (2026-10-02)" in text
+    assert "24г: -0.12%" in text
     # Тон: жодних прямих інструкцій купити/продати (reporting/CLAUDE.md).
     assert "купити" not in text.lower() and "продати" not in text.lower()
 
@@ -43,3 +50,85 @@ def test_format_message_uses_4_decimals_for_small_values_and_2_for_large():
 
     assert "111,234.50" in text
     assert "1.0862" in text
+
+
+def test_format_message_shows_real_gap_not_always_24h():
+    # 2026-10-04, живий фідбек користувача: вихідні (FRED-товари/форекс
+    # не оновлюються) і місячна кава показувались як "24г" — тепер
+    # підпис відповідає РЕАЛЬНІЙ кількості днів між двома точками.
+    rows = [
+        _row("Нафта WTI", "96.16", "-3.23", change_days=3),  # п'ятниця -> понеділок
+        _row("Кава", "359.16", "16.68", change_days=29),  # місячна серія
+    ]
+    text = format_message(rows)
+
+    assert "3 дн.: -3.23%" in text
+    assert "29 дн.: +16.68%" in text
+    assert "24г" not in text
+
+
+def test_format_message_marks_web_crosscheck_source():
+    # 2026-10-04, живий фідбек користувача: "рішення з веб пошуком...
+    # потрібно робити позначку що дані веб" — web_crosscheck/
+    # tradingeconomics-рядки відрізняються міткою, API-рядки — ні.
+    rows = [
+        _row("Кава", "288.75", source="tradingeconomics"),
+        _row("Золото", "4137.61", source="web_crosscheck"),
+        _row("EUR/USD", "1.0862", source="twelvedata"),
+    ]
+    text = format_message(rows)
+
+    assert "<b>Кава</b> 🌐 —" in text
+    assert "<b>Золото</b> 🌐 —" in text
+    assert "<b>EUR/USD</b> —" in text  # без мітки
+
+
+def test_format_message_flags_stale_data():
+    # 2026-10-04, живий фідбек користувача: "чого ти не перевіряєш
+    # актуальність даних" — звіт тепер сам активно позначає рядок,
+    # чия observed_at застаріла (common/freshness.py:is_stale(), БУДНІ
+    # дні), не лише показує дату в дужках і сподівається, що хтось її
+    # помітить. is_stale/staleness_days тут підставлені напряму в
+    # _row() (fetch_watchlist_snapshot() — окремий, не тестований тут
+    # шар, що й рахує їх через common/freshness.py).
+    rows = [
+        _row("Нафта WTI", "91.11", staleness_days=5, is_stale=True),
+        _row("EUR/USD", "1.0862", staleness_days=1, is_stale=False),
+    ]
+    text = format_message(rows)
+
+    assert "⚠️ застаріло (5дн)" in text
+    assert "Застарілі дані" in text
+    assert "Нафта WTI" in text.split("Застарілі дані")[1]
+    assert "EUR/USD" not in text.split("Застарілі дані")[1]
+
+
+def test_format_message_no_stale_section_when_all_fresh():
+    rows = [_row("EUR/USD", "1.0862", staleness_days=1, is_stale=False)]
+    text = format_message(rows)
+    assert "Застарілі дані" not in text
+    assert "⚠️" not in text
+
+
+def test_format_message_flags_volatile_revisions():
+    # 2026-10-04, живий кейс xauusd: Twelve Data переписав ВЖЕ закритий
+    # день заднім числом на 2% — актив виглядав "свіжим" (is_stale=False),
+    # але значення ненадійне. Користувач: "як я буду розуміти, чи дані
+    # правильні — кожен раз перевіряти вручну?!" — тепер звіт сам
+    # позначає це, не чекаючи, що користувач помітить розбіжність.
+    rows = [
+        _row("Золото (XAU/USD)", "4137.61", is_stale=False, is_volatile=True),
+        _row("EUR/USD", "1.0862", is_stale=False, is_volatile=False),
+    ]
+    text = format_message(rows)
+
+    assert "🔀 нестабільні ревізії" in text
+    assert "🔀 Нестабільні ревізії (перевірте вручну): Золото (XAU/USD)" in text
+    assert "EUR/USD" not in text.split("Нестабільні ревізії")[1]
+
+
+def test_format_message_no_volatile_section_when_all_stable():
+    rows = [_row("EUR/USD", "1.0862", is_volatile=False)]
+    text = format_message(rows)
+    assert "Нестабільні ревізії" not in text
+    assert "🔀" not in text

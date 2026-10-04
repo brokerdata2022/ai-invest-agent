@@ -35,15 +35,20 @@ market-специфічні терміни (rally/selloff/earnings/IPO/M&A), д�
 курований список прийнятний.
 """
 
-# Один пошуковий термін на актив із docs/watchlist.md — найпоширеніша
-# назва в новинах, не тикер біржі (GDELT — загальний новинний текст,
-# не фінансові дані).
+# Один пошуковий термін на актив — ТОЙ САМИЙ набір, що раніше був
+# ЄДИНИМ джерелом істини (docs/watchlist.md, закрито 2026-09-25).
+# 2026-10-03 (docs/decisions.md, "редагування watchlist через
+# Telegram"): справжнє джерело істини тепер таблиця watchlist_assets
+# (common/watchlist_db.py:fetch_terms(conn)) — цей словник лишається
+# як ДЕФОЛТНИЙ фолбек build_watchlist_query() нижче (і фікстура тестів,
+# що перевіряють код без БД), не як факт "watchlist закритий".
 WATCHLIST_TERMS: dict[str, str] = {
     "xauusd": '"gold price"',
     "xagusd": '"silver price"',
     "wti_crude": '"WTI crude"',
     "brent_crude": '"Brent crude"',
     "coffee": '"coffee futures"',
+    "natgas": '"natural gas price"',
     "eurusd": '"EUR/USD"',
     "usdjpy": '"USD/JPY"',
     "btc": "Bitcoin",
@@ -52,14 +57,21 @@ WATCHLIST_TERMS: dict[str, str] = {
 }
 
 
-def build_watchlist_query() -> str:
-    return "(" + " OR ".join(WATCHLIST_TERMS.values()) + ")"
+def build_watchlist_query(terms: dict[str, str] = None) -> str:
+    """`terms` — asset_id → пошуковий термін; None (дефолт) падає на
+    WATCHLIST_TERMS вище. Викликач, що хоче ЖИВИЙ (редагований через
+    Telegram) список, передає `common/watchlist_db.py:fetch_terms(conn)`
+    явно (run_collect_news.py) — ця функція лишається чистою, без БД
+    (rule 1 CLAUDE.md), той самий принцип, що build_stocks_query()."""
+    effective_terms = terms if terms is not None else WATCHLIST_TERMS
+    return "(" + " OR ".join(effective_terms.values()) + ")"
 
 
 # Внутрішні ідентифікатори активів watchlist-потоку — підказка для
 # DeepSeek (analysis/news_analysis/), яким asset_id позначати статтю,
 # якщо вона прямо про один з цих активів. Ті самі ключі, що й
-# WATCHLIST_TERMS (одне джерело істини для "що таке watchlist").
+# WATCHLIST_TERMS (одне джерело істини для "що таке watchlist" —
+# СТАТИЧНИЙ фолбек, живий список — common/watchlist_db.py:fetch_asset_ids(conn)).
 WATCHLIST_ASSET_IDS: list[str] = list(WATCHLIST_TERMS)
 
 

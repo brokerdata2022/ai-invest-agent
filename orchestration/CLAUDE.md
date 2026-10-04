@@ -19,7 +19,11 @@ CLAUDE.md).
 1. Додати запис у `jobs.py:JOBS` (що виконати).
 2. Додати запис у `schedule.py:SCHEDULE` з тим самим ключем (`trigger`
    + `why`) — `tests/test_schedule.py` впаде, якщо ключі розійдуться.
-3. **`docker compose restart scheduler`**, якщо контейнер уже працює —
+3. Додати опис у `command_descriptions.py:JOB_DESCRIPTIONS` (та сама
+   назва ключа) — `tests/test_command_descriptions.py` впаде інакше;
+   запустити `register_telegram_commands.py`, щоб нова команда
+   з'явилась у "/"-меню Telegram.
+4. **`docker compose restart scheduler`**, якщо контейнер уже працює —
    `main.py` реєструє джоби (APScheduler) ОДИН РАЗ при старті процесу.
    Зміна коду самого скрипта джоби підхоплюється сама (bind mount,
    subprocess перечитує файл щоразу), а от нова джоба чи новий час у
@@ -62,10 +66,41 @@ orchestration нічого не запам'ятовує МІЖ окремими 
 перекривається `SCHEDULER_TIMEZONE` в `.env`). Не хардкодити часовий
 пояс деінде.
 
+## Telegram-команди людською мовою (ручний запуск джоб)
+`telegram_commands.py` (щохвилини, той самий ритм, що `check_releases`)
+опитує Telegram `getUpdates` і запускає відповідну джобу ІМЕНЕМ
+замість `docker compose exec app python run_job.py <назва>`.
+Авторизація — лише `TELEGRAM_CHAT_ID` з `.env`. **Важливо:** запуск
+джоби — НЕБЛОКУЮЧИЙ subprocess `python run_job.py <назва>` (не прямий
+виклик `runner.run_job()` у своєму процесі) — цей дочірній процес
+переживає сам `telegram_commands.py` (той встигає завершитись за
+секунди) і несе ВЕСЬ звичний контракт провалу й ретраїв (`runner.py`)
+сам, незалежно.
+
+**Меню звужено до "інформаційних" джоб (2026-10-03, рішення
+користувача після живого тесту):** через Telegram виконуються ЛИШЕ
+джоби з `command_descriptions.py:INFO_JOB_NAMES` (12 з 44 — ті, що
+САМІ надсилають інформацію: `notify_*`/`daily_digest`), не будь-яка
+з `JOBS` — технічна джоба (збір даних/LLM-аналіз без доставки),
+набрана вручну, дає "Невідома команда". Решта 32 джоб і далі
+виконуються за розкладом автоматично — без змін, звужено лише
+РУЧНИЙ запуск через Telegram; ручний запуск технічної джоби лишається
+через `docker compose exec app python run_job.py <назва>`.
+
+Назва+опис кожної команди — `command_descriptions.py:JOB_DESCRIPTIONS`
+(тест звіряє паритет з `JOBS`) + `SPECIAL_COMMAND_DESCRIPTIONS`
+(watchlist-команди, не джоби); `register_telegram_commands.py` —
+ручний разовий скрипт, реєструє їх у "/"-меню Telegram
+(`setMyCommands`), перезапустити після додавання нової
+джоби/watchlist-команди чи зміни `INFO_JOB_NAMES`.
+
 ## Команди
 ```bash
 # сервіс scheduler запускається сам (docker compose up -d, restart: unless-stopped)
 docker compose logs -f scheduler
+
+# разово (і після кожної нової джоби) — зареєструвати "/"-меню команд у Telegram
+docker compose exec app python orchestration/register_telegram_commands.py
 
 # ручний запуск однієї джоби негайно (для тестів) — той самий образ/код
 docker compose exec app python orchestration/run_job.py check_releases

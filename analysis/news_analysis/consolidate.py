@@ -65,7 +65,7 @@ from llm_common import (  # noqa: E402
     require_api_key,
     resolve_provider,
 )
-from news.queries import WATCHLIST_ASSET_IDS  # noqa: E402
+from common.watchlist_db import fetch_asset_ids  # noqa: E402
 from news_analysis._consolidated_db import (  # noqa: E402
     fetch_recent_summaries,
     fetch_unconsolidated_raw_news,
@@ -79,10 +79,6 @@ from screening._results_db import fetch_latest_tickers  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-# Лише watchlist має фіксований список активів, які DeepSeek може
-# проставити в asset_id — той самий дефолт, що run_news_analysis.py.
-_TRACKED_ASSETS_BY_STREAM: dict[str, list[str]] = {"watchlist": WATCHLIST_ASSET_IDS}
 
 _REQUIRED_ITEM_FIELDS = ("summary", "direction", "confidence", "reasoning", "source_indices")
 
@@ -213,10 +209,11 @@ def consolidate_stream(
     потоку за вікно (`is_duplicate_of_recent()` — той самий факт з
     ІНШОГО прогону консолідації, не спійманий ні кластеризацією, ні
     LLM-домерджуванням, бо обидва бачать лише статті ОДНОГО прогону).
-    Повертає ФАКТИЧНО збережені записи (для логування в main())."""
-    if tracked_assets is None:
-        tracked_assets = _TRACKED_ASSETS_BY_STREAM.get(stream)
-
+    Повертає ФАКТИЧНО збережені записи (для логування в main()).
+    tracked_assets=None лишається None (без фолбеку тут) — для
+    stream="watchlist" ЄДИНЕ місце, що рахує живий список, це
+    main() (fetch_asset_ids(conn) + fetch_latest_tickers(conn)) —
+    один DB-виклик, не два різні шляхи того самого."""
     # Крок 1 — МЕХАНІЧНА кластеризація (без LLM). cluster_articles()
     # очікує raw_news_id (не id) — той самий формат, що post-analysis
     # виклик у aggregate.py, для сумісності обох сценаріїв.
@@ -294,12 +291,13 @@ def main() -> None:
 
         tracked_assets = None
         if args.stream == "watchlist":
-            # WATCHLIST_ASSET_IDS (commodities/FX/крипта) + тикери, що
-            # пройшли скринінг (collect_stock_news.py пише статті про
-            # них у той самий stream="watchlist") — без цього акції зі
-            # скринінгу в промпті були відомі DeepSeek лише як
-            # "щось про watchlist", без явного tracked_assets-підказки.
-            tracked_assets = list(WATCHLIST_ASSET_IDS) + fetch_latest_tickers(conn)
+            # Живий (редагований через Telegram, 2026-10-03) watchlist
+            # (commodities/FX/крипта) + тикери, що пройшли скринінг
+            # (collect_stock_news.py пише статті про них у той самий
+            # stream="watchlist") — без цього акції зі скринінгу в
+            # промпті були відомі DeepSeek лише як "щось про watchlist",
+            # без явного tracked_assets-підказки.
+            tracked_assets = fetch_asset_ids(conn) + fetch_latest_tickers(conn)
 
         try:
             saved = consolidate_stream(conn, args.stream, articles, api_key, tracked_assets=tracked_assets)

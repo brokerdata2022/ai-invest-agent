@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import resolve_telegram_credentials  # noqa: E402
+from _common import bold, escape_html, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection, fetch_latest  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -85,11 +85,11 @@ _METRIC_SOURCE = {
 def format_message(row: dict, metric_id: str) -> str:
     label = METRIC_LABELS.get(metric_id, metric_id)
     return (
-        f"📊 {label}\n"
-        f"Значення: {row['value']}\n"
-        f"За період: {row['observed_at']}\n"
-        f"Джерело: {row['source']} (ревізія {row['revision']})\n"
-        f"Зібрано: {row['fetched_at']}"
+        f"{bold('📊 ' + label)}\n"
+        f"Значення: {bold(row['value'])}\n"
+        f"За період: {escape_html(row['observed_at'])}\n"
+        f"Джерело: {escape_html(row['source'])} (ревізія {escape_html(row['revision'])})\n"
+        f"Зібрано: {escape_html(row['fetched_at'])}"
     )
 
 
@@ -130,7 +130,7 @@ def main() -> None:
         sys.exit(1)
 
     text = format_message(row, args.metric)
-    send_telegram_message(token, chat_id, text)
+    send_telegram_message(token, chat_id, text, parse_mode="HTML")
     logger.info("Надіслано в Telegram: %s", text.splitlines()[0])
 
 

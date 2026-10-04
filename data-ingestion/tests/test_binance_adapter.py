@@ -37,6 +37,14 @@ def test_unknown_metric_id_rejected():
         BinanceAdapter(metric_id="doge")
 
 
+def test_explicit_symbol_bypasses_metrics_dict():
+    # 2026-10-03, docs/decisions.md: watchlist_add додає крипто поза
+    # оригінальним закритим METRICS — symbol= обходить словник напряму.
+    adapter = BinanceAdapter(metric_id="bnb", symbol="BNBUSDT")
+    assert adapter.symbol == "BNBUSDT"
+    assert adapter.metric_id == "bnb"
+
+
 def test_normalize_produces_close_and_volume_per_day(adapter, btc_response):
     records = adapter.normalize(btc_response)
 

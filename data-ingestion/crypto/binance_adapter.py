@@ -11,11 +11,15 @@ https://binance-docs.github.io/apidocs/spot/en/#kline-candlestick-data
 користувача, geo-block на відміну від деяких інших регіонів не
 спостерігається).
 
-METRICS — фіксований словник (той самий стиль, що macro/*-адаптери,
-не відкритий тикер як quotes/twelvedata_adapter.py): watchlist крипто
-закритий (docs/watchlist.md), новий актив сюди не додається без
-окремого рішення користувача (docs/news-purpose.md, Ціль 3 — окремий,
-явно не цей список).
+METRICS — фіксований словник для ОРИГІНАЛЬНОГО закритого watchlist
+(BTC/ETH/SOL, docs/watchlist.md) — зворотна сумісність із
+`orchestration/jobs.py:_crypto_prices()`, що й досі перебирає METRICS
+напряму. 2026-10-03 (докладніше docs/decisions.md, живий кейс
+BNB/watchlist_add): конструктор отримав необов'язковий `symbol` —
+якщо заданий, ОБХОДИТЬ METRICS повністю (символ напряму, як у
+`quotes/twelvedata_adapter.py`) — для крипто-активів, доданих ПІЗНІШЕ
+через Telegram `/watchlist_add` (`orchestration/telegram_commands.py`),
+не з оригінального закритого списку.
 """
 
 import logging
@@ -44,14 +48,17 @@ METRICS: dict[str, str] = {
 class BinanceAdapter(BaseAdapter):
     source = "binance"
 
-    def __init__(self, metric_id: str, session: Optional[requests.Session] = None):
-        if metric_id not in METRICS:
+    def __init__(self, metric_id: str, symbol: Optional[str] = None, session: Optional[requests.Session] = None):
+        if symbol is not None:
+            self.symbol = symbol
+        elif metric_id in METRICS:
+            self.symbol = METRICS[metric_id]
+        else:
             raise ValueError(
                 f"Невідомий metric_id для Binance: {metric_id!r}. "
-                f"Доступні: {sorted(METRICS)}"
+                f"Доступні: {sorted(METRICS)} (або передайте symbol= явно)"
             )
         self.metric_id = metric_id
-        self.symbol = METRICS[metric_id]
         self.session = session or requests.Session()
 
     def fetch(self, limit: Optional[int] = None) -> Any:

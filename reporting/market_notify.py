@@ -21,7 +21,14 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import MARKET_DIRECTION_LABEL, fetch_one_dict, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    MARKET_DIRECTION_LABEL,
+    bold,
+    escape_html,
+    fetch_one_dict,
+    mark_notified,
+    resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -45,14 +52,15 @@ def format_message(row) -> str:
         return "🌍 Синтезу стану ринку ще немає."
 
     label = MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
+    confidence = float(row["confidence"])
     lines = [
-        f"🌍 Стан ринку: {label} (упевненість {float(row['confidence']):.2f})",
-        row["summary"],
+        bold(f"🌍 Стан ринку: {label} (упевненість {confidence:.2f})"),
+        escape_html(row["summary"]),
         "",
-        f"На основі {row['cluster_count']} найбільш підтверджених історій:",
+        bold(f"На основі {row['cluster_count']} найбільш підтверджених історій:"),
     ]
     for ref in row["source_refs"]:
-        lines.append(f"- [{ref['source_count']} джерел] {ref['title']}")
+        lines.append(f"• [{ref['source_count']} джерел] {escape_html(ref['title'])}")
     return "\n".join(lines).rstrip()
 
 
@@ -72,7 +80,7 @@ def main() -> None:
             return
 
         text = format_message(row)
-        send_telegram_message(token, chat_id, text)
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "market_synthesis", [row["id"]])
         logger.info("Надіслано в Telegram: стан ринку %s", row["direction"])
     finally:

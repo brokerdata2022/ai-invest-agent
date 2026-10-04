@@ -28,7 +28,8 @@ analysis/ (`llm_common.py`); розбір відповіді тут свій (к
 Обсяг і ТРИГЕР синтезу (змінено 2026-10-02, живий фідбек користувача):
 раніше синтезувався ЛИШЕ актив, що мав новинний сигнал — рух ціни без
 жодної новини НІКОЛИ не перевірявся взагалі, навіть дуже різкий.
-Тепер: універсум = watchlist (news/queries.py:WATCHLIST_ASSET_IDS) +
+Тепер: універсум = watchlist (common/watchlist_db.py:fetch_asset_ids,
+2026-10-03 — раніше news/queries.py:WATCHLIST_ASSET_IDS) +
 останній скринінг акцій (screening._results_db.fetch_latest_tickers)
 + усе, що вже має новинний сигнал; актив синтезується, якщо є НОВИННИЙ
 СИГНАЛ (як і раніше, будь-якої сили — фільтр релевантності вже в
@@ -74,7 +75,7 @@ from llm_common import (  # noqa: E402
     require_api_key,
     resolve_provider,
 )
-from news.queries import WATCHLIST_ASSET_IDS  # noqa: E402
+from common.watchlist_db import fetch_asset_ids, fetch_price_sources  # noqa: E402
 from news_analysis._db import fetch_relevant_for_aggregation, save_synthesis  # noqa: E402
 from news_analysis.aggregate import AssetSignal, aggregate_by_asset, cluster_articles  # noqa: E402
 from news_analysis.prices import (  # noqa: E402
@@ -250,13 +251,15 @@ def main() -> None:
         # універсумі так само (той самий принцип, docstring модуля
         # вище "Обсяг і ТРИГЕР синтезу").
         screening_tickers = fetch_latest_tickers(conn)
-        universe = sorted(set(signals) | set(WATCHLIST_ASSET_IDS) | set(screening_tickers))
+        watchlist_asset_ids = fetch_asset_ids(conn)
+        price_sources = fetch_price_sources(conn)
+        universe = sorted(set(signals) | set(watchlist_asset_ids) | set(screening_tickers))
         logger.info(
             "%d активів в універсумі (watchlist=%d, скринінг=%d, з новинним сигналом=%d)",
-            len(universe), len(WATCHLIST_ASSET_IDS), len(screening_tickers), len(signals),
+            len(universe), len(watchlist_asset_ids), len(screening_tickers), len(signals),
         )
 
-        prices = fetch_all_price_changes(conn, universe, days=args.max_age_days)
+        prices = fetch_all_price_changes(conn, universe, days=args.max_age_days, price_sources=price_sources)
 
         synthesized = 0
         for asset_id in universe:
@@ -269,7 +272,7 @@ def main() -> None:
                 # "джерело є, але застаріло" — не одне й те саме, і мовчати
                 # про різницю ховає реальні збої collector'ів (напр.
                 # watchlist_prices) за нешкідливим на вигляд "пропущено".
-                latest = fetch_latest_observed_at(conn, asset_id)
+                latest = fetch_latest_observed_at(conn, asset_id, price_sources=price_sources)
                 if latest is None:
                     logger.info("%s: немає цінового джерела — ніколи не збиралось", asset_id)
                 else:

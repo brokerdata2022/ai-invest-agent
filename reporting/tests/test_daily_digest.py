@@ -204,7 +204,10 @@ def _candidate_row(id=4):
 def _patch_digest_sources(monkeypatch, conn, sent, *, news=(), market=None, surprises=(), candidates=()):
     monkeypatch.setattr(daily_digest, "resolve_telegram_credentials", lambda: ("token", "chat"))
     monkeypatch.setattr(daily_digest, "get_connection", lambda: conn)
-    monkeypatch.setattr(daily_digest, "send_telegram_message", lambda token, chat_id, text: sent.append(text))
+    monkeypatch.setattr(
+        daily_digest, "send_telegram_message",
+        lambda token, chat_id, text, parse_mode=None: sent.append(text),
+    )
     monkeypatch.setattr(daily_digest, "fetch_recent_news_synthesis", lambda conn, hours: list(news))
     monkeypatch.setattr(daily_digest, "fetch_recent_market_synthesis", lambda conn, hours: market)
     monkeypatch.setattr(daily_digest, "fetch_recent_surprises", lambda conn, hours: list(surprises))
@@ -263,7 +266,7 @@ def test_main_marks_earlier_rows_notified_even_if_a_later_send_fails(monkeypatch
     conn = _FakeConn()
     sent = []
 
-    def flaky_send(token, chat_id, text):
+    def flaky_send(token, chat_id, text, parse_mode=None):
         sent.append(text)
         if len(sent) == 2:
             raise ConnectionError("simulated Telegram outage")

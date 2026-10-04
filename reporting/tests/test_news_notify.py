@@ -56,7 +56,7 @@ def test_batch_messages_packs_several_items_into_one_message():
     assert len(messages) == 1
     assert "Новина 0" in messages[0]
     assert "Новина 4" in messages[0]
-    assert messages[0].startswith("📰 Важливі новини (5):")
+    assert messages[0].startswith("<b>📰 Важливі новини (5):</b>")
 
 
 def test_batch_messages_splits_when_exceeding_char_limit():

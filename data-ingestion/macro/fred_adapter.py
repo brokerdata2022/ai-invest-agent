@@ -52,7 +52,36 @@ METRICS: dict[str, str] = {
     "brent_crude": "DCOILBRENTEU",     # Crude Oil Prices: Brent - Europe, щоденна, $/барель
     "eurusd": "DEXUSEU",               # EUR/USD, щоденна (Fed H.10)
     "coffee": "PCOFFOTMUSDM",          # Global price of Coffee, Other Mild Arabica, МІСЯЧНА (не денна), центи/фунт, джерело IMF
+
+    # 2026-10-04 (docs/decisions.md, живий кейс "/watchlist_add NATGAS"
+    # не підтвердився ні на Twelve Data, ні на Binance): FRED МАЄ
+    # щоденну офіційну серію (EIA, через FRED) — живо звірено WebFetch
+    # з реальним торговим терміналом користувача ($3.136) того самого
+    # дня: DHHNGSP $3.18 за 29.09 — та сама величина (нормальний
+    # день-два лагу публікації, не помилка джерела).
+    "natgas": "DHHNGSP",               # Henry Hub Natural Gas Spot Price, щоденна, $/млн БТО, джерело EIA
 }
+
+# ДЕННІ макро-серії БЕЗ календаря релізів (2026-10-04, рішення
+# користувача: "облігації це обовязково"). Проблема, яку це закриває:
+# ці серії оновлюються ЩОДНЯ, але жоден щоденний конвеєр їх не брав —
+# `check_releases` тригериться календарем релізів (FRED release dates),
+# якого в денних серій не існує, тож єдиним шляхом у БД був
+# `safety_net_collect_all` РАЗ НА МІСЯЦЬ. Живий стан на 2026-10-04:
+# treasury_10y/treasury_2y/fed_funds_rate застрягли на 2026-09-29,
+# тобто 5 днів застарілості на ДЕННОМУ показнику — те саме критичне
+# правило 7 (CLAUDE.md), що й для watchlist-цін.
+#
+# Watchlist-серії FRED (wti_crude/brent_crude/eurusd/natgas/coffee)
+# СВІДОМО не тут — їх уже збирає щодня
+# `orchestration/jobs.py:_watchlist_prices`, дубль був би марним
+# навантаженням на API.
+DAILY_MACRO_METRICS: frozenset[str] = frozenset({
+    "treasury_10y",
+    "treasury_2y",
+    "fed_funds_rate",
+    "usdjpy_fx_rate",
+})
 
 # FRED позначає відсутнє значення символом "." — не 0 і не null.
 _MISSING_VALUE = "."

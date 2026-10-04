@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import bold, escape_html, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
@@ -53,10 +53,10 @@ def format_message(rows: list[dict]) -> str:
     if not rows:
         return "🆕 Нових кандидатів-новачків немає."
 
-    lines = [f"🆕 Нові кандидати-новачки ({len(rows)}):", ""]
+    lines = [bold(f"🆕 Нові кандидати-новачки ({len(rows)}):"), ""]
     for row in rows:
-        lines.append(f"{row['ticker']} — {row['company_name']}")
-        lines.append(row["reasoning"])
+        lines.append(bold(f"{row['ticker']} — {row['company_name']}"))
+        lines.append(escape_html(row["reasoning"]))
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -78,7 +78,7 @@ def main() -> None:
             return
 
         text = format_message(rows)
-        send_telegram_message(token, chat_id, text)
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "candidate_assets", [row["id"] for row in rows])
         logger.info("Надіслано в Telegram: %d кандидатів", len(rows))
     finally:

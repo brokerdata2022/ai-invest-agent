@@ -39,6 +39,8 @@ from dotenv import load_dotenv
 from _common import (  # noqa: E402
     DIRECTION_EMOJI,
     MARKET_DIRECTION_LABEL,
+    bold,
+    escape_html,
     fetch_dicts,
     fetch_one_dict,
     mark_notified,
@@ -144,34 +146,41 @@ def format_news_synthesis_message(row: dict) -> str:
     повідомлення."""
     emoji = DIRECTION_EMOJI.get(row["direction"], "❓")
     lines = [
-        f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}% "
-        f"({row['price_start_date']} → {row['price_end_date']}), "
-        f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)",
-        row["summary"],
+        bold(
+            f"{emoji} {row['asset_id']}: ціна {float(row['price_pct_change']):+.2f}% "
+            f"({row['price_start_date']} → {row['price_end_date']}), "
+            f"новини {row['net_lean']:+d} ({row['cluster_count']} історій)"
+        ),
+        escape_html(row["summary"]),
     ]
     if row.get("confirmation_factors"):
-        lines.append(f"Перевірити: {row['confirmation_factors']}")
+        lines.append(f"🔎 Перевірити: {escape_html(row['confirmation_factors'])}")
     return "\n".join(lines)
 
 
 def format_market_synthesis_message(row: dict) -> str:
     label = MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
-    return f"🌍 Стан ринку: {label} (упевненість {float(row['confidence']):.2f})\n{row['summary']}"
+    confidence = float(row["confidence"])
+    header = f"🌍 Стан ринку: {label} (упевненість {confidence:.2f})"
+    return f"{bold(header)}\n{escape_html(row['summary'])}"
 
 
 def format_surprise_message(row: dict) -> str:
     label = METRIC_LABELS.get(row["metric_id"], row["metric_id"])
     pct_suffix = f" ({row['surprise_pct']:+.1f}%)" if row["surprise_pct"] is not None else ""
+    header = f"📈 {label} — {row['observed_at']}"
+    actual = f"{float(row['actual_value']):.4g}"
     return (
-        f"📈 {label} — {row['observed_at']}\n"
-        f"Факт {float(row['actual_value']):.4g} vs очікування "
-        f"{float(row['expected_value_parsed']):.4g} (прогноз: {row['expected_value_raw']})\n"
+        f"{bold(header)}\n"
+        f"Факт {bold(actual)} vs очікування "
+        f"{float(row['expected_value_parsed']):.4g} (прогноз: {escape_html(row['expected_value_raw'])})\n"
         f"Сюрприз: {float(row['surprise']):+.4g}{pct_suffix}"
     )
 
 
 def format_candidate_message(row: dict) -> str:
-    return f"🆕 {row['ticker']} — {row['company_name']}\n{row['reasoning']}"
+    header = f"🆕 {row['ticker']} — {row['company_name']}"
+    return f"{bold(header)}\n{escape_html(row['reasoning'])}"
 
 
 def main() -> None:
@@ -219,7 +228,7 @@ def main() -> None:
             return
 
         for text, mark_fn in items:
-            send_telegram_message(token, chat_id, text)
+            send_telegram_message(token, chat_id, text, parse_mode="HTML")
             mark_fn()
 
         logger.info("Надіслано в Telegram: %d повідомлень дайджесту", len(items))

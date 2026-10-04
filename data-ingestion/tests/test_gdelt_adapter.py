@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from news.gdelt_adapter import GdeltAdapter, GdeltError
+from news.gdelt_adapter import GdeltAdapter, GdeltError, validate_gdelt_term
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -188,3 +188,48 @@ def test_fetch_accepts_custom_timespan():
     adapter.fetch(timespan="1w")
 
     assert session.last_params["timespan"] == "1w"
+
+
+# --- validate_gdelt_term() (2026-10-04, живий кейс "BNB" — watchlist_add) ---
+
+def test_validate_gdelt_term_true_on_valid_json():
+    session = _FakeSession([_FakeResponse(200, {"articles": []})])
+    assert validate_gdelt_term("gold price", session=session) is True
+
+
+def test_validate_gdelt_term_false_on_non_json_rejection():
+    # Той самий "Uber"-урок — GDELT віддає 200 з текстом "The specified
+    # phrase is too short.", не валідний JSON.
+    session = _FakeSession([_FakeResponse(200, payload=None, text="The specified phrase is too short.\n")])
+    assert validate_gdelt_term("BNB", session=session) is False
+
+
+class _RaisingSession:
+    """.get() одразу кидає мережеву помилку — на відміну від
+    _FakeSession/_FakeResponse вище (raise_for_status() там — плоский
+    RuntimeError для тесту fetch(), не requests.exceptions.*), тут
+    навмисно справжній тип з requests, який validate_gdelt_term() і
+    ловить."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url, params=None, timeout=None):
+        self.calls += 1
+        import requests
+
+        raise requests.exceptions.ConnectionError("boom")
+
+
+def test_validate_gdelt_term_false_on_request_error():
+    session = _RaisingSession()
+    assert validate_gdelt_term("x", session=session) is False
+
+
+def test_validate_gdelt_term_does_not_retry():
+    # На відміну від GdeltAdapter.fetch() — тут НЕМАЄ retry: відмова
+    # детермінована (чи то "too short", чи мережева помилка), повтор
+    # нічого не змінить.
+    session = _RaisingSession()
+    validate_gdelt_term("x", session=session)
+    assert session.calls == 1

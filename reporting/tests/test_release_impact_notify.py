@@ -36,9 +36,9 @@ def test_format_impact_message_renders_each_impact_with_assets_and_explanation()
         ],
     }
     text = format_impact_message(row)
-    assert "🔴 Крипта (BTC, ETH)" in text
+    assert "🔴 <b>Крипта</b> (BTC, ETH)" in text
     assert "Довше утримання ставки" in text
-    assert "🟢 Золото (XAU/USD)" in text
+    assert "🟢 <b>Золото</b> (XAU/USD)" in text
     assert "Вищий ризик рецесії" in text
 
 
@@ -57,7 +57,7 @@ def test_format_impact_message_omits_parens_when_assets_empty():
         ],
     }
     lines = format_impact_message(row).splitlines()
-    assert "❓ Інший актив" in lines
+    assert "❓ <b>Інший актив</b>" in lines
 
 
 def test_format_impact_message_falls_back_to_raw_metric_id_when_unknown():

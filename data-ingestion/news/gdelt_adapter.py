@@ -51,6 +51,40 @@ _SEENDATE_FORMAT = "%Y%m%dT%H%M%SZ"
 _RETRY_DELAYS = (5, 10, 20)
 
 
+def validate_gdelt_term(term: str, session: Optional[requests.Session] = None) -> bool:
+    """ОДИН (без retry) легкий GDELT-запит лише з цим ОДНИМ квотованим
+    терміном — True, якщо GDELT прийняв його (валідний JSON), False
+    якщо відхилив (напр. "The specified phrase is too short" — той
+    самий "Uber"-урок, docs/decisions.md 2026-09-25: дуже короткі/
+    загальновживані слова GDELT відхиляє навіть у лапках) чи мережева
+    помилка. Без retry навмисно — ЦЯ відмова детермінована (та сама
+    фраза не стане "достатньо довгою" від повторної спроби), на
+    відміну від транзієнтного 429, retry тут лише видовжив би
+    очікування даремно.
+
+    Додано 2026-10-04 (orchestration/telegram_commands.py:
+    /watchlist_add, docs/decisions.md) — живий кейс: доданий без цієї
+    перевірки термін '"BNB"' зламав ЦІЛИЙ watchlist GDELT-запит (один
+    поганий OR-термін псує запит для ВСІХ активів одразу, не лише
+    нового) — валідація тут запобігає цьому ДО того, як термін
+    потрапить у продакшн-запит."""
+    session = session or requests.Session()
+    try:
+        response = session.get(
+            GDELT_DOC_URL,
+            params={
+                "query": f'"{term}"', "mode": "artlist", "format": "json",
+                "maxrecords": 1, "timespan": "1d",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        response.json()
+    except (requests.exceptions.RequestException, ValueError):
+        return False
+    return True
+
+
 class GdeltAdapter(BaseNewsAdapter):
     source = "gdelt"
 

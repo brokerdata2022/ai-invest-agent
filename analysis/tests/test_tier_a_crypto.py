@@ -43,9 +43,23 @@ def test_rejects_low_open_interest():
     assert any("OI" in r for r in result.reasons)
 
 
-def test_rejects_single_exchange_listing():
+def test_single_exchange_listing_is_eligible():
+    # 2026-10-03, живий кейс AINUSDT: MIN_EXCHANGE_COUNT знижено до 1 —
+    # ліквідна монета ЛИШЕ на одній біржі більше не відсіюється через
+    # це саме по собі (обсяг/OI лишаються справжнім гейтом).
     aggregated = {**GOOD_AGGREGATED, "exchange_count": 1}
     result = check_tier_a("SOLOUSDT", aggregated, OLD_ONBOARD, TODAY)
+
+    assert result.eligible is True
+    assert result.reasons == []
+
+
+def test_rejects_zero_exchange_listing():
+    # Теоретичний крайній випадок (на практиці не трапляється —
+    # aggregate_snapshots() ніколи не заведе запис із 0 бірж) — сам
+    # критерій і далі коректно відхиляє, якщо exchange_count=0.
+    aggregated = {**GOOD_AGGREGATED, "exchange_count": 0}
+    result = check_tier_a("GHOSTUSDT", aggregated, OLD_ONBOARD, TODAY)
 
     assert result.eligible is False
     assert any("бірж" in r for r in result.reasons)
@@ -66,7 +80,7 @@ def test_rejects_unknown_onboard_date():
 
 
 def test_accumulates_multiple_rejection_reasons():
-    aggregated = {"quote_volume_24h": Decimal("1"), "open_interest_usd": Decimal("1"), "exchange_count": 1}
+    aggregated = {"quote_volume_24h": Decimal("1"), "open_interest_usd": Decimal("1"), "exchange_count": 0}
     result = check_tier_a("BADUSDT", aggregated, None, TODAY)
 
     assert result.eligible is False

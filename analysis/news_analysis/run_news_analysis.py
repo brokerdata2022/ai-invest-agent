@@ -4,7 +4,8 @@
 gdelt_adapter.py) і ще не проаналізованих.
 
 Для стріму watchlist --tracked-assets за замовчуванням береться з
-news/queries.py:WATCHLIST_ASSET_IDS (те саме джерело істини, що й
+common/watchlist_db.py:fetch_asset_ids(conn) (2026-10-03 — раніше
+news/queries.py:WATCHLIST_ASSET_IDS; те саме джерело істини, що й
 query для GDELT-збору) — явний --tracked-assets перекриває це.
 
 Використання:
@@ -26,7 +27,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
-from news.queries import WATCHLIST_ASSET_IDS  # noqa: E402
+from common.watchlist_db import fetch_asset_ids  # noqa: E402
 from llm_common import log_llm_call  # noqa: E402
 from news_analysis._db import fetch_unanalyzed, save_analysis  # noqa: E402
 from news_analysis.relevance_filter import analyze_article, DeepSeekResponseError  # noqa: E402
@@ -35,28 +36,23 @@ from screening._results_db import fetch_latest_tickers  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Дефолтні tracked_assets per stream, коли --tracked-assets не задано
-# явно. Тільки watchlist має фіксований список активів; для
-# general/geopolitical дефолту нема (None — build_prompt() просто не
-# додає рядок "Відстежувані активи").
-_DEFAULT_TRACKED_ASSETS: dict[str, list[str]] = {
-    "watchlist": WATCHLIST_ASSET_IDS,
-}
-
-
 def resolve_tracked_assets(
     article_stream: str,
     explicit: Optional[list[str]],
     screening_tickers: Optional[list[str]] = None,
+    default_tracked_assets: Optional[dict[str, list[str]]] = None,
 ) -> Optional[list[str]]:
     """Чиста функція вибору tracked_assets для однієї статті — явний
-    --tracked-assets завжди виграє, інакше дефолт per stream (лише
-    watchlist його має) + тикери з останнього скринінгу
-    (docs/news-purpose.md, "Ціль 2" — щоб DeepSeek міг проставити
-    asset_id=тикер для акційних новин, не тільки для watchlist.md-активів)."""
+    --tracked-assets завжди виграє, інакше дефолт per stream
+    (`default_tracked_assets` — лише watchlist його має, рахує main()
+    через `common/watchlist_db.py:fetch_asset_ids(conn)`, 2026-10-03,
+    живий редагований список, не хардкод) + тикери з останнього
+    скринінгу (docs/news-purpose.md, "Ціль 2" — щоб DeepSeek міг
+    проставити asset_id=тикер для акційних новин, не тільки для
+    watchlist-активів)."""
     if explicit:
         return explicit
-    default = _DEFAULT_TRACKED_ASSETS.get(article_stream)
+    default = (default_tracked_assets or {}).get(article_stream)
     if default is None:
         return None
     if screening_tickers:
@@ -73,7 +69,7 @@ def main() -> None:
     parser.add_argument(
         "--tracked-assets", default=None,
         help="список через кому (напр. AAPL,NVDA) — перекриває дефолт per stream "
-             "(watchlist: news/queries.py:WATCHLIST_ASSET_IDS)",
+             "(watchlist: common/watchlist_db.py:fetch_asset_ids)",
     )
     args = parser.parse_args()
 
@@ -89,13 +85,20 @@ def main() -> None:
         screening_tickers = fetch_latest_tickers(conn)
         logger.info("Тикери з останнього скринінгу: %d", len(screening_tickers))
 
+        # Дефолтні tracked_assets per stream, коли --tracked-assets не
+        # задано явно. Тільки watchlist має фіксований список активів;
+        # для general/geopolitical дефолту нема (None — build_prompt()
+        # просто не додає рядок "Відстежувані активи").
+        default_tracked_assets = {"watchlist": fetch_asset_ids(conn)}
+
         articles = fetch_unanalyzed(conn, stream=args.stream, limit=args.limit)
         logger.info("Знайдено %d непроаналізованих статей", len(articles))
 
         analyzed = 0
         for article in articles:
             tracked_assets = resolve_tracked_assets(
-                article["stream"], explicit_tracked_assets, screening_tickers
+                article["stream"], explicit_tracked_assets, screening_tickers,
+                default_tracked_assets=default_tracked_assets,
             )
             try:
                 result, prompt, raw_content = analyze_article(

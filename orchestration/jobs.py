@@ -89,48 +89,103 @@ def _crypto_derivatives_collect() -> None:
         conn.close()
 
 
-# asset_id (Twelve Data джерело в ASSET_PRICE_SOURCES) → тикер, яким
-# TwelveDataAdapter реально треба викликати (не сам metric_id —
-# "xauusd_close" не відновити назад у "XAU/USD", слеш уже втрачено
-# нормалізацією адаптера). eurusd/usdjpy додані 2026-10-02 — перейшли
-# з FRED (DEXUSEU/DEXJPUS), де публікація зависла на 2026-09-25 попри
-# заявлену щоденну частоту (docs/decisions.md 2026-10-02, живо
-# підтверджено на fred.stlouisfed.org).
-_TWELVEDATA_TICKER_BY_ASSET = {
-    "xauusd": "XAU/USD",
-    "eurusd": "EUR/USD",
-    "usdjpy": "USD/JPY",
-}
-
-# Джерела в ASSET_PRICE_SOURCES, які ця джоба НЕ збирає сама — btc/eth/
-# sol/xagusd (2026-10-02) уже збираються _crypto_prices()@щогодини.
+# Джерела, які ця джоба НЕ збирає сама — btc/eth/sol/xagusd (2026-10-02)
+# уже збираються _crypto_prices()@щогодини.
 _CRYPTO_OWNED_SOURCES = {"binance", "coingecko"}
 
 
 def _watchlist_prices() -> None:
     """Збирає ціни watchlist-товарів/форексу/золота (FredAdapter для
-    fred-джерел, TwelveDataAdapter для xauusd/eurusd/usdjpy), ПОТІМ
-    логує % зміни.
+    fred-джерел, TwelveDataAdapter для twelvedata-джерел,
+    TradingEconomicsAdapter для tradingeconomics-джерел — 2026-10-04,
+    commodities/tradingeconomics_adapter.py, скрапінг для товарів, яким
+    FRED/Twelve Data не дають щоденної свіжості), ПОТІМ логує % зміни.
+    Список активів — живий, з watchlist_assets (common/watchlist_db.py,
+    2026-10-03, редагується через Telegram), не хардкод — ticker для
+    twelvedata/tradingeconomics бере прямо з рядка БД (раніше окремий
+    словник _TWELVEDATA_TICKER_BY_ASSET).
 
     Живо виявлено 2026-09-27 (перевірка "з нуля" на новому Docker
     Engine): ця функція раніше лише ЧИТАЛА fetch_all_price_changes(),
     жодного разу нічого не збираючи — попри щоденний розклад і
     докстрінг, що обіцяв збір. Єдиним (побічним, раз на місяць) шляхом
     ці дані взагалі потрапляли в БД був safety_net_collect_all
-    (docs/decisions.md, 2026-09-27)."""
+    (docs/decisions.md, 2026-09-27).
+
+    Автоматичний резерв (2026-10-04, живий фідбек користувача:
+    "резервний варіант має вже працювати... коли основне джерело не
+    отримує свіжі дані то використовувати резерв") — `_FALLBACK_CHAINS`
+    нижче: для xauusd/wti_crude/brent_crude/natgas пробує ВСІХ
+    кандидатів щоразу й АВТОМАТИЧНО перемикає watchlist_assets.source
+    на найсвіжішого (common/watchlist_db.py:choose_freshest_source()),
+    без ручного `set_source()` чи сесії Claude."""
     sys.path.insert(0, str(REPO_ROOT / "analysis"))
     sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
+    from commodities.tradingeconomics_adapter import TradingEconomicsAdapter  # noqa: E402
     from common.db import get_connection, insert_observations  # noqa: E402
+    from common.watchlist_db import (  # noqa: E402
+        SourceCandidate, choose_freshest_source, fetch_price_sources, fetch_watchlist,
+    )
+    from crypto.binance_adapter import BinanceAdapter  # noqa: E402
     from macro.fred_adapter import FredAdapter  # noqa: E402
     from quotes.twelvedata_adapter import TwelveDataAdapter  # noqa: E402
-    from news_analysis.prices import ASSET_PRICE_SOURCES, fetch_all_price_changes  # noqa: E402
+    from news_analysis.prices import fetch_all_price_changes  # noqa: E402
 
     fred_key = os.environ.get("FRED_API_KEY")
     twelvedata_key = os.environ.get("TWELVEDATA_API_KEY")
 
+    # Автоматичний резерв (2026-10-04, живий фідбек користувача:
+    # "резервний варіант має вже працювати... коли основне джерело не
+    # отримує свіжі дані то використовувати резерв") — для активів
+    # нижче пробуємо ОБИДВА кандидати щоразу (не лише той, що зараз
+    # активний у watchlist_assets), потім choose_freshest_source()
+    # (common/watchlist_db.py) обирає найсвіжіший і сам перемикає
+    # джерело, якщо треба — без ручного втручання. Перший у списку —
+    # завжди бажаний (лишається активним, якщо сам свіжий).
+    #
+    # coffee СВІДОМО відсутня тут — немає жодного ЩОДЕННОГО
+    # структурованого альтернативного джерела (FRED дає лише МІСЯЧНУ
+    # PCOFFOTMUSDM, марно як "резерв" для денної свіжості) — чесно,
+    # не вдаваний резерв.
+    _FALLBACK_CHAINS: dict[str, list] = {
+        "xauusd": [
+            SourceCandidate("tradingeconomics", "xauusd", "gold"),
+            SourceCandidate("twelvedata", "xauusd", "XAU/USD"),
+        ],
+        "wti_crude": [
+            SourceCandidate("tradingeconomics", "wti_crude", "crude-oil"),
+            SourceCandidate("fred", "wti_crude", None),
+        ],
+        "brent_crude": [
+            SourceCandidate("tradingeconomics", "brent_crude", "brent-crude-oil"),
+            SourceCandidate("fred", "brent_crude", None),
+        ],
+        "natgas": [
+            SourceCandidate("tradingeconomics", "natgas", "natural-gas"),
+            SourceCandidate("fred", "natgas", None),
+        ],
+    }
+
+    def _collect_candidate(candidate: SourceCandidate):
+        if candidate.source == "tradingeconomics":
+            return TradingEconomicsAdapter(metric_id=candidate.metric_id, slug=candidate.ticker).collect()
+        if candidate.source == "twelvedata":
+            if not twelvedata_key:
+                return []
+            return TwelveDataAdapter(
+                api_key=twelvedata_key, ticker=candidate.ticker, metric_id=candidate.metric_id,
+            ).collect(limit=10)
+        if candidate.source == "fred":
+            if not fred_key:
+                return []
+            return FredAdapter(api_key=fred_key, metric_id=candidate.metric_id).collect(limit=10)
+        return []
+
     conn = get_connection()
     try:
-        for asset_id, (source, metric_id) in ASSET_PRICE_SOURCES.items():
+        watchlist = fetch_watchlist(conn)
+        for row in watchlist:
+            asset_id, source, metric_id, ticker = row["asset_id"], row["source"], row["metric_id"], row["ticker"]
             try:
                 if source == "fred":
                     if not fred_key:
@@ -141,13 +196,50 @@ def _watchlist_prices() -> None:
                     if not twelvedata_key:
                         logger.error("%s: TWELVEDATA_API_KEY не задано — пропущено", asset_id)
                         continue
-                    ticker = _TWELVEDATA_TICKER_BY_ASSET[asset_id]
-                    records = TwelveDataAdapter(api_key=twelvedata_key, ticker=ticker).collect(limit=10)
+                    # metric_id=asset_id (2026-10-04, той самий принцип, що
+                    # BinanceAdapter(metric_id=asset_id, ...) нижче): без
+                    # цього normalize() вивів би базу metric_id з ТИКЕРА,
+                    # який для активів, резолвлених через symbol_search
+                    # (напр. /watchlist_add NATGAS -> тикер "NG"), не
+                    # збігається з asset_id — зібрана ціна лягла б під
+                    # "ng_close", тоді як watchlist_assets.metric_id і далі
+                    # "natgas_close", і жодна функція, що читає
+                    # watchlist_assets (prices.py/watchlist_notify.py/
+                    # synthesize.py), ніколи б її не знайшла.
+                    records = TwelveDataAdapter(
+                        api_key=twelvedata_key, ticker=ticker, metric_id=asset_id,
+                    ).collect(limit=10)
+                elif source == "binance" and ticker:
+                    # Крипто, додане ПІЗНІШЕ через Telegram /watchlist_add
+                    # (2026-10-03, docs/decisions.md) — має ticker (символ
+                    # Binance, напр. "BNBUSDT"), на відміну від
+                    # оригінального btc/eth/sol (ticker=NULL, рядок нижче).
+                    # symbol= в обхід фіксованого METRICS (binance_adapter.py).
+                    # metric_id=asset_id (ГОЛИЙ, без "_close") — адаптер сам
+                    # дописує "_close"/"_volume" у normalize(), той самий
+                    # контракт, що оригінальний btc/eth/sol у _crypto_prices().
+                    records = BinanceAdapter(metric_id=asset_id, symbol=ticker).collect(limit=10)
                 elif source in _CRYPTO_OWNED_SOURCES:
-                    # btc/eth/sol/xagusd (2026-10-02, prices.py:ASSET_PRICE_SOURCES) —
-                    # уже збираються _crypto_prices()@щогодини, не тут;
-                    # без цього кожен прогін цієї джоби логував би
-                    # хибне "невідоме джерело" на ці чотири активи.
+                    # btc/eth/sol/xagusd (2026-10-02) — уже збираються
+                    # _crypto_prices()@щогодини, не тут; без цього кожен
+                    # прогін цієї джоби логував би хибне "невідоме
+                    # джерело" на ці активи.
+                    continue
+                elif source == "tradingeconomics":
+                    # coffee/wti_crude/brent_crude/natgas (2026-10-04,
+                    # critical rule 7) — справжній автоматизований
+                    # скрапінг (commodities/tradingeconomics_adapter.py),
+                    # щодня, без людини — замінив ручний web_crosscheck
+                    # нижче, який вимагав LLM-сесію на кожне оновлення.
+                    records = TradingEconomicsAdapter(metric_id=metric_id, slug=ticker).collect()
+                elif source == "web_crosscheck":
+                    # ОСТАННІЙ резерв (2026-10-04, critical rule 7) —
+                    # лише коли НЕМАЄ жодного автоматизованого джерела
+                    # (ні структурований API, ні скрапінг-адаптер типу
+                    # tradingeconomics вище). Значення приходить ЗЗОВНІ
+                    # (common/manual_observation.py, людина/LLM-веб-пошук
+                    # звірений на 2+ сайтах) — без цієї гілки кожен
+                    # прогін логував би хибне "невідоме джерело".
                     continue
                 else:
                     logger.warning("%s: невідоме джерело %r — пропущено", asset_id, source)
@@ -160,7 +252,32 @@ def _watchlist_prices() -> None:
                 logger.error("%s: збір провалився", asset_id, exc_info=True)
                 conn.rollback()
 
-        changes = fetch_all_price_changes(conn, list(ASSET_PRICE_SOURCES))
+        # Резервний прохід (див. _FALLBACK_CHAINS вище) — ПІСЛЯ основного
+        # циклу, який зібрав лише з ПОТОЧНОГО watchlist_assets.source.
+        # Тут пробуємо КОЖНОГО кандидата в ланцюжку (включно з тим, що
+        # вже зібраний вище, — повторний виклик нешкідливий,
+        # insert_observation ідемпотентний) і обираємо найсвіжіший.
+        for asset_id, chain in _FALLBACK_CHAINS.items():
+            try:
+                for candidate in chain:
+                    try:
+                        records = _collect_candidate(candidate)
+                        if records:
+                            insert_observations(conn, records)
+                    except Exception:
+                        logger.error(
+                            "%s: резервний кандидат %s провалився", asset_id, candidate.source, exc_info=True,
+                        )
+                        conn.rollback()
+
+                chosen = choose_freshest_source(conn, asset_id, chain)
+                logger.info("%s: активне джерело -> %s", asset_id, chosen.source)
+            except Exception:
+                logger.error("%s: вибір резервного джерела провалився", asset_id, exc_info=True)
+                conn.rollback()
+
+        price_sources = fetch_price_sources(conn)
+        changes = fetch_all_price_changes(conn, list(price_sources), price_sources=price_sources)
         for asset_id, change in changes.items():
             logger.info("%s: %.2f%% (%s -> %s)", asset_id, change.pct_change, change.start_date, change.end_date)
     finally:
@@ -168,6 +285,60 @@ def _watchlist_prices() -> None:
 
 
 LOG_RETENTION_DAYS = 14
+
+
+def _macro_daily_series() -> None:
+    """Щоденний збір ДЕННИХ макро-серій FRED, у яких немає календаря
+    релізів: облігації (`treasury_10y`/`treasury_2y`), ставка ФРС
+    (`fed_funds_rate`), курс USD/JPY (`usdjpy_fx_rate`) —
+    `macro/fred_adapter.py:DAILY_MACRO_METRICS`.
+
+    Чому ця джоба існує (2026-10-04, рішення користувача "облігації це
+    обовязково"): жоден щоденний конвеєр цих серій не брав.
+    `check_releases` тригериться календарем релізів, якого в них не
+    існує; `_watchlist_prices` бере лише watchlist-активи. Єдиним
+    шляхом у БД був `safety_net_collect_all` — РАЗ НА МІСЯЦЬ, 1-го
+    числа. Живий стан на 2026-10-04: treasury_10y/treasury_2y/
+    fed_funds_rate стояли на 2026-09-29, тобто 5 днів застарілості на
+    ДЕННОМУ показнику — те саме критичне правило 7 (CLAUDE.md), що й
+    для watchlist-цін.
+
+    Callable, не subprocess — як `_watchlist_prices`: потрібен один
+    адаптер і один коміт, окремий CLI-скрипт для цього був би зайвим
+    файлом (`collect_all.py --source fred` зібрав би ще й усі місячні
+    серії даремно).
+
+    append-only дедуп у `insert_observations()` робить повторний
+    прогін безпечним: FRED публікує денні серії з лагом день-два, тож
+    кілька прогонів поспіль бачать ті самі точки."""
+    sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
+    from common.db import get_connection, insert_observations  # noqa: E402
+    from macro.fred_adapter import DAILY_MACRO_METRICS, FredAdapter  # noqa: E402
+
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        raise RuntimeError("FRED_API_KEY не задано — денні макро-серії зібрати неможливо")
+
+    conn = get_connection()
+    try:
+        for metric_id in sorted(DAILY_MACRO_METRICS):
+            try:
+                # limit=30 — щедрий запас на лаг публікації FRED
+                # (день-два) і на пропущені прогони; append-only дедуп
+                # робить перекриття безкоштовним.
+                records = FredAdapter(api_key=api_key, metric_id=metric_id).collect(limit=30)
+                inserted = insert_observations(conn, records) if records else 0
+                logger.info(
+                    "%s: зібрано %d точок (%d нових/змінених)",
+                    metric_id, len(records), inserted,
+                )
+            except Exception:
+                # Один показник не валить решту — той самий best-effort
+                # принцип, що collect_all.py.
+                logger.error("%s: збір провалився", metric_id, exc_info=True)
+                conn.rollback()
+    finally:
+        conn.close()
 
 
 def _prune_logs() -> None:
@@ -254,11 +425,23 @@ JOBS = {
     "check_releases": {
         "subprocess": _py(str(REPO_ROOT / "monitoring" / "check_releases.py")),
     },
+    "telegram_commands": {
+        "subprocess": _py(str(REPO_ROOT / "orchestration" / "telegram_commands.py")),
+    },
     "refresh_calendar": {
         "subprocess": _py(str(REPO_ROOT / "monitoring" / "refresh_calendar.py")),
     },
+    "calendar_outlook": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "calendar_outlook" / "run_outlook.py")),
+    },
+    "notify_calendar_outlook": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "calendar_notify.py")),
+    },
     "update_forecasts": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "update_forecasts.py")),
+    },
+    "notify_forecasts": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "forecast_notify.py")),
     },
     "compare_expectations": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "compare_releases.py")),
@@ -409,6 +592,12 @@ JOBS = {
     },
     "safety_net_collect_all": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "collect_all.py"), "--limit", "15"),
+    },
+    "macro_daily_series": {
+        "callable": _macro_daily_series,
+    },
+    "forecast_daily_series": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "forecast_daily.py")),
     },
     "prune_logs": {
         "callable": _prune_logs,

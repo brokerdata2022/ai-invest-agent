@@ -94,7 +94,8 @@ data-ingestion/   — усе, що стосується ЗБОРУ сирих д
 analysis/         — обробка зібраних даних: прогнози, порівняння з очікуваннями
   llm_common.py     — спільна LLM-проводка: провайдер, розбір відповіді,
                       аудит-лог виклику (новий LLM-скрипт бере це звідси)
-  forecasting/      — трендові моделі + backtest проти naive
+  forecasting/      — LLM-прогноз наступного значення показника
+                      (llm_forecast.py) + backtest проти naive/тренду
   expectations/     — факт vs ринкове очікування + LLM-синтез сюрпризу
   news_analysis/    — класифікація новин, агрегація, LLM-синтези
   screening/        — скринінг акцій S&P 500 (Tier A/B/C + composite score)
@@ -140,6 +141,37 @@ docs/             — архітектурні рішення, дизайн-до
    MAX_ARTICLE_AGE_HOURS`), зберігання — 48г (`RETENTION_HOURS`,
    джоба `prune_raw_news`). `raw_observations` (макро/акції/крипта)
    це правило НЕ торкається — і далі append-only назавжди.
+7. **Watchlist-ціни й новини — завжди на сьогодні, без штучних затримок.**
+   (рішення користувача, 2026-10-04, живий кейс: `/notify_watchlist`
+   показав WTI/Brent застарілими на кілька днів через вихідні, каву —
+   взагалі з ЛИПНЯ, бо `PCOFFOTMUSDM` (FRED) МІСЯЧНА серія; користувач
+   звірив із реальним торговим терміналом і відхилив таку затримку.)
+   Для "поточної ціни" watchlist-активу обирати джерело з
+   НАЙЧАСТІШИМ реальним оновленням (Twelve Data тощо), не "офіційне,
+   але повільне" (FRED release schedule) лише тому, що воно
+   першоджерело. **Якщо одне джерело не дає потрібного активу чи дає
+   застарілі дані — пробувати ІНШЕ, не зупинятись на першій невдачі**
+   (той самий принцип, що вже реалізований у `/watchlist_add` —
+   Twelve Data → Binance по черзі); і саму свіжість даних треба
+   ПЕРЕВІРЯТИ (дата останньої точки відносно сьогодні), не просто
+   довіряти, що джерело в принципі "є". Показник з ПРИРОДИ
+   місячний/квартальний (ВВП, CPI тощо) — не підпадає під це правило,
+   це цикл релізу самого показника, не вибір гіршого джерела. Деталі
+   заміни wti_crude/brent_crude/coffee — docs/decisions.md, 2026-10-04.
+   **Контроль свіжості/коректності — властивість САМОЇ системи, не
+   ручна робота в сесії** (той самий день, живий фідбек користувача
+   після довгого ланцюга реактивних фіксів одного й того ж класу
+   проблеми: "це має контролювати агент, а не робити фікси для того
+   що неправильно"): перш ніж вважати watchlist-актив чи його нове
+   джерело готовим, перевірити живими даними ОДРАЗУ — чи значення
+   збігається з незалежним джерелом, чи воно не переписується заднім
+   числом (revision drift), чи досить історії для розрахунків, що на
+   ньому будуються (synthesize.py потребує 2+ точок) — а не чекати,
+   поки користувач сам це виявить і попросить виправити. Інструменти
+   для цього вже є — `common/freshness.py:is_stale()`,
+   `common/quality.py:has_volatile_recent_revisions()` — використовувати
+   їх ПРОАКТИВНО при додаванні/зміні джерела, не лише як пасивний
+   прапорець у звіті постфактум.
 
 ## Команди
 ```bash
@@ -155,6 +187,18 @@ docker compose exec app python data-ingestion/run_collect.py --source sec_edgar 
 
 # Масовий збір по всьому S&P 500 (companies/ — SEC EDGAR фундаментал)
 docker compose exec app python data-ingestion/collect_companies_universe.py
+
+# Прогноз наступного значення показника (LLM, усі 15 показників
+# календаря; автоматично — джоба update_forecasts одразу після релізу)
+docker compose exec app python analysis/forecasting/forecast_metric.py --metric cpi
+docker compose exec app python reporting/forecast_notify.py
+
+# Backtest прогнозу проти naive-базової лінії (ОБОВ'ЯЗКОВО перед тим,
+# як довіряти прогнозу — analysis/CLAUDE.md). Платний: 1 виклик LLM на
+# точку, тому дефолт --points 8. Безкоштовний варіант на базових
+# моделях — backtest.py
+docker compose exec app python analysis/forecasting/backtest_llm.py --metric cpi
+docker compose exec app python analysis/forecasting/backtest.py --metric cpi
 
 # Скринінг акцій — воронка Tier A → B → C → ранжування
 docker compose exec app python analysis/screening/tier_a.py
@@ -206,6 +250,17 @@ docker compose logs -f scheduler
 # Ручний запуск однієї джоби негайно (для тестів), той самий код/образ
 docker compose exec app python orchestration/run_job.py check_releases
 docker compose exec app python orchestration/run_job.py --list
+
+# Ручний запуск джоби через Telegram людською мовою (замість run_job.py) —
+# команда = назва джоби, напр. /notify_screening; /help — список з описом.
+# Разово (і після кожної нової джоби) зареєструвати їх у "/"-меню бота:
+docker compose exec app python orchestration/register_telegram_commands.py
+
+# Редагування watchlist через Telegram (/watchlist_list,
+# /watchlist_add GBP/USD або /watchlist_add BNB, /watchlist_remove gbpusd) —
+# пробує Twelve Data, потім Binance spot на тому самому тикері (не
+# вгадує джерело за форматом рядка); нові FRED-серії/CoinGecko-метрики
+# й далі вимагають коду.
 ```
 
 ## Статус проєкту
@@ -215,6 +270,28 @@ docker compose exec app python orchestration/run_job.py --list
   пріоритезовано (P0/P1/P2) + чекліст розгортання на VPS.
 - **PLAN.md** — фази й чекбокси. **docs/decisions.md** — журнал рішень.
 
-Головна незакрита задача (2026-09-27): **прогнозування** — доведене до
-робочого стану лише на 1 показнику з 15 і назовні не виходить, хоча це
-перше, що обіцяє опис проєкту вище.
+**Прогнозування** (головна незакрита задача з 2026-09-27) закрито
+кодом і ПІДТВЕРДЖЕНО живим backtest 2026-10-04: прогноз формує LLM
+(`analysis/forecasting/llm_forecast.py`) для 19 показників (15
+календарних + 4 денні: облігації `treasury_10y`/`treasury_2y`,
+`fed_funds_rate`, `usdjpy_fx_rate`), проходить детермінований гейт
+правдоподібності й виходить у Telegram
+(`reporting/forecast_notify.py`, джоба `notify_forecasts`).
+
+Backtest пройдено на ВСІХ 19 (`backtest_llm.py`, по 8 точок
+out-of-sample, provider=deepseek): 8 відчутних перемог над naive
+(+13.9%…+61.3%), 3 в межах шуму, 4 нічиї, 4 поразки. Закономірність:
+LLM виграє на РІВНЯХ (індекси, ВВП, зайнятість), програє на вже
+продиференційованих рядах і випадкових блуканнях (`eurozone_hicp` —
+річна зміна; дохідності Treasury; `initial_jobless_claims`). Повна
+таблиця — PLAN.md Фаза 2, обґрунтування — docs/decisions.md.
+
+⚠️ **Свідомо прийнятий наслідок:** 4 показники й далі надсилають
+прогноз, вимірюваний гіршим за "нічого не змінилось". План покращення
+(вибір методу за показником, таблиця Δ у промпт тощо) зафіксований у
+PLAN.md і ВІДКЛАДЕНИЙ за рішенням користувача 2026-10-04 — спершу
+повторний backtest на кращій моделі, тоді рішення.
+
+Наступні відкриті пункти PLAN.md (Фаза 5): ШІ-аналіз ринку 3×/добу по
+сесіях, єдиний список відібраних активів, фундаментальний ШІ-аналіз
+о 14:00, фільтри причинної атрибуції в окремий конфіг.

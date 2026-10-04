@@ -1,10 +1,12 @@
 """
 Тести _common.py:mark_notified() — сама логіка (порожній список/білий
-список таблиць), без реальної БД (фейковий conn/cursor)."""
+список таблиць), без реальної БД (фейковий conn/cursor); та
+escape_html()/bold()/link() — HTML-хелпери для Telegram
+parse_mode="HTML" (2026-10-03)."""
 
 import pytest
 
-from _common import mark_notified
+from _common import bold, escape_html, link, mark_notified
 
 
 class _FakeCursor:
@@ -52,7 +54,7 @@ def test_mark_notified_rejects_unknown_table():
     [
         "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
         "news_consolidated", "screening_results", "crypto_screening_candidates",
-        "crypto_long_candidates",
+        "crypto_long_candidates", "calendar_outlook", "metric_forecasts",
     ],
 )
 def test_mark_notified_executes_update_for_known_tables(table):
@@ -65,3 +67,26 @@ def test_mark_notified_executes_update_for_known_tables(table):
     assert table in query
     assert "notified_at = now()" in query
     assert params == ([1, 2, 3],)
+
+
+def test_escape_html_escapes_reserved_characters():
+    assert escape_html("<script>&") == "&lt;script&gt;&amp;"
+
+
+def test_escape_html_leaves_quotes_alone():
+    # quote=False — лапки в ТЕКСТІ повідомлення не ескейпляться
+    # (тільки href в link() нижче цього потребує).
+    assert escape_html('He said "hi"') == 'He said "hi"'
+
+
+def test_escape_html_coerces_non_string_values():
+    assert escape_html(42) == "42"
+
+
+def test_bold_wraps_and_escapes():
+    assert bold("CPI & Core CPI") == "<b>CPI &amp; Core CPI</b>"
+
+
+def test_link_wraps_text_and_href_escaped():
+    text = link("Джерело 1", "https://example.com/a?x=1&y=2")
+    assert text == '<a href="https://example.com/a?x=1&amp;y=2">Джерело 1</a>'
