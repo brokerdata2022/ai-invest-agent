@@ -51,7 +51,15 @@ def build_scheduler() -> BlockingScheduler:
     for job_name, cfg in SCHEDULE.items():
         if job_name not in JOBS:
             raise KeyError(f"schedule.py має джобу {job_name!r}, якої немає в jobs.py:JOBS")
-        trigger = CronTrigger(**cfg["trigger"], timezone=TIMEZONE)
+        # Часовий пояс — з джоби, якщо задано, інакше глобальний.
+        # Потрібно для сесійних джоб (2026-10-04, питання користувача
+        # "ти врахував зміни літній/зимовий час?"): ринок відкривається
+        # у ФІКСОВАНИЙ ЛОКАЛЬНИЙ час, а не у фіксований київський, і
+        # різні ринки живуть у різних DST-режимах — Японія переходу не
+        # має взагалі, США переходять в інші дати, ніж ЄС. Детально —
+        # schedule.py, блок market_synthesis_*.
+        job_timezone = cfg.get("timezone", TIMEZONE)
+        trigger = CronTrigger(**cfg["trigger"], timezone=job_timezone)
         scheduler.add_job(
             run_job,
             trigger=trigger,
@@ -60,7 +68,10 @@ def build_scheduler() -> BlockingScheduler:
             max_instances=1,
             misfire_grace_time=300,
         )
-        logger.info("Зареєстровано джобу %s: %s (%s)", job_name, cfg["trigger"], cfg["why"])
+        logger.info(
+            "Зареєстровано джобу %s: %s [tz=%s] (%s)",
+            job_name, cfg["trigger"], job_timezone, cfg["why"],
+        )
     return scheduler
 
 
