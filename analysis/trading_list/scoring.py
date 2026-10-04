@@ -41,12 +41,31 @@ class CatalystHit:
     """Одна причина, чому актив у фокусі. `weight` — з config.py
     (CATALYST_WEIGHT_*), `direction` — куди вказує саме цей сигнал
     ('neutral', якщо напрямку немає — напр. запланований реліз, що
-    ще не вийшов: подія відома, напрямок ні)."""
+    ще не вийшов: подія відома, напрямок ні).
 
-    kind: str          # release | news | synthesis | forecast
+    `metric_id`/`detail`/`when` — СТРУКТУРОВАНІ поля для людського
+    тексту в reporting/ (живий фідбек 2026-10-04: готовий склеєний
+    рядок не давав reporting/ з чого зробити читабельне пояснення —
+    ні перекласти metric_id, ні згрупувати той самий реліз).
+    `text` лишається технічним аудит-слідом."""
+
+    kind: str          # release_upcoming | release_done | news | synthesis | forecast
     weight: Decimal
     direction: str = DIRECTION_NEUTRAL
     text: str = ""
+    metric_id: str = ""
+    detail: str = ""
+    when: str = ""
+
+    def as_reason(self) -> dict:
+        """Структурована форма для `trading_list.reasons` (JSONB)."""
+        return {
+            "kind": self.kind,
+            "direction": self.direction,
+            "metric_id": self.metric_id,
+            "detail": self.detail,
+            "when": self.when,
+        }
 
 
 @dataclass
@@ -62,7 +81,14 @@ class ScoreBreakdown:
     quality: Decimal
     direction: str
     catalyst_summary: str = ""
-    reasons: list[str] = field(default_factory=list)
+    # Структуровані причини для reporting/ (JSONB у trading_list).
+    reasons: list[dict] = field(default_factory=list)
+    # Напрямок і пояснення тренду окремо — щоб reporting/ міг сказати,
+    # ЩО саме суперечить ("тренд вгору, але новини вниз"), а не лишати
+    # марну позначку "суперечливо" без розшифровки (живий фідбек
+    # 2026-10-04).
+    trend_direction: str = DIRECTION_UNCLEAR
+    trend_detail: str = ""
 
 
 def _clamp(value: Decimal) -> Decimal:
@@ -304,8 +330,6 @@ def score_asset(
     if extra_direction:
         votes.append(extra_direction)
 
-    reasons = [r for r in (c_summary, t_detail) if r]
-
     return ScoreBreakdown(
         total=combine(c_score, t_score, q_score, is_watchlist=is_watchlist),
         catalyst=c_score,
@@ -313,7 +337,9 @@ def score_asset(
         quality=q_score,
         direction=resolve_direction(votes),
         catalyst_summary=c_summary,
-        reasons=reasons,
+        reasons=[h.as_reason() for h in hits],
+        trend_direction=t_direction,
+        trend_detail=t_detail,
     )
 
 

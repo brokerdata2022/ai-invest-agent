@@ -799,3 +799,23 @@ CREATE TABLE IF NOT EXISTS trading_list (
 
 CREATE INDEX IF NOT EXISTS idx_trading_list_run_at ON trading_list (run_at);
 CREATE INDEX IF NOT EXISTS idx_trading_list_horizon ON trading_list (horizon, run_at);
+
+-- 2026-10-04 (живий фідбек користувача на перше повідомлення торгового
+-- списку: "він не читабильний а технічний, має бути нормальне пояснення
+-- людською мовою а не змішано"): `catalyst_summary` був ГОТОВИМ РЯДКОМ,
+-- склеєним в analysis/ — і reporting/ не мав з чого зробити людський
+-- текст (metric_id замість назв, той самий реліз кілька разів, скори
+-- наголо).
+--
+-- Тепер analysis/ віддає СТРУКТУРОВАНІ причини, а текст складає
+-- reporting/ (reporting/CLAUDE.md: "тільки представлення"). Кожен
+-- елемент: {kind, metric_id, label, direction, detail}.
+-- `catalyst_summary` лишається — як технічний аудит-слід у БД, не для
+-- повідомлення.
+ALTER TABLE trading_list ADD COLUMN IF NOT EXISTS reasons JSONB;
+
+-- Людська назва активу: "Срібло (XAG/USD)" замість "XAGUSD", назва
+-- компанії замість тикера. Пишеться в analysis/ (там уже під рукою
+-- `watchlist_assets.label` і `screening_results.company_name`), щоб
+-- reporting/ не перезапитував три різні таблиці заради підпису.
+ALTER TABLE trading_list ADD COLUMN IF NOT EXISTS label TEXT;

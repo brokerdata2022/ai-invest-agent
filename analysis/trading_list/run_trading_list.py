@@ -26,6 +26,7 @@
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -124,6 +125,18 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
     (`categories.py`, розділ про обмеження)."""
     per_asset: dict[str, list[CatalystHit]] = {}
     stock_floor: list[CatalystHit] = []
+    # stock_floor потребує СВОГО дедупу: `add()` нижче дедупить лише
+    # прицільні хіти на актив, а підлога збиралась простим append —
+    # залишкова течія того самого бага (живий вивід 2026-10-04 показав
+    # "unemployment_rate вийшов" ТРИЧІ в одному рядку акції: по разу на
+    # категорію "ставка"/"економіка"/"акції").
+    floor_seen: set[str] = set()
+
+    def add_floor(hit: CatalystHit, event_key: str) -> None:
+        if event_key in floor_seen:
+            return
+        floor_seen.add(event_key)
+        stock_floor.append(hit)
     # Ключі вже зарахованих подій на актив — ДЕДУП. Жива причина
     # (прогін 2026-10-04): один реліз мапиться на `sol` через ТРИ
     # категорії ("ставка"/"акції"/"крипта") і зараховувався тричі, що
@@ -143,13 +156,17 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
         weight = _IMPACT_WEIGHT.get(release["impact_level"], config.CATALYST_WEIGHT_RELEASE_LOW)
         category = _METRIC_CATEGORY.get(release["metric_id"])
         text = f"реліз {release['metric_id']} {release['scheduled_at']:%d.%m %H:%M}"
-        hit = CatalystHit("release", weight, "neutral", text)
+        hit = CatalystHit(
+            "release_upcoming", weight, "neutral", text,
+            metric_id=release["metric_id"],
+            when=f"{release['scheduled_at']:%d.%m %H:%M}",
+        )
 
         event_key = f"release:{release['metric_id']}:{release['scheduled_at']:%Y%m%d%H%M}"
         for asset_id in watchlist_assets_for_category(category or ""):
             add(asset_id, hit, event_key)
         if category and category_affects_stocks(category):
-            stock_floor.append(hit)
+            add_floor(hit, event_key)
 
     # --- вийшлі релізи: міжактивний вплив від LLM ---
     for impact_row in fetch_recent_impacts(conn, config.CATALYST_RECENT_DAYS):
@@ -169,16 +186,21 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
                 # голос ПРО СОЛАНУ — а це причина, не напрямок солани.
                 own = direction if is_native_category(asset_id, category) else "neutral"
                 add(asset_id, CatalystHit(
-                    "release", config.CATALYST_WEIGHT_RELEASE_MEDIUM, own, text
+                    "release_done", config.CATALYST_WEIGHT_RELEASE_MEDIUM, own, text,
+                    metric_id=impact_row["metric_id"],
+                    detail=str(impact.get("explanation") or "")[:300],
                 ), event_key)
 
             if category_affects_stocks(category):
                 stock_direction = (
                     direction if is_native_category("", category, is_stock=True) else "neutral"
                 )
-                stock_floor.append(CatalystHit(
-                    "release", config.CATALYST_WEIGHT_RELEASE_MEDIUM, stock_direction, text
-                ))
+                add_floor(CatalystHit(
+                    "release_done", config.CATALYST_WEIGHT_RELEASE_MEDIUM,
+                    stock_direction, text,
+                    metric_id=impact_row["metric_id"],
+                    detail=str(impact.get("explanation") or "")[:300],
+                ), f"{event_key}:stocks")
 
     # --- новини (РІЗНЯТЬ активи, включно з тикерами акцій) ---
     for news in fetch_news_catalysts(
@@ -187,6 +209,7 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
         add(news["asset_id"], CatalystHit(
             "news", config.CATALYST_WEIGHT_NEWS, news["direction"],
             f"новина ({news['source_count']} джерел): {news['summary'][:120]}",
+            detail=news["summary"], when=str(news["source_count"]),
         ), f"news:{news['asset_id']}:{news['summary'][:40]}")
 
     # --- синтез ціна↔новини ---
@@ -196,6 +219,7 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
         add(syn["asset_id"], CatalystHit(
             "synthesis", config.CATALYST_WEIGHT_SYNTHESIS, syn["direction"],
             f"синтез ціна/новини: {syn['summary'][:120]}",
+            detail=syn["summary"],
         ), f"synthesis:{syn['asset_id']}")
 
     # --- НАШ прогноз (лише довірені показники) ---
@@ -210,13 +234,21 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
                 if is_native_category(asset_id, category or "") else "neutral"
             )
             add(asset_id, CatalystHit(
-                "forecast", config.CATALYST_WEIGHT_FORECAST, own, text
+                "forecast", config.CATALYST_WEIGHT_FORECAST, own, text,
+                metric_id=forecast["metric_id"],
+                # `direction` — ГОЛОС про актив (neutral для чужої
+                # категорії), `detail` — напрямок самого ПОКАЗНИКА.
+                # Живий фідбек 2026-10-04: у повідомленні виходило
+                # "наш прогноз CPI — без напрямку" у 8 рядках із 10,
+                # бо показувався голос, а не прогноз.
+                detail=forecast["direction"],
             ), event_key)
 
         if category and category_affects_stocks(category):
-            stock_floor.append(CatalystHit(
-                "forecast", config.CATALYST_WEIGHT_FORECAST, "neutral", text
-            ))
+            add_floor(CatalystHit(
+                "forecast", config.CATALYST_WEIGHT_FORECAST, "neutral", text,
+                metric_id=forecast["metric_id"], detail=forecast["direction"],
+            ), f"{event_key}:stocks")
 
     return per_asset, stock_floor
 
@@ -250,7 +282,13 @@ def build_list(conn) -> list[dict]:
             is_stock=True,
         )
         scored.append((ticker, breakdown, False))
-        meta[ticker] = {"kind": "stock", "source": "screening"}
+        meta[ticker] = {
+            "kind": "stock", "source": "screening",
+            # Назва компанії, якщо SEC EDGAR її дав — інакше сам тикер
+            # (живий фідбек 2026-10-04: "XAGUSD"/"BRENT_CRUDE" у
+            # повідомленні замість людських назв).
+            "label": stock.get("company_name") or ticker,
+        }
 
     # --- крипта (власний шар торгуємості) ---
     for coin in fetch_crypto_universe(conn):
@@ -268,9 +306,12 @@ def build_list(conn) -> list[dict]:
             catalyst=c_score, trend=t_score, quality=q_score,
             direction=resolve_direction([h.direction for h in hits] + [t_direction]),
             catalyst_summary="; ".join(p for p in (c_summary, t_detail) if p),
+            reasons=[h.as_reason() for h in hits],
+            trend_direction=t_direction,
+            trend_detail=t_detail,
         )
         scored.append((symbol, breakdown, False))
-        meta[symbol] = {"kind": "crypto", "source": "crypto_screening"}
+        meta[symbol] = {"kind": "crypto", "source": "crypto_screening", "label": symbol}
 
     # --- watchlist (пріоритет: бонус + зарезервовані слоти) ---
     for asset in fetch_watchlist_universe(conn):
@@ -281,14 +322,35 @@ def build_list(conn) -> list[dict]:
         )
         breakdown = score_asset(values=closes, hits=hits, is_watchlist=True)
         scored.append((asset_id, breakdown, True))
-        meta[asset_id] = {"kind": _watchlist_kind(asset_id), "source": "watchlist"}
+        meta[asset_id] = {
+            "kind": _watchlist_kind(asset_id), "source": "watchlist",
+            # `watchlist_assets.label` уже містить людську назву
+            # ("Срібло (XAG/USD)", "Нафта Brent") — беремо її, не
+            # asset_id.
+            "label": asset.get("label") or asset_id,
+        }
 
     final = select_final(scored)
     logger.info("Оцінено %d кандидатів, у список пройшло %d", len(scored), len(final))
 
-    return [
-        {
+    rows = []
+    for asset_id, breakdown, _ in final:
+        # Тренд іде в `reasons` ОКРЕМОЮ причиною (kind='trend') — щоб
+        # reporting/ міг сказати, що саме суперечить, а не лишати
+        # марну позначку "суперечливо" без розшифровки.
+        reasons = list(breakdown.reasons)
+        if breakdown.trend_detail:
+            reasons.append({
+                "kind": "trend",
+                "direction": breakdown.trend_direction,
+                "metric_id": "",
+                "detail": breakdown.trend_detail,
+                "when": "",
+            })
+
+        rows.append({
             "asset_id": asset_id,
+            "label": meta[asset_id]["label"],
             "kind": meta[asset_id]["kind"],
             "direction": breakdown.direction,
             "score": breakdown.total,
@@ -296,10 +358,10 @@ def build_list(conn) -> list[dict]:
             "trend_score": breakdown.trend,
             "quality_score": breakdown.quality,
             "catalyst_summary": breakdown.catalyst_summary,
+            "reasons": json.dumps(reasons, ensure_ascii=False),
             "source": meta[asset_id]["source"],
-        }
-        for asset_id, breakdown, _ in final
-    ]
+        })
+    return rows
 
 
 def main() -> None:

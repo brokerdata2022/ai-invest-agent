@@ -261,12 +261,12 @@ def save_trading_list(conn, rows: list[dict], horizon: str) -> int:
         cur.executemany(
             """
             INSERT INTO trading_list
-                (asset_id, kind, horizon, direction, score,
+                (asset_id, label, kind, horizon, direction, score,
                  catalyst_score, trend_score, quality_score,
-                 catalyst_summary, source)
-            VALUES (%(asset_id)s, %(kind)s, %(horizon)s, %(direction)s, %(score)s,
+                 catalyst_summary, reasons, source)
+            VALUES (%(asset_id)s, %(label)s, %(kind)s, %(horizon)s, %(direction)s, %(score)s,
                     %(catalyst_score)s, %(trend_score)s, %(quality_score)s,
-                    %(catalyst_summary)s, %(source)s)
+                    %(catalyst_summary)s, %(reasons)s, %(source)s)
             """,
             [{**row, "horizon": horizon} for row in rows],
         )
