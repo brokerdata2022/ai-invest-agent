@@ -99,7 +99,7 @@ _NOTIFIABLE_TABLES = frozenset({
     "news_analysis", "news_synthesis", "market_synthesis", "candidate_assets",
     "news_consolidated", "screening_results", "crypto_screening_candidates",
     "crypto_long_candidates", "calendar_outlook", "metric_forecasts",
-    "trading_list",
+    "trading_list", "fundamental_analysis",
 })
 
 

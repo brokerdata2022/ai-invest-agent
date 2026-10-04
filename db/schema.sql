@@ -182,8 +182,14 @@ CREATE TABLE IF NOT EXISTS market_synthesis (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_market_synthesis_per_day
-    ON market_synthesis (((created_at AT TIME ZONE 'UTC')::date));
+-- Унікальність market_synthesis перенесена на (дата, СЕСІЯ) —
+-- `idx_market_synthesis_per_session` нижче (2026-10-04, три сесійні
+-- синтези на добу). Оригінальний `idx_market_synthesis_per_day`
+-- (UNIQUE лише на даті) ВИДАЛЕНО звідси, а не заглушено DROP-ом
+-- нижче: schema.sql виконується зверху вниз, тож CREATE тут
+-- відтворював би індекс при кожному застосуванні — і падав би з
+-- UniqueViolation, щойно за добу з'явиться більше однієї сесії
+-- (живий збій 2026-10-04).
 
 -- Кандидати-новачки, знайдені LLM у general-потоці новин
 -- (analysis/news_analysis/discover_candidates.py, docs/news-purpose.md
@@ -819,3 +825,64 @@ ALTER TABLE trading_list ADD COLUMN IF NOT EXISTS reasons JSONB;
 -- `watchlist_assets.label` і `screening_results.company_name`), щоб
 -- reporting/ не перезапитував три різні таблиці заради підпису.
 ALTER TABLE trading_list ADD COLUMN IF NOT EXISTS label TEXT;
+
+-- 2026-10-04: market_synthesis — ТРИ синтези на добу за сесіями
+-- (спек користувача 2026-09-28: "ШІ-аналіз глобальної ситуації
+-- 'враховує все' — після відкриття азіатської/європейської/
+-- американської сесій, 3 рази/добу за часом сесій, не 1 раз/добу у
+-- фіксовану годину").
+--
+-- Структурний блокер, який це знімає: `idx_market_synthesis_per_day`
+-- був UNIQUE на ДАТІ, тобто фізично один рядок на добу — прогін 3×/добу
+-- падав би на конфлікті (а UPSERT затирав би попередню сесію).
+-- Тепер унікальність — на парі (дата, сесія).
+--
+-- Старі рядки (до цієї зміни) отримують session='daily' — вони й були
+-- одним добовим синтезом, а не сесійним; перезаписувати історію
+-- вигаданою сесією було б брехнею (rule 6: сирі дані не чіпаємо).
+ALTER TABLE market_synthesis ADD COLUMN IF NOT EXISTS session TEXT NOT NULL DEFAULT 'daily';
+
+DROP INDEX IF EXISTS idx_market_synthesis_per_day;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_synthesis_per_session
+    ON market_synthesis (((created_at AT TIME ZONE 'UTC')::date), session);
+
+-- 2026-10-04: фундаментальний LLM-аналіз акцій (спек користувача
+-- 2026-09-28: "Фундаментальний ШІ-аналіз о 14:00 кожного робочого дня
+-- для активів зі списку обраних — новий LLM-синтез, якого зараз немає:
+-- synthesize.py робить ціна↔новини, не фундаментальний аналіз per se
+-- (revenue/EPS/P/E тощо інтерпретовані LLM)").
+--
+-- Межа покриття, названа честно: у спеку сказано "watchlist + пройшли
+-- скринінг", але у watchlist-активів (золото, нафта, газ, BTC, валютні
+-- пари) фундаменталу НЕ ІСНУЄ — немає ні revenue, ні EPS, ні P/E.
+-- Тому аналіз покриває лише АКЦІЇ (sec_edgar + screening_results);
+-- вдавати, що товар чи валютна пара має фундаментал, було б гірше за
+-- чесну межу.
+--
+-- `strengths`/`risks` окремими JSONB-масивами, а не всередині
+-- `reasoning`: саме вони — суть фундаментального висновку, і їх треба
+-- показувати списком, не шукати в абзаці тексту.
+--
+-- UPSERT на (ticker, день): повторний прогін того самого дня оновлює
+-- рядок. `notified_at = NULL` при оновленні — той самий фікс, що
+-- news_synthesis (2026-09-29): інакше оновлений висновок назавжди
+-- лишався б невидимим для notify.
+CREATE TABLE IF NOT EXISTS fundamental_analysis (
+    id            BIGSERIAL PRIMARY KEY,
+    ticker        TEXT NOT NULL,
+    company_name  TEXT,
+    direction     TEXT NOT NULL,     -- up | down | neutral | unclear
+    confidence    NUMERIC NOT NULL,
+    summary       TEXT NOT NULL,
+    reasoning     TEXT NOT NULL,
+    strengths     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    risks         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    inputs        JSONB NOT NULL,    -- які саме числа пішли в промпт (аудит)
+    llm_call_id   BIGINT REFERENCES llm_call_log (id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notified_at   TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamental_analysis_ticker_per_day
+    ON fundamental_analysis (ticker, ((created_at AT TIME ZONE 'UTC')::date));

@@ -66,6 +66,35 @@ MACRO_CONTEXT_METRICS: dict[str, tuple[str, str]] = {
     "Japan Policy Rate": ("boj", "japan_policy_rate"),
 }
 
+# Торгові сесії (спек користувача 2026-09-28: "після відкриття
+# азіатської/європейської/американської сесій, 3 рази/добу за часом
+# сесій, не 1 раз/добу у фіксовану годину").
+#
+# Навіщо сесія в ПРОМПТІ, а не лише в розкладі: той самий набір новин
+# і макро-контексту читається інакше залежно від того, який ринок щойно
+# відкрився. Азія вранці реагує на вчорашнє закриття США; Нью-Йорк
+# відкривається вже знаючи, що зробила Європа. Без цього три прогони за
+# добу дали б три майже однакові висновки з однакових даних.
+SESSIONS = {
+    "asia": (
+        "Щойно відкрилась АЗІАТСЬКА сесія (Токіо). Азійські ринки першими "
+        "реагують на те, що сталось за ніч — насамперед на закриття США й "
+        "на нічні новини. Враховуй саме цю реакцію-відповідь."
+    ),
+    "europe": (
+        "Щойно відкрилась ЄВРОПЕЙСЬКА сесія (Лондон). Європа відкривається, "
+        "вже бачачи результат азіатської сесії, і додає власний потік "
+        "європейських даних та новин ЄЦБ."
+    ),
+    "us": (
+        "Щойно відкрилась АМЕРИКАНСЬКА сесія (Нью-Йорк) — найбільший обсяг "
+        "торгів доби. США відкриваються, знаючи і Азію, і Європу; саме тут "
+        "найчастіше формується домінантний напрямок дня."
+    ),
+}
+
+DEFAULT_SESSION = "daily"
+
 SYSTEM_PROMPT = (
     "Ти макро-стратег. Тобі дають дві речі: (1) макро-контекст — "
     "останні значення ключових ставок/дохідностей/валютних пар "
@@ -111,8 +140,15 @@ def fetch_macro_context(conn) -> dict[str, dict]:
     return context
 
 
-def build_prompt(clusters: list[NewsCluster], macro: dict) -> str:
-    lines = ["Макро-контекст:"]
+def build_prompt(
+    clusters: list[NewsCluster], macro: dict, session: str = DEFAULT_SESSION
+) -> str:
+    lines = []
+    session_context = SESSIONS.get(session)
+    if session_context:
+        lines.append(session_context)
+        lines.append("")
+    lines.append("Макро-контекст:")
     if macro:
         for label, entry in macro.items():
             if "previous_value" in entry:
@@ -134,11 +170,14 @@ def build_prompt(clusters: list[NewsCluster], macro: dict) -> str:
     return "\n".join(lines)
 
 
-def synthesize_market(clusters: list[NewsCluster], macro: dict, api_key: str):
+def synthesize_market(
+    clusters: list[NewsCluster], macro: dict, api_key: str,
+    session: str = DEFAULT_SESSION,
+):
     """Той самий контракт, що synthesize.synthesize_asset(): повертає
     (результат, промпт, сира_відповідь) для обов'язкового логування
     (rule 5)."""
-    prompt = build_prompt(clusters, macro)
+    prompt = build_prompt(clusters, macro, session=session)
     raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
     result = parse_synthesis_response(raw_content)
     return result, prompt, raw_content
@@ -148,9 +187,18 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--session", choices=sorted(SESSIONS), default=None,
+        help="торгова сесія, що щойно відкрилась (asia/europe/us) — додає "
+             "контекст у промпт і дає ОКРЕМИЙ рядок на добу; без неї "
+             "прогін зберігається як 'daily' (сумісність зі старим "
+             "одноразовим розкладом)",
+    )
     parser.add_argument("--max-age-days", type=int, default=7)
     parser.add_argument("--top", type=int, default=8, help="скільки найбільш підтверджених історій урахувати")
     args = parser.parse_args()
+
+    session = args.session or DEFAULT_SESSION
 
     api_key = require_api_key()
 
@@ -173,7 +221,9 @@ def main() -> None:
         logger.info("Макро-контекст: %d показників", len(macro))
 
         try:
-            result, prompt, raw_content = synthesize_market(top, macro, api_key)
+            result, prompt, raw_content = synthesize_market(
+                top, macro, api_key, session=session
+            )
         except SynthesisResponseError:
             logger.exception("Некоректна відповідь LLM — синтез пропущено")
             return
@@ -187,7 +237,7 @@ def main() -> None:
             purpose="market_context_synthesis",
             prompt=prompt,
             response=raw_content,
-            source_ref=None,
+            source_ref=session,
         )
         save_market_synthesis(
             conn,
@@ -196,10 +246,11 @@ def main() -> None:
             window_days=args.max_age_days,
             result=result,
             llm_call_id=llm_call_id,
+            session=session,
         )
         logger.info(
-            "Готово: direction=%s confidence=%.2f: %s",
-            result.direction, result.confidence, result.summary,
+            "Готово [%s]: direction=%s confidence=%.2f: %s",
+            session, result.direction, result.confidence, result.summary,
         )
     finally:
         conn.close()

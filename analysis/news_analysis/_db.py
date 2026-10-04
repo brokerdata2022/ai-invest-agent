@@ -155,8 +155,15 @@ def save_market_synthesis(
     window_days: int,
     result,  # SynthesisResult (synthesize_market.py) — качина типізація, див. коментар вище
     llm_call_id: int,
+    session: str = "daily",
 ) -> int:
-    """UPSERT — один рядок на день (db/schema.sql:idx_market_synthesis_per_day).
+    """UPSERT — один рядок на (день, СЕСІЯ)
+    (db/schema.sql:idx_market_synthesis_per_session).
+
+    `session` з'явився 2026-10-04: було UNIQUE на даті, тобто один
+    рядок на добу — три сесійні прогони (спек 2026-09-28) затирали б
+    один одного. Дефолт 'daily' лишає сумісність для прогону без
+    явної сесії.
 
     `notified_at = NULL` у DO UPDATE — той самий фікс і причина, що
     save_synthesis() вище (2026-09-29)."""
@@ -166,9 +173,9 @@ def save_market_synthesis(
             """
             INSERT INTO market_synthesis
                 (window_days, cluster_count, macro_context, summary, direction,
-                 confidence, reasoning, source_refs, llm_call_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                 confidence, reasoning, source_refs, llm_call_id, session)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (((created_at AT TIME ZONE 'UTC')::date), session) DO UPDATE SET
                 window_days = EXCLUDED.window_days,
                 cluster_count = EXCLUDED.cluster_count,
                 macro_context = EXCLUDED.macro_context,
@@ -192,6 +199,7 @@ def save_market_synthesis(
                 result.reasoning,
                 json.dumps(source_refs),
                 llm_call_id,
+                session,
             ),
         )
         synthesis_id = cur.fetchone()[0]

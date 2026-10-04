@@ -68,3 +68,40 @@ def test_synthesize_market_calls_llm_and_parses(monkeypatch):
     assert result.direction == "down"
     assert "Fed signals rates" in prompt
     assert raw_content == json.dumps(VALID_RESPONSE)
+
+
+# --- сесійний контекст (спек 2026-09-28, реалізовано 2026-10-04) ------
+
+
+def test_session_context_goes_into_prompt():
+    """Навіщо сесія в ПРОМПТІ, а не лише в розкладі: без неї три
+    прогони за добу дали б три майже однакові висновки з тих самих
+    даних."""
+    from news_analysis.synthesize_market import SESSIONS, build_prompt
+
+    for session, context in SESSIONS.items():
+        prompt = build_prompt([], {}, session=session)
+        assert context in prompt, f"{session}: контекст сесії не потрапив у промпт"
+
+
+def test_session_prompts_differ_between_sessions():
+    from news_analysis.synthesize_market import build_prompt
+
+    asia = build_prompt([], {}, session="asia")
+    us = build_prompt([], {}, session="us")
+    assert asia != us
+
+
+def test_unknown_session_falls_back_without_context():
+    """Невідома сесія не має валити прогін — просто без контексту."""
+    from news_analysis.synthesize_market import build_prompt
+
+    prompt = build_prompt([], {}, session="daily")
+    assert "Макро-контекст:" in prompt
+
+
+def test_three_sessions_registered():
+    """Рівно три сесії зі спеку — Азія/Європа/США."""
+    from news_analysis.synthesize_market import SESSIONS
+
+    assert set(SESSIONS) == {"asia", "europe", "us"}

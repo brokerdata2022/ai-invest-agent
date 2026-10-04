@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 
 def fetch_unnotified_market_synthesis(conn):
     query = """
-        SELECT id, cluster_count, direction, confidence, summary, source_refs, created_at
+        SELECT id, cluster_count, direction, confidence, summary, source_refs,
+               created_at, session
         FROM market_synthesis
         WHERE notified_at IS NULL
         ORDER BY created_at DESC
@@ -47,14 +48,29 @@ def fetch_unnotified_market_synthesis(conn):
     return fetch_one_dict(conn, query)
 
 
+# Сесія → заголовок повідомлення. 'daily' — старі рядки до переходу
+# на сесійний розклад (db/schema.sql, 2026-10-04).
+SESSION_TITLE = {
+    "asia": "🌏 Азіатська сесія",
+    "europe": "🌍 Європейська сесія",
+    "us": "🌎 Американська сесія",
+    "daily": "🌍 Стан ринку",
+}
+
+
 def format_message(row) -> str:
     if row is None:
         return "🌍 Синтезу стану ринку ще немає."
 
     label = MARKET_DIRECTION_LABEL.get(row["direction"], row["direction"])
     confidence = float(row["confidence"])
+    # Сесія в заголовку (2026-10-04): з трьома синтезами на добу без неї
+    # неможливо зрозуміти, про який момент доби йдеться — а саме момент
+    # і визначає, як читати ті самі новини (analysis/news_analysis/
+    # synthesize_market.py:SESSIONS).
+    session_title = SESSION_TITLE.get(row.get("session") or "daily", "🌍 Стан ринку")
     lines = [
-        bold(f"🌍 Стан ринку: {label} (упевненість {confidence:.2f})"),
+        bold(f"{session_title}: {label} (упевненість {confidence:.2f})"),
         escape_html(row["summary"]),
         "",
         bold(f"На основі {row['cluster_count']} найбільш підтверджених історій:"),

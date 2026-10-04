@@ -517,11 +517,35 @@ JOBS = {
     "notify_synthesis": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "synthesis_notify.py")),
     },
-    "market_synthesis": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize_market.py")),
+    # Три сесійні синтези замість одного добового (спек користувача
+    # 2026-09-28). Три ОКРЕМІ джоби, не одна з аргументом: `schedule.py`
+    # зберігає розклад на джобу, тож різний час = різні ключі.
+    "market_synthesis_asia": {
+        "subprocess": _py(
+            str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize_market.py"),
+            "--session", "asia",
+        ),
+    },
+    "market_synthesis_europe": {
+        "subprocess": _py(
+            str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize_market.py"),
+            "--session", "europe",
+        ),
+    },
+    "market_synthesis_us": {
+        "subprocess": _py(
+            str(REPO_ROOT / "analysis" / "news_analysis" / "synthesize_market.py"),
+            "--session", "us",
+        ),
     },
     "notify_market_synthesis": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "market_notify.py")),
+    },
+    "fundamental_analysis": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "fundamental" / "run_analysis.py")),
+    },
+    "notify_fundamental": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "fundamental_notify.py")),
     },
     "discover_candidates": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "discover_candidates.py")),
