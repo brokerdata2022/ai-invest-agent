@@ -228,7 +228,13 @@ def catalyst_score(hits: list[CatalystHit], is_stock: bool = False) -> tuple[Dec
     parts: list[str] = []
     for hit in hits:
         weight = hit.weight
-        if is_stock and hit.kind in ("release", "forecast"):
+        # `startswith("release")`, не точний перелік: типи хітів
+        # перейменовані на release_upcoming/release_done (2026-10-04,
+        # структуровані причини для reporting/) — і точна перевірка
+        # `in ("release", "forecast")` ТИХО перестала приглушувати
+        # макро для акцій. Жива регресія: каталізатор акцій підскочив
+        # 0.18 → 0.71, і 6 акцій заповнили список.
+        if is_stock and (hit.kind.startswith("release") or hit.kind == "forecast"):
             weight = weight * Decimal(str(STOCK_MACRO_DAMPING))
         weighted.append(weight)
         if hit.text:

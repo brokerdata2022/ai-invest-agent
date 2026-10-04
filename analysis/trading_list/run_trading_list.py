@@ -31,6 +31,7 @@ import logging
 import os
 import sys
 from decimal import Decimal
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -253,8 +254,14 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
     return per_asset, stock_floor
 
 
-def build_list(conn) -> list[dict]:
-    """Повертає рядки, готові для `save_trading_list()`."""
+def build_list(conn, require_own_catalyst: Optional[bool] = None) -> list[dict]:
+    """Повертає рядки, готові для `save_trading_list()`.
+
+    `require_own_catalyst` — перекриває `config.STOCK_REQUIRE_OWN_CATALYST`
+    (для порівняння двох режимів на тих самих даних без зміни
+    продакшену)."""
+    if require_own_catalyst is None:
+        require_own_catalyst = config.STOCK_REQUIRE_OWN_CATALYST
     per_asset, stock_floor = collect_catalysts(conn)
     logger.info(
         "Каталізатори: %d активів прицільно, %d широких макро для акцій",
@@ -269,11 +276,19 @@ def build_list(conn) -> list[dict]:
     best_composite = max((s["score"] for s in stocks), default=None)
     for stock in stocks:
         ticker = stock["ticker"]
-        hits = per_asset.get(ticker, []) + stock_floor
+        own_hits = per_asset.get(ticker, [])
+        hits = own_hits + stock_floor
         if not hits:
             # Без жодного каталізатора акція в торговий список не
             # потрапляє — саме це відсікає 215 рядків скринінгу до
             # дієздатного топу (docs/trading-list.md).
+            continue
+        if require_own_catalyst and not any(
+            h.kind in ("news", "synthesis") for h in own_hits
+        ):
+            # Строгий режим (config.STOCK_REQUIRE_OWN_CATALYST):
+            # макро-фон однаковий у всіх акцій і нічого не різнить, тож
+            # без ВЛАСНОЇ новини/синтезу тикер у "що торгувати" зайвий.
             continue
         closes = fetch_closes(conn, "twelvedata", f"{ticker.lower()}_close", config.TREND_LONG_DAYS + 5)
         breakdown = score_asset(
@@ -372,11 +387,27 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="порахувати й показати список, не записуючи в БД",
     )
+    parser.add_argument(
+        "--min-score", type=str, default=None,
+        help="перекрити config.MIN_SCORE для цього прогону (калібрування)",
+    )
+    parser.add_argument(
+        "--require-own-catalyst", action="store_true", default=None,
+        help="строгий режим: акція без ВЛАСНОЇ новини/синтезу не входить "
+             "(перекриває config.STOCK_REQUIRE_OWN_CATALYST для цього прогону)",
+    )
     args = parser.parse_args()
+
+    if args.min_score is not None:
+        # Калібрувальний перекрив: config лишається джерелом істини,
+        # прапорець потрібен лише щоб порівняти пороги на ТИХ САМИХ
+        # живих даних, не редагуючи файл між прогонами.
+        config.MIN_SCORE = Decimal(args.min_score)
+        logger.info("MIN_SCORE перекрито на %s для цього прогону", config.MIN_SCORE)
 
     conn = get_connection()
     try:
-        rows = build_list(conn)
+        rows = build_list(conn, require_own_catalyst=args.require_own_catalyst)
 
         for row in rows:
             logger.info(

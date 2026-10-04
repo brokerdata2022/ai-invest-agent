@@ -493,3 +493,16 @@ def test_crypto_magnitude_saturates_at_one():
 
     score, _, _ = crypto_trend_score("short", pump_pct=D("9999"))
     assert score == Decimal("1")
+
+
+def test_stock_damping_survives_hit_kind_rename():
+    """Жива регресія 2026-10-04: типи хітів перейменували на
+    release_upcoming/release_done, а перевірка приглушення шукала
+    точний "release" — і тихо перестала працювати (каталізатор акцій
+    0.18 → 0.71, 6 акцій заповнили список). Перевіряємо КОЖЕН
+    release-тип, щоб перейменування знову не пройшло непоміченим."""
+    for kind in ("release_upcoming", "release_done", "forecast"):
+        hit = CatalystHit(kind, config.CATALYST_WEIGHT_RELEASE_HIGH)
+        plain, _ = catalyst_score([hit], is_stock=False)
+        damped, _ = catalyst_score([hit], is_stock=True)
+        assert damped < plain, f"{kind}: приглушення для акцій не застосувалось"
