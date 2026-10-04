@@ -47,6 +47,10 @@ import requests
 from dotenv import load_dotenv
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Корінь репозиторію — для ЄДИНОГО `config.py` (рішення
+# користувача 2026-10-04: один конфіг на весь агент).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
@@ -59,7 +63,7 @@ from crypto.okx_futures_adapter import fetch_market_snapshot as fetch_okx_snapsh
 from crypto_screening.aggregate_sources import aggregate_snapshots  # noqa: E402
 from crypto_screening.short_watch_screen import screen_short_or_watch  # noqa: E402
 from crypto_screening._candidates_db import fetch_active_candidates, update_candidate  # noqa: E402
-from crypto_screening.config import PUMP_THRESHOLD_PCT  # noqa: E402
+from config import PUMP_THRESHOLD_PCT  # noqa: E402
 from crypto_screening.run_screening import (  # noqa: E402
     _pct_change,
     compute_monitoring_indicators,

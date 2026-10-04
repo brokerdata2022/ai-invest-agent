@@ -51,6 +51,10 @@ import requests
 from dotenv import load_dotenv
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Корінь репозиторію — для ЄДИНОГО `config.py` (рішення
+# користувача 2026-10-04: один конфіг на весь агент).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
@@ -82,7 +86,7 @@ from crypto_screening.long_screen import screen_long  # noqa: E402
 from crypto_screening.short_watch_screen import screen_short_or_watch  # noqa: E402
 from crypto_screening._candidates_db import upsert_candidate  # noqa: E402
 from crypto_screening._long_db import save_long_run  # noqa: E402
-from crypto_screening.config import (  # noqa: E402
+from config import (  # noqa: E402
     KLINES_LIMIT,
     OI_WINDOW_DAYS_LONG,
     MONITORING_KLINE_INTERVAL,

@@ -30,6 +30,10 @@ from dotenv import load_dotenv
 import requests
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Корінь репозиторію — для ЄДИНОГО `config.py` (рішення
+# користувача 2026-10-04: один конфіг на весь агент).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
@@ -42,14 +46,18 @@ from llm_common import (  # noqa: E402
     resolve_provider,
 )
 
-from fundamental import config  # noqa: E402
+import config  # noqa: E402
 from fundamental._db import (  # noqa: E402
     fetch_fundamental_series,
     fetch_top_stocks,
+    fetch_watchlist_assets,
     save_fundamental_analysis,
 )
+from fundamental.factors import collect_asset_factors  # noqa: E402
 from fundamental.fundamental_llm import (  # noqa: E402
+    ASSET_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    build_asset_prompt,
     build_prompt,
     parse_fundamental_response,
 )
@@ -108,6 +116,8 @@ def analyze_stock(conn, stock: dict, api_key: str) -> bool:
     result = parse_fundamental_response(raw_content)
     save_fundamental_analysis(
         conn,
+        asset_id=ticker,
+        asset_kind="stock",
         ticker=ticker,
         company_name=stock.get("company_name"),
         result=result,
@@ -122,6 +132,76 @@ def analyze_stock(conn, stock: dict, api_key: str) -> bool:
     return True
 
 
+def analyze_watchlist_asset(conn, asset: dict, api_key: str) -> bool:
+    """Розгорнутий аналіз активу СПИСКУ ОБРАНИХ за ЙОГО чинниками
+    (рішення користувача 2026-10-04). На відміну від акцій, вхід — не
+    звітність, а власний для кожного активу набір чинників
+    (`config.py:ASSET_FACTORS`): золото — реальні ставки й долар,
+    USD/JPY — різниця ставок ФРС/БОЯ, нафта — економічна активність."""
+    asset_id = asset["asset_id"]
+    asset_factors = collect_asset_factors(
+        conn,
+        asset_id=asset_id,
+        label=asset.get("label") or asset_id,
+        price_source=asset["source"],
+        price_metric_id=asset["metric_id"],
+    )
+
+    if asset_factors.using_default_factors:
+        logger.info(
+            "%s: свого чек-листа немає — універсальний набір "
+            "(config.py:DEFAULT_ASSET_FACTORS)", asset_id,
+        )
+
+    if not asset_factors.available:
+        logger.warning(
+            "%s: жоден чинник не має даних — пропущено (аналіз без входів "
+            "був би вигадкою)", asset_id,
+        )
+        return False
+
+    prompt = build_asset_prompt(asset_factors)
+    raw_content = call_llm(prompt, ASSET_SYSTEM_PROMPT, api_key)
+
+    llm_call_id = log_llm_call(
+        conn,
+        provider=resolve_provider(),
+        purpose="fundamental_analysis_asset",
+        prompt=prompt,
+        response=raw_content,
+        source_ref=asset_id,
+    )
+
+    result = parse_fundamental_response(raw_content)
+    save_fundamental_analysis(
+        conn,
+        asset_id=asset_id,
+        asset_kind="watchlist",
+        company_name=asset.get("label"),
+        result=result,
+        inputs={
+            "factors": [
+                {"label": f.label, "points": f.points, "texts": f.texts}
+                for f in asset_factors.available
+            ],
+            "unavailable": [
+                {"label": f.label, "reason": f.missing_reason}
+                for f in asset_factors.unavailable
+            ],
+            "gaps": list(asset_factors.gaps),
+        },
+        llm_call_id=llm_call_id,
+    )
+    logger.info(
+        "%s: direction=%s confidence=%.2f (чинників %d із %d, сильних %d, "
+        "ризиків %d): %s",
+        asset_id, result.direction, result.confidence,
+        len(asset_factors.available), len(asset_factors.factors),
+        len(result.strengths), len(result.risks), result.summary,
+    )
+    return True
+
+
 def main() -> None:
     load_dotenv()
 
@@ -131,43 +211,82 @@ def main() -> None:
         "--ticker", default=None,
         help="проаналізувати ОДИН тикер замість топу скринінгу (перевірка)",
     )
+    parser.add_argument(
+        "--asset", default=None,
+        help="проаналізувати ОДИН актив watchlist за його чинниками (перевірка)",
+    )
+    parser.add_argument(
+        "--only", choices=("watchlist", "stocks"), default=None,
+        help="обмежити прогін однією половиною (за замовчуванням — обидві)",
+    )
     args = parser.parse_args()
 
     api_key = require_api_key()
 
     conn = get_connection()
     try:
-        if args.ticker:
-            stocks = [{"ticker": args.ticker.upper(), "company_name": None}]
-        else:
-            stocks = fetch_top_stocks(conn, args.top)
+        analyzed = total = 0
 
-        if not stocks:
-            logger.warning(
-                "Скринінг не дав жодного тикера — спершу потрібен прогін "
-                "analysis/screening/composite_score.py"
-            )
-            return
+        # --- активи СПИСКУ ОБРАНИХ (кожен за своїми чинниками) ---
+        if args.only != "stocks":
+            if args.asset:
+                assets = [
+                    a for a in fetch_watchlist_assets(conn)
+                    if a["asset_id"] == args.asset
+                ]
+                if not assets:
+                    logger.error("%s: немає в watchlist", args.asset)
+            else:
+                assets = fetch_watchlist_assets(conn)
 
-        logger.info("Аналізуємо %d акцій", len(stocks))
-        analyzed = 0
-        for stock in stocks:
-            try:
-                if analyze_stock(conn, stock, api_key):
-                    analyzed += 1
-            except SynthesisResponseError:
-                logger.exception("%s: некоректна відповідь LLM — пропущено", stock["ticker"])
-                conn.rollback()
-            except requests.exceptions.RequestException:
-                logger.exception("%s: мережева помилка LLM — пропущено", stock["ticker"])
-                conn.rollback()
-            except Exception:
-                # Один тикер не валить цикл — той самий патерн, що
-                # update_forecasts.py/compare_releases.py.
-                logger.exception("%s: аналіз провалився", stock["ticker"])
-                conn.rollback()
+            logger.info("Аналізуємо %d активів зі списку обраних", len(assets))
+            for asset in assets:
+                total += 1
+                try:
+                    if analyze_watchlist_asset(conn, asset, api_key):
+                        analyzed += 1
+                except SynthesisResponseError:
+                    logger.exception("%s: некоректна відповідь LLM", asset["asset_id"])
+                    conn.rollback()
+                except requests.exceptions.RequestException:
+                    logger.exception("%s: мережева помилка LLM", asset["asset_id"])
+                    conn.rollback()
+                except Exception:
+                    # Один актив не валить цикл — той самий патерн, що
+                    # update_forecasts.py/compare_releases.py.
+                    logger.exception("%s: аналіз провалився", asset["asset_id"])
+                    conn.rollback()
 
-        logger.info("Готово: проаналізовано %d з %d", analyzed, len(stocks))
+        # --- акції зі скринінгу (вхід — звітність, не чинники) ---
+        if args.only != "watchlist" and not args.asset:
+            if args.ticker:
+                stocks = [{"ticker": args.ticker.upper(), "company_name": None}]
+            else:
+                stocks = fetch_top_stocks(conn, args.top)
+
+            if not stocks:
+                logger.warning(
+                    "Скринінг не дав жодного тикера — спершу потрібен прогін "
+                    "analysis/screening/composite_score.py"
+                )
+            else:
+                logger.info("Аналізуємо %d акцій", len(stocks))
+                for stock in stocks:
+                    total += 1
+                    try:
+                        if analyze_stock(conn, stock, api_key):
+                            analyzed += 1
+                    except SynthesisResponseError:
+                        logger.exception("%s: некоректна відповідь LLM", stock["ticker"])
+                        conn.rollback()
+                    except requests.exceptions.RequestException:
+                        logger.exception("%s: мережева помилка LLM", stock["ticker"])
+                        conn.rollback()
+                    except Exception:
+                        logger.exception("%s: аналіз провалився", stock["ticker"])
+                        conn.rollback()
+
+        logger.info("Готово: проаналізовано %d з %d", analyzed, total)
     finally:
         conn.close()
 

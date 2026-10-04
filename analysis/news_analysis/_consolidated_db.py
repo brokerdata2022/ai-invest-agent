@@ -15,7 +15,9 @@ from typing import Optional
 # кластеризацією "усередині себе", не бачать один одного). Той самий
 # принцип і поріг, що aggregate.py:_title_similarity — тут порівнюємо
 # вже готовий (перекладений) summary, не сирий заголовок.
-CROSS_RUN_SIMILARITY_THRESHOLD = 0.7
+# Поріг схожості МІЖ прогонами — з `config.py` (один файл для
+# ручного редагування в продакшені, рішення користувача 2026-10-02).
+from config import CROSS_RUN_SIMILARITY_THRESHOLD  # noqa: E402,F401
 
 
 def fetch_unconsolidated_raw_news(

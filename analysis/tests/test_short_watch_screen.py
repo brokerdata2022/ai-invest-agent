@@ -6,7 +6,7 @@
 
 from decimal import Decimal
 
-from crypto_screening.config import CRITICAL_NEGATIVE_FUNDING
+from config import CRITICAL_NEGATIVE_FUNDING
 from crypto_screening.short_watch_screen import screen_short_or_watch
 
 SHORT_ARGS = dict(

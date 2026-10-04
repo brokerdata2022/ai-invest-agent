@@ -186,7 +186,7 @@ SCHEDULE = {
     },
     "notify_fundamental": {
         "trigger": {"day_of_week": "mon-fri", "hour": 14, "minute": 10},
-        "why": "+10 хв після fundamental_analysis — щедріший зазор, ніж звичні 5 хв, бо це 5 послідовних LLM-викликів (по тикеру), не один. Не встиг — рядки лишаються notified_at IS NULL і підуть наступного прогону, нічого не губиться.",
+        "why": "+10 хв після fundamental_analysis — щедріший зазор, ніж звичні 5 хв, бо це ~16 послідовних LLM-викликів (11 активів watchlist за їхніми чинниками + топ-5 акцій за звітністю), не один. Не встиг — рядки лишаються notified_at IS NULL і підуть наступного прогону, нічого не губиться.",
     },
     "discover_candidates": {
         "trigger": {"hour": 19, "minute": 0},

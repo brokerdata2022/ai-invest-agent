@@ -16,7 +16,7 @@ from decimal import Decimal
 
 import pytest
 
-from trading_list import config
+import config
 from trading_list.categories import (
     CATEGORY_TO_WATCHLIST_ASSETS,
     IMPACT_CATEGORIES,

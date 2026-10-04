@@ -36,12 +36,16 @@ from typing import Optional
 from dotenv import load_dotenv
 
 _ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Корінь репозиторію — для ЄДИНОГО `config.py` (рішення
+# користувача 2026-10-04: один конфіг на весь агент).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection  # noqa: E402
 
-from trading_list import config  # noqa: E402
+import config  # noqa: E402
 from trading_list._db import (  # noqa: E402
     fetch_closes,
     fetch_crypto_universe,

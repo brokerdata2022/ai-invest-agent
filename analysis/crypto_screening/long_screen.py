@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
-from crypto_screening.config import MAX_FUNDING_RATE_LONG, RSI_HEALTHY_MAX, RSI_HEALTHY_MIN
+from config import MAX_FUNDING_RATE_LONG, RSI_HEALTHY_MAX, RSI_HEALTHY_MIN
 
 
 @dataclass

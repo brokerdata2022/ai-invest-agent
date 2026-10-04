@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-from crypto_screening.config import (
+from config import (
     MIN_EXCHANGE_COUNT,
     MIN_LISTING_AGE_DAYS,
     MIN_OPEN_INTEREST_USD,

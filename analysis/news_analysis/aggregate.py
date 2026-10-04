@@ -24,6 +24,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 
+# Пороги схожості — з `config.py` (один файл для ручного
+# редагування в продакшені, рішення користувача 2026-10-02).
+from config import (
+    MIN_NORMALIZED_LENGTH_FOR_MATCHING as _MIN_NORMALIZED_LENGTH,
+    SIMILARITY_THRESHOLD,
+)
+
 _DIRECTIONS = ("up", "down", "neutral", "unclear")
 
 # Наскільки схожими мають бути нормалізовані заголовки, щоб рахувати
@@ -31,7 +38,9 @@ _DIRECTIONS = ("up", "down", "neutral", "unclear")
 # або ідентичним wire-текстом (ratio ~1.0), або дуже близькі
 # перефразування; різні статті про той самий актив (напр. два різні
 # дописи про ціну золота) зазвичай мають значно нижчий ratio.
-DEFAULT_SIMILARITY_THRESHOLD = 0.7
+# Поріг схожості — з `config.py` (один файл для ручного
+# редагування в продакшені, рішення користувача 2026-10-02).
+DEFAULT_SIMILARITY_THRESHOLD = SIMILARITY_THRESHOLD
 
 
 @dataclass
@@ -76,7 +85,7 @@ def normalize_title(title: str) -> str:
 # власний кластер) — короткі/вироджені рядки (в т.ч. нелатинський
 # текст, що після нормалізації лишає тільки цифри/пробіли) занадто
 # легко дають штучно високий ratio з чимось геть не пов'язаним.
-MIN_NORMALIZED_LENGTH_FOR_MATCHING = 15
+MIN_NORMALIZED_LENGTH_FOR_MATCHING = _MIN_NORMALIZED_LENGTH
 
 
 def _title_similarity(a: str, b: str) -> float:

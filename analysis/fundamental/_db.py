@@ -30,6 +30,26 @@ def fetch_top_stocks(conn, limit: int) -> list[dict]:
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def fetch_watchlist_assets(conn) -> list[dict]:
+    """Активи СПИСКУ ОБРАНИХ (рішення користувача 2026-10-04:
+    "розгорнутий аналіз по активах із списку вибраних").
+
+    `source`/`metric_id` потрібні, щоб узяти саме той ряд ціни, який
+    для цього активу реально збирається — джерело могло автоматично
+    перемкнутись (`common/watchlist_db.py:choose_freshest_source`)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT asset_id, label, source, metric_id
+            FROM watchlist_assets
+            WHERE enabled
+            ORDER BY asset_id
+            """
+        )
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def fetch_fundamental_series(conn, ticker: str, suffix: str, quarters: int) -> list[dict]:
     """Квартальний ряд одного показника в ХРОНОЛОГІЧНОМУ порядку.
 
@@ -53,13 +73,17 @@ def fetch_fundamental_series(conn, ticker: str, suffix: str, quarters: int) -> l
 
 def save_fundamental_analysis(
     conn,
-    ticker: str,
-    company_name: Optional[str],
+    asset_id: str,
     result,
     inputs: dict,
     llm_call_id: Optional[int],
+    ticker: Optional[str] = None,
+    company_name: Optional[str] = None,
+    asset_kind: str = "stock",
 ) -> int:
-    """UPSERT на (ticker, день). `notified_at = NULL` при оновленні —
+    """UPSERT на (asset_id, день). `asset_id` канонічний — для акції це
+    тикер, для watchlist-активу його `asset_id` (золото/нафта/BTC
+    тикера в цьому сенсі не мають). `notified_at = NULL` при оновленні —
     той самий фікс і причина, що `news_analysis/_db.py:save_synthesis`
     (2026-09-29): інакше оновлений того ж дня висновок назавжди
     лишався б невидимим для notify-скрипта."""
@@ -67,10 +91,12 @@ def save_fundamental_analysis(
         cur.execute(
             """
             INSERT INTO fundamental_analysis
-                (ticker, company_name, direction, confidence, summary,
-                 reasoning, strengths, risks, inputs, llm_call_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, ((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                (asset_id, asset_kind, ticker, company_name, direction, confidence,
+                 summary, reasoning, strengths, risks, inputs, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (asset_id, ((created_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET
+                asset_kind = EXCLUDED.asset_kind,
+                ticker = EXCLUDED.ticker,
                 company_name = EXCLUDED.company_name,
                 direction = EXCLUDED.direction,
                 confidence = EXCLUDED.confidence,
@@ -85,7 +111,8 @@ def save_fundamental_analysis(
             RETURNING id
             """,
             (
-                ticker, company_name, result.direction, result.confidence,
+                asset_id, asset_kind, ticker, company_name,
+                result.direction, result.confidence,
                 result.summary, result.reasoning,
                 json.dumps(result.strengths, ensure_ascii=False),
                 json.dumps(result.risks, ensure_ascii=False),

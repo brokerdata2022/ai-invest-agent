@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
-from trading_list import config
+import config
 from trading_list.categories import STOCK_MACRO_DAMPING
 
 # Напрямки. up/down/neutral/unclear — ті самі, що решта проєкту

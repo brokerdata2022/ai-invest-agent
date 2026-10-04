@@ -884,5 +884,34 @@ CREATE TABLE IF NOT EXISTS fundamental_analysis (
     notified_at   TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamental_analysis_ticker_per_day
-    ON fundamental_analysis (ticker, ((created_at AT TIME ZONE 'UTC')::date));
+-- Унікальність перенесена на (asset_id, день) —
+-- `idx_fundamental_analysis_asset_per_day` нижче (2026-10-04, аналіз
+-- розширено з акцій на активи watchlist). Оригінальний індекс по
+-- `ticker` ВИДАЛЕНО звідси: schema.sql виконується зверху вниз, тож
+-- CREATE тут відтворював би його щоразу.
+
+-- 2026-10-04 (рішення користувача того ж дня): фундаментальний аналіз
+-- розширено з АКЦІЙ на активи СПИСКУ ОБРАНИХ — "розгорнутий аналіз по
+-- активах із списку вибраних і кожний актив аналізується окремо згідно
+-- їхніх чинників".
+--
+-- Таблиця створювалась під акції (`ticker` + звітність SEC EDGAR), але
+-- золото/нафта/EUR/USD/BTC тикера в цьому сенсі не мають — у них
+-- `asset_id` із watchlist і ВЛАСНИЙ набір чинників
+-- (config.py:ASSET_FACTORS). Тому канонічний ідентифікатор тепер
+-- `asset_id`, а `ticker` лишається тільки для акцій.
+ALTER TABLE fundamental_analysis ADD COLUMN IF NOT EXISTS asset_id TEXT;
+ALTER TABLE fundamental_analysis ADD COLUMN IF NOT EXISTS asset_kind TEXT NOT NULL DEFAULT 'stock';
+ALTER TABLE fundamental_analysis ALTER COLUMN ticker DROP NOT NULL;
+
+-- Backfill для рядків, створених до цієї зміни (вони всі були акціями).
+UPDATE fundamental_analysis SET asset_id = ticker WHERE asset_id IS NULL;
+
+-- Унікальність перенесена з (ticker, день) на (asset_id, день).
+-- Оригінальний індекс ВИДАЛЕНО звідси, а не заглушено DROP-ом нижче —
+-- schema.sql виконується зверху вниз (той самий урок, що
+-- idx_market_synthesis_per_day того ж дня).
+DROP INDEX IF EXISTS idx_fundamental_analysis_ticker_per_day;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamental_analysis_asset_per_day
+    ON fundamental_analysis (asset_id, ((created_at AT TIME ZONE 'UTC')::date));
