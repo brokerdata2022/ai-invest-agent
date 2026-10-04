@@ -754,3 +754,48 @@ ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS summary TEXT;
 ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS reasoning TEXT;
 ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS llm_call_id BIGINT REFERENCES llm_call_log (id);
 ALTER TABLE metric_forecasts ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+
+-- 2026-10-04: trading_list — список активів, які варто РОЗГЛЯДАТИ для
+-- торгівлі зараз (docs/trading-list.md, рішення користувача:
+-- "це не єдиний список... активи для торгів які потрібно розглядати
+-- під час сесії, тут потрібно продумати як їх відфільтровувати").
+--
+-- НЕ дублює screening_results/crypto_screening_candidates: ті
+-- відповідають "яка компанія хороша й недорога" (215 рядків
+-- фундаменталу) і "який контракт має сетап". Тут — результат
+-- ФІЛЬТРА за каталізатором поверх них: актив потрапляє сюди лише
+-- якщо з ним щось відбувається (реліз/новина/наш прогноз) і він
+-- проходить поріг скору.
+--
+-- Append-only знімок, той самий принцип, що screening_results: усі
+-- рядки одного прогону мають той самий run_at, "поточний список" =
+-- MAX(run_at); порожній прогін нічого не вставляє — свідомо, щоб не
+-- затирати попередній валідний список нульовим/збійним прогоном.
+--
+-- horizon — з ПЕРШОГО дня, хоча зараз заповнюється лише 'medium'
+-- (рішення користувача: середньострок спочатку, інтрадей — закладене
+-- розширення). Без цієї колонки інтрадей-режим вимагав би міграції
+-- замість нового профілю ваг.
+--
+-- Внески компонентів (catalyst_score/trend_score/quality_score)
+-- зберігаються ОКРЕМО, не лише фінальний score — без них неможливо
+-- калібрувати ваги, бо незрозуміло, ЩО саме підняло актив у топ (той
+-- самий урок, що diagnose_symbol.py для крипто-скринінгу).
+CREATE TABLE IF NOT EXISTS trading_list (
+    id               BIGSERIAL PRIMARY KEY,
+    asset_id         TEXT NOT NULL,      -- внутрішній id: тикер акції, asset_id watchlist, символ ф'ючерса
+    kind             TEXT NOT NULL,      -- stock | crypto | fx | commodity
+    horizon          TEXT NOT NULL DEFAULT 'medium',  -- medium | intraday
+    direction        TEXT NOT NULL,      -- up | down | neutral | unclear | conflicting
+    score            NUMERIC NOT NULL,
+    catalyst_score   NUMERIC,
+    trend_score      NUMERIC,
+    quality_score    NUMERIC,
+    catalyst_summary TEXT,               -- ЧОМУ актив у списку, людською мовою
+    source           TEXT NOT NULL,      -- screening | crypto_screening | watchlist
+    run_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notified_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_trading_list_run_at ON trading_list (run_at);
+CREATE INDEX IF NOT EXISTS idx_trading_list_horizon ON trading_list (horizon, run_at);

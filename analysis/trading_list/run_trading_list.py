@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""
+Складає список активів, які варто РОЗГЛЯДАТИ для торгівлі
+(`trading_list`) — дизайн і обґрунтування кожного рішення
+**`docs/trading-list.md`**.
+
+Не плутати з існуючими скринінгами: `screening/` відповідає "яка
+компанія хороша й недорога" (215 рядків фундаменталу),
+`crypto_screening/` — "який контракт має сетап". Тут поверх них
+накладається ФІЛЬТР КАТАЛІЗАТОРА: актив потрапляє в список лише якщо з
+ним щось відбувається (реліз/новина/наш прогноз) і сума компонентів
+переступає поріг.
+
+Межа шарів (rule 1, CLAUDE.md): цей файл — лише проводка (БД →
+збирання каталізаторів → скоринг → БД). Пороги й ваги — `config.py`,
+арифметика — `scoring.py` (чисті функції), мапа категорій —
+`categories.py`. Жодного магічного числа тут.
+
+Горизонт — `config.HORIZON` ('medium'). Інтрадей — закладене
+розширення: інший профіль ваг + гейт "ринок відкритий у цю сесію"
+(docs/trading-list.md), НЕ реалізований.
+
+Використання:
+    python run_trading_list.py
+    python run_trading_list.py --dry-run    # порахувати й показати, не писати в БД
+"""
+
+import argparse
+import logging
+import os
+import sys
+from decimal import Decimal
+
+from dotenv import load_dotenv
+
+_ANALYSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
+sys.path.insert(0, _ANALYSIS_DIR)
+
+from common.db import get_connection  # noqa: E402
+
+from trading_list import config  # noqa: E402
+from trading_list._db import (  # noqa: E402
+    fetch_closes,
+    fetch_crypto_universe,
+    fetch_news_catalysts,
+    fetch_recent_impacts,
+    fetch_stock_universe,
+    fetch_synthesis_catalysts,
+    fetch_trusted_forecasts,
+    fetch_upcoming_releases,
+    fetch_watchlist_universe,
+    save_trading_list,
+)
+from trading_list.categories import (  # noqa: E402
+    category_affects_stocks,
+    is_native_category,
+    watchlist_assets_for_category,
+)
+from trading_list.scoring import (  # noqa: E402
+    CatalystHit,
+    ScoreBreakdown,
+    catalyst_score,
+    crypto_trend_score,
+    quality_score,
+    resolve_direction,
+    combine,
+    score_asset,
+    select_final,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+_IMPACT_WEIGHT = {
+    "high": config.CATALYST_WEIGHT_RELEASE_HIGH,
+    "medium": config.CATALYST_WEIGHT_RELEASE_MEDIUM,
+    "low": config.CATALYST_WEIGHT_RELEASE_LOW,
+}
+
+# metric_id → категорія впливу, щоб ЗАПЛАНОВАНИЙ реліз (який ще не
+# вийшов, тож `asset_impacts` для нього не існує) теж міг стати
+# каталізатором. Для вийшлих релізів категорії дає сам LLM
+# (`expectation_synthesis.asset_impacts`) — тут лише груба відповідність
+# наперед, свідомо консервативна.
+_METRIC_CATEGORY = {
+    "cpi": "ставка", "core_cpi": "ставка", "pce_price_index": "ставка",
+    "fed_funds_rate": "ставка", "mortgage_rate_30y": "ставка",
+    "treasury_10y": "ставка", "treasury_2y": "ставка",
+    "nonfarm_payrolls": "економіка", "unemployment_rate": "економіка",
+    "initial_jobless_claims": "економіка", "real_gdp": "економіка",
+    "retail_sales": "економіка", "housing_starts": "економіка",
+    "usdjpy_fx_rate": "валюта",
+    "eurozone_hicp": "ставка", "eurozone_deposit_rate": "ставка",
+    "eurozone_unemployment_rate": "економіка",
+    "japan_policy_rate": "ставка", "japan_cpi": "ставка",
+}
+
+
+# asset_id watchlist → `kind` зі схеми (db/schema.sql: stock|crypto|fx|
+# commodity). Watchlist змішаний: крипта, валютні пари й товари живуть
+# в одній таблиці, тож тип виводимо з самого asset_id — інакше в
+# `trading_list.kind` потрапляло б значення поза переліком схеми.
+_WATCHLIST_CRYPTO = frozenset({"btc", "eth", "sol"})
+_WATCHLIST_FX = frozenset({"eurusd", "usdjpy"})
+
+
+def _watchlist_kind(asset_id: str) -> str:
+    if asset_id in _WATCHLIST_CRYPTO:
+        return "crypto"
+    if asset_id in _WATCHLIST_FX:
+        return "fx"
+    return "commodity"
+
+
+def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[CatalystHit]]:
+    """({asset_id/тикер → список каталізаторів}, спільна "підлога" для
+    акцій).
+
+    Два виходи, бо каталізатори поділяються за здатністю РІЗНИТИ
+    активи: прицільні (новина про конкретний тикер, реліз у категорію
+    конкретного watchlist-активу) і широкі макро, які стосуються всього
+    ринку акцій одразу й місця в топі не визначають
+    (`categories.py`, розділ про обмеження)."""
+    per_asset: dict[str, list[CatalystHit]] = {}
+    stock_floor: list[CatalystHit] = []
+    # Ключі вже зарахованих подій на актив — ДЕДУП. Жива причина
+    # (прогін 2026-10-04): один реліз мапиться на `sol` через ТРИ
+    # категорії ("ставка"/"акції"/"крипта") і зараховувався тричі, що
+    # видно було прямо в тексті причин ("unemployment_rate вийшов"
+    # двічі поспіль).
+    seen: set[tuple[str, str]] = set()
+
+    def add(asset_id: str, hit: CatalystHit, event_key: str) -> None:
+        key = (asset_id, event_key)
+        if key in seen:
+            return
+        seen.add(key)
+        per_asset.setdefault(asset_id, []).append(hit)
+
+    # --- заплановані релізи ---
+    for release in fetch_upcoming_releases(conn, config.CATALYST_UPCOMING_DAYS):
+        weight = _IMPACT_WEIGHT.get(release["impact_level"], config.CATALYST_WEIGHT_RELEASE_LOW)
+        category = _METRIC_CATEGORY.get(release["metric_id"])
+        text = f"реліз {release['metric_id']} {release['scheduled_at']:%d.%m %H:%M}"
+        hit = CatalystHit("release", weight, "neutral", text)
+
+        event_key = f"release:{release['metric_id']}:{release['scheduled_at']:%Y%m%d%H%M}"
+        for asset_id in watchlist_assets_for_category(category or ""):
+            add(asset_id, hit, event_key)
+        if category and category_affects_stocks(category):
+            stock_floor.append(hit)
+
+    # --- вийшлі релізи: міжактивний вплив від LLM ---
+    for impact_row in fetch_recent_impacts(conn, config.CATALYST_RECENT_DAYS):
+        for impact in impact_row["asset_impacts"] or []:
+            if not isinstance(impact, dict):
+                continue
+            category = str(impact.get("category") or "")
+            direction = impact.get("direction") or "neutral"
+            text = f"{impact_row['metric_id']} вийшов: {category} {direction}"
+            event_key = f"impact:{impact_row['metric_id']}:{impact_row['observed_at']}"
+
+            for asset_id in watchlist_assets_for_category(category):
+                # Напрямок зараховується ЛИШЕ з ВЛАСНОЇ категорії
+                # активу (categories.py:is_native_category). Жива
+                # причина (прогін 2026-10-04): усі 10 активів виходили
+                # `conflicting`, бо "ставка down" зараховувалась як
+                # голос ПРО СОЛАНУ — а це причина, не напрямок солани.
+                own = direction if is_native_category(asset_id, category) else "neutral"
+                add(asset_id, CatalystHit(
+                    "release", config.CATALYST_WEIGHT_RELEASE_MEDIUM, own, text
+                ), event_key)
+
+            if category_affects_stocks(category):
+                stock_direction = (
+                    direction if is_native_category("", category, is_stock=True) else "neutral"
+                )
+                stock_floor.append(CatalystHit(
+                    "release", config.CATALYST_WEIGHT_RELEASE_MEDIUM, stock_direction, text
+                ))
+
+    # --- новини (РІЗНЯТЬ активи, включно з тикерами акцій) ---
+    for news in fetch_news_catalysts(
+        conn, config.CATALYST_NEWS_HOURS, config.MIN_NEWS_SOURCE_COUNT
+    ):
+        add(news["asset_id"], CatalystHit(
+            "news", config.CATALYST_WEIGHT_NEWS, news["direction"],
+            f"новина ({news['source_count']} джерел): {news['summary'][:120]}",
+        ), f"news:{news['asset_id']}:{news['summary'][:40]}")
+
+    # --- синтез ціна↔новини ---
+    for syn in fetch_synthesis_catalysts(
+        conn, config.CATALYST_NEWS_HOURS, config.MIN_SYNTHESIS_CONFIDENCE
+    ):
+        add(syn["asset_id"], CatalystHit(
+            "synthesis", config.CATALYST_WEIGHT_SYNTHESIS, syn["direction"],
+            f"синтез ціна/новини: {syn['summary'][:120]}",
+        ), f"synthesis:{syn['asset_id']}")
+
+    # --- НАШ прогноз (лише довірені показники) ---
+    for forecast in fetch_trusted_forecasts(conn, config.FORECAST_TRUSTED_METRICS):
+        category = _METRIC_CATEGORY.get(forecast["metric_id"])
+        text = f"наш прогноз {forecast['metric_id']}: {forecast['direction']}"
+        event_key = f"forecast:{forecast['metric_id']}:{forecast['based_on_observed_at']}"
+
+        for asset_id in watchlist_assets_for_category(category or ""):
+            own = (
+                forecast["direction"]
+                if is_native_category(asset_id, category or "") else "neutral"
+            )
+            add(asset_id, CatalystHit(
+                "forecast", config.CATALYST_WEIGHT_FORECAST, own, text
+            ), event_key)
+
+        if category and category_affects_stocks(category):
+            stock_floor.append(CatalystHit(
+                "forecast", config.CATALYST_WEIGHT_FORECAST, "neutral", text
+            ))
+
+    return per_asset, stock_floor
+
+
+def build_list(conn) -> list[dict]:
+    """Повертає рядки, готові для `save_trading_list()`."""
+    per_asset, stock_floor = collect_catalysts(conn)
+    logger.info(
+        "Каталізатори: %d активів прицільно, %d широких макро для акцій",
+        len(per_asset), len(stock_floor),
+    )
+
+    scored: list[tuple[str, ScoreBreakdown, bool]] = []
+    meta: dict[str, dict] = {}
+
+    # --- акції ---
+    stocks = fetch_stock_universe(conn)
+    best_composite = max((s["score"] for s in stocks), default=None)
+    for stock in stocks:
+        ticker = stock["ticker"]
+        hits = per_asset.get(ticker, []) + stock_floor
+        if not hits:
+            # Без жодного каталізатора акція в торговий список не
+            # потрапляє — саме це відсікає 215 рядків скринінгу до
+            # дієздатного топу (docs/trading-list.md).
+            continue
+        closes = fetch_closes(conn, "twelvedata", f"{ticker.lower()}_close", config.TREND_LONG_DAYS + 5)
+        breakdown = score_asset(
+            values=closes, hits=hits,
+            composite=stock["score"], best_composite=best_composite,
+            is_stock=True,
+        )
+        scored.append((ticker, breakdown, False))
+        meta[ticker] = {"kind": "stock", "source": "screening"}
+
+    # --- крипта (власний шар торгуємості) ---
+    for coin in fetch_crypto_universe(conn):
+        symbol = coin["symbol"]
+        hits = per_asset.get(symbol, [])
+        t_score, t_direction, t_detail = crypto_trend_score(
+            coin["setup"],
+            oi_change_pct=coin.get("oi_change_pct"),
+            pump_pct=coin.get("last_pump_pct") or coin.get("pump_pct_at_detection"),
+        )
+        c_score, c_summary = catalyst_score(hits) if hits else (Decimal("0"), "")
+        q_score = quality_score(None, None)
+        breakdown = ScoreBreakdown(
+            total=combine(c_score, t_score, q_score, is_watchlist=False),
+            catalyst=c_score, trend=t_score, quality=q_score,
+            direction=resolve_direction([h.direction for h in hits] + [t_direction]),
+            catalyst_summary="; ".join(p for p in (c_summary, t_detail) if p),
+        )
+        scored.append((symbol, breakdown, False))
+        meta[symbol] = {"kind": "crypto", "source": "crypto_screening"}
+
+    # --- watchlist (пріоритет: бонус + зарезервовані слоти) ---
+    for asset in fetch_watchlist_universe(conn):
+        asset_id = asset["asset_id"]
+        hits = per_asset.get(asset_id, [])
+        closes = fetch_closes(
+            conn, asset["source"], asset["metric_id"], config.TREND_LONG_DAYS + 5
+        )
+        breakdown = score_asset(values=closes, hits=hits, is_watchlist=True)
+        scored.append((asset_id, breakdown, True))
+        meta[asset_id] = {"kind": _watchlist_kind(asset_id), "source": "watchlist"}
+
+    final = select_final(scored)
+    logger.info("Оцінено %d кандидатів, у список пройшло %d", len(scored), len(final))
+
+    return [
+        {
+            "asset_id": asset_id,
+            "kind": meta[asset_id]["kind"],
+            "direction": breakdown.direction,
+            "score": breakdown.total,
+            "catalyst_score": breakdown.catalyst,
+            "trend_score": breakdown.trend,
+            "quality_score": breakdown.quality,
+            "catalyst_summary": breakdown.catalyst_summary,
+            "source": meta[asset_id]["source"],
+        }
+        for asset_id, breakdown, _ in final
+    ]
+
+
+def main() -> None:
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="порахувати й показати список, не записуючи в БД",
+    )
+    args = parser.parse_args()
+
+    conn = get_connection()
+    try:
+        rows = build_list(conn)
+
+        for row in rows:
+            logger.info(
+                "%-12s %-16s score=%.3f (кат=%.2f тренд=%.2f якість=%.2f) %s — %s",
+                row["asset_id"], row["direction"], row["score"],
+                row["catalyst_score"], row["trend_score"], row["quality_score"],
+                row["kind"], row["catalyst_summary"][:100],
+            )
+
+        if args.dry_run:
+            logger.info("--dry-run: у БД не записано")
+            return
+
+        inserted = save_trading_list(conn, rows, horizon=config.HORIZON)
+        if inserted == 0:
+            logger.info(
+                "Жоден актив не пройшов поріг %s — нічого не записано "
+                "(попередній список не затирається)", config.MIN_SCORE,
+            )
+        else:
+            logger.info("Записано в trading_list: %d рядків", inserted)
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

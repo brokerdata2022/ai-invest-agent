@@ -51,6 +51,8 @@ JOB_DESCRIPTIONS: dict[str, str] = {
     "screening_composite_score": "Скринінг акцій S&P 500 (Tier A→B→C + ранжування)",
     "notify_screening": "Надіслати скринінг S&P 500",
     "notify_crypto_screening": "Надіслати крипто-кандидатів SHORT/WATCH",
+    "trading_list": "Скласти список активів для розгляду (фільтр за каталізатором)",
+    "notify_trading_list": "Надіслати список активів для розгляду",
     "notify_crypto_long": "Надіслати крипто-кандидатів LONG",
     "notify_watchlist": "Надіслати поточні ціни watchlist-активів",
     "companies_universe_refresh": "Оновити фундаментал усього S&P 500 (SEC EDGAR)",
@@ -95,5 +97,6 @@ INFO_JOB_NAMES: frozenset[str] = frozenset({
     "notify_screening",
     "notify_crypto_screening",
     "notify_crypto_long",
+    "notify_trading_list",
     "notify_watchlist",
 })

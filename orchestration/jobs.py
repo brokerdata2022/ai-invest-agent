@@ -558,6 +558,12 @@ JOBS = {
     "notify_crypto_screening": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "crypto_screening_notify.py")),
     },
+    "trading_list": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "trading_list" / "run_trading_list.py")),
+    },
+    "notify_trading_list": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "trading_list_notify.py")),
+    },
     "notify_crypto_long": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "crypto_long_notify.py")),
     },
