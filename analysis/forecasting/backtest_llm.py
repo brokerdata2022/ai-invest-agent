@@ -49,6 +49,7 @@ from llm_common import (  # noqa: E402
     call_llm,
     log_llm_call,
     require_api_key,
+    LlmRoute,
     resolve_route,
 )
 
@@ -152,7 +153,9 @@ def backtest_llm_metric(
     }
 
 
-def make_llm_forecast_fn(conn, metric_id: str) -> Callable[[list[dict]], Optional[float]]:
+def make_llm_forecast_fn(
+    conn, metric_id: str, route: Optional[LlmRoute] = None
+) -> Callable[[list[dict]], Optional[float]]:
     """forecast_fn для backtest_llm_metric(): той САМИЙ промпт і той
     самий гейт правдоподібності, що в бойовому forecast_metric.py —
     інакше backtest міряв би не те, що працює в продакшені.
@@ -165,7 +168,9 @@ def make_llm_forecast_fn(conn, metric_id: str) -> Callable[[list[dict]], Optiona
     def forecast_fn(history_rows: list[dict]) -> Optional[float]:
         prompt = build_prompt(metric_id, describe_metric(metric_id), history_rows)
         try:
-            llm = call_llm(prompt, SYSTEM_PROMPT, purpose="metric_forecast_backtest")
+            llm = call_llm(
+                prompt, SYSTEM_PROMPT, purpose="metric_forecast_backtest", route=route
+            )
             raw_content = llm.text
         except LlmError:
             logger.exception("%s: збій виклику LLM", metric_id)
@@ -222,12 +227,28 @@ def format_verdict(result: dict) -> str:
     return f"naive кращий — LLM гірший на {abs(diff_pct):.1f}%"
 
 
-def _route_label() -> str:
-    """Маршрут цього прогону одним рядком — `provider/model`. Іде і в
-    підсумковий лог, і в текст вердикту: без нього дві таблиці
-    бектесту неможливо порівняти (2026-10-05)."""
+def resolve_backtest_route(args) -> LlmRoute:
+    """Маршрут прогону: з конфіга, але з перекриттям із CLI.
+
+    Потрібно саме бектесту (2026-10-05): він за визначенням міряє
+    РІЗНІ моделі на тих самих точках, а правити для цього `config.py`
+    означало б заодно перемкнути бойовий прогноз."""
     route = resolve_route("metric_forecast_backtest")
-    return f"{route.provider}/{route.model}"
+    if not (args.provider or args.model or args.effort):
+        return route
+    return LlmRoute(
+        provider=args.provider or route.provider,
+        model=args.model or route.model,
+        effort=args.effort or route.effort,
+        max_tokens=route.max_tokens,
+    )
+
+
+def _route_label(route: LlmRoute) -> str:
+    """Маршрут цього прогону одним рядком. Іде в підсумковий лог: без
+    нього дві таблиці бектесту неможливо порівняти (2026-10-05)."""
+    label = f"{route.provider}/{route.model}"
+    return f"{label}, effort={route.effort}" if route.effort else label
 
 
 def main() -> None:
@@ -240,12 +261,22 @@ def main() -> None:
         help=f"скільки останніх точок перевірити (= стільки викликів LLM, дефолт {DEFAULT_POINTS})",
     )
     parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
+    # Перекриття маршруту ЛИШЕ для цього прогону — щоб зміряти іншу
+    # модель на тих самих точках, не чіпаючи бойовий прогноз
+    # (config.py розділ 9).
+    parser.add_argument("--provider", choices=["deepseek", "anthropic"], default=None)
+    parser.add_argument("--model", default=None, help="напр. claude-sonnet-5")
+    parser.add_argument(
+        "--effort", choices=["low", "medium", "high", "xhigh", "max"], default=None,
+        help="глибина розмірковування Anthropic (головний важіль вартості)",
+    )
     parser.add_argument(
         "--limit", type=int, default=200, help="скільки останніх спостережень тягнути з БД"
     )
     args = parser.parse_args()
 
-    require_api_key("metric_forecast_backtest")
+    route = resolve_backtest_route(args)
+    require_api_key("metric_forecast_backtest", provider=route.provider)
 
     try:
         source = resolve_source(args.metric)
@@ -266,7 +297,7 @@ def main() -> None:
         result = backtest_llm_metric(
             args.metric,
             observations,
-            make_llm_forecast_fn(conn, args.metric),
+            make_llm_forecast_fn(conn, args.metric, route=route),
             points=args.points,
             min_history=args.min_history,
         )
@@ -289,7 +320,7 @@ def main() -> None:
     logger.info(
         "%s [%s]: %d точок перевірено (пропущено %d), MAE LLM=%.6g, "
         "naive=%.6g, лінійний тренд=%s — %s",
-        result["metric_id"], _route_label(), result["n_points"], result["n_skipped"],
+        result["metric_id"], _route_label(route), result["n_points"], result["n_skipped"],
         result["llm_mae"], result["naive_mae"],
         f"{result['trend_mae']:.6g}" if result["trend_mae"] is not None else "n/a",
         format_verdict(result),

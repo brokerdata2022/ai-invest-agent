@@ -4,7 +4,12 @@
 Той самий підхід, що test_backtest.py для лінійної моделі.
 """
 
-from forecasting.backtest_llm import backtest_llm_metric, format_verdict
+from forecasting.backtest_llm import (
+    backtest_llm_metric,
+    format_verdict,
+    resolve_backtest_route,
+)
+from llm_common import resolve_route
 
 # fetch_recent() віддає НАЙНОВІШЕ ПЕРШЕ — саме в такому порядку
 # backtest_llm_metric() очікує вхід.
@@ -148,3 +153,46 @@ def test_format_verdict_handles_flawless_naive():
         {"llm_mae": 0.5, "naive_mae": 0.0, "trend_mae": None, "n_points": 4}
     )
     assert "безпомилковий" in verdict
+
+
+# ============================================================
+# Перекриття маршруту з CLI
+# ============================================================
+# Додано 2026-10-05: бектест за визначенням міряє РІЗНІ моделі на тих
+# самих точках (живий кейс — порівняти Opus 5 і Sonnet 5), а правити
+# для цього config.py означало б заодно перемкнути бойовий прогноз.
+
+
+class _Args:
+    def __init__(self, provider=None, model=None, effort=None):
+        self.provider = provider
+        self.model = model
+        self.effort = effort
+
+
+def test_route_comes_from_config_without_flags(monkeypatch):
+    monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
+    route = resolve_backtest_route(_Args())
+    assert route == resolve_route("metric_forecast_backtest")
+
+
+def test_model_flag_overrides_only_the_model(monkeypatch):
+    monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
+    configured = resolve_route("metric_forecast_backtest")
+
+    route = resolve_backtest_route(_Args(model="claude-sonnet-5"))
+
+    assert route.model == "claude-sonnet-5"
+    assert route.provider == configured.provider
+    # effort не чіпається — інакше порівняння моделей змінювало б
+    # ДВІ змінні одночасно й нічого не доводило.
+    assert route.effort == configured.effort
+
+
+def test_provider_and_effort_flags_apply(monkeypatch):
+    monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
+    route = resolve_backtest_route(_Args(provider="deepseek", model="deepseek-chat", effort=None))
+    assert (route.provider, route.model) == ("deepseek", "deepseek-chat")
+
+    route = resolve_backtest_route(_Args(effort="low"))
+    assert route.effort == "low"

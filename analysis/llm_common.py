@@ -175,28 +175,33 @@ def api_key_env_for(provider: str) -> Optional[str]:
     }.get(provider)
 
 
-def require_api_key(purpose: Optional[str] = None) -> str:
+def require_api_key(purpose: Optional[str] = None, provider: Optional[str] = None) -> str:
     """Ключ провайдера ДЛЯ ЦЬОГО призначення або вихід із кодом 1 і
     зрозумілим повідомленням — той самий early-exit, що був
     скопійований у main() кожного LLM-скрипта.
 
+    `provider` задається явно, коли маршрут перекривається на льоту
+    (бектест із `--model`) — інакше перевірявся б ключ не того
+    провайдера, і скрипт упав би вже посеред прогону.
+
     Повертається ключ лише для перевірки "він є"; сам `call_llm()`
     читає ключі сам, бо при резерві провайдер може змінитись."""
     route = resolve_route(purpose)
-    env_name = api_key_env_for(route.provider)
+    provider = provider or route.provider
+    env_name = api_key_env_for(provider)
     if env_name is None:
         logger.error(
             "Непідтримуваний провайдер %r (маршрут %s) — доступні: deepseek, anthropic.",
-            route.provider, purpose,
+            provider, purpose,
         )
         sys.exit(1)
 
     api_key = os.environ.get(env_name)
     if not api_key:
         logger.error(
-            "%s не задано, а маршрут %s веде на %s (%s). Додайте ключ у .env "
+            "%s не задано, а маршрут %s веде на %s. Додайте ключ у .env "
             "(див. .env.example).",
-            env_name, purpose, route.provider, route.model,
+            env_name, purpose, provider,
         )
         sys.exit(1)
     return api_key
@@ -222,8 +227,18 @@ def _call_provider(route: LlmRoute, prompt: str, system_prompt: str) -> str:
     raise LlmError(f"Непідтримуваний провайдер {route.provider!r}")
 
 
-def call_llm(prompt: str, system_prompt: str, purpose: Optional[str] = None) -> LlmResponse:
+def call_llm(
+    prompt: str,
+    system_prompt: str,
+    purpose: Optional[str] = None,
+    route: Optional[LlmRoute] = None,
+) -> LlmResponse:
     """ЄДИНЕ місце, де вибирається провайдер LLM для всього analysis/.
+
+    `route` перекриває маршрут із конфіга для ОДНОГО виклику —
+    потрібно бектесту, який за визначенням міряє різні моделі на тих
+    самих даних (`backtest_llm.py --model`). Бойові скрипти його не
+    передають: там маршрут має бути один і з конфіга.
 
     Кидає `LlmError` на будь-якому транспортному збої — незалежно від
     провайдера, щоб викликачі ловили один тип.
@@ -232,7 +247,7 @@ def call_llm(prompt: str, system_prompt: str, purpose: Optional[str] = None) -> 
     DeepSeek (`config.LLM_FALLBACK_PROVIDER`). Резерв НЕ застосовується
     до відмови класифікатора безпеки й до вже-дешевого маршруту —
     повторювати DeepSeek на DeepSeek безглуздо."""
-    route = resolve_route(purpose)
+    route = route or resolve_route(purpose)
 
     try:
         text = _call_provider(route, prompt, system_prompt)
