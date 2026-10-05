@@ -26,11 +26,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.db import get_connection  # noqa: E402
 from common.news_db import insert_news_batch  # noqa: E402
+from common.rate_limit import make_pacer  # noqa: E402
 from common.watchlist_db import fetch_terms  # noqa: E402
 from news.gdelt_adapter import GdeltAdapter, GdeltError  # noqa: E402
 from news.queries import (  # noqa: E402
     build_general_queries,
     build_watchlist_query,
+)
+
+from config import (  # noqa: E402
+    GDELT_MIN_REQUEST_INTERVAL_SECONDS,
+    GDELT_THROTTLE_MAX_WAIT_SECONDS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -77,11 +83,23 @@ def main() -> None:
 
     queries = QUERY_BUILDERS[args.stream]()
 
+    # Зʼєднання відкривається ПЕРЕД збором (а не лише для запису
+    # нижче), бо глобальний обмежувач швидкості GDELT живе в БД —
+    # інакше три джоби збору новин знову перевищили б ліміт
+    # 1 запит/5с (docs/decisions.md, 2026-10-05).
+    conn = get_connection()
+    pacer = make_pacer(
+        conn,
+        api="gdelt",
+        min_interval_seconds=GDELT_MIN_REQUEST_INTERVAL_SECONDS,
+        max_wait_seconds=GDELT_THROTTLE_MAX_WAIT_SECONDS,
+    )
+
     all_records = []
     any_query_failed = False
     for query in queries:
         logger.info("GDELT query (%s, timespan=%s): %s", args.stream, args.timespan, query)
-        adapter = GdeltAdapter(stream=args.stream, query=query)
+        adapter = GdeltAdapter(stream=args.stream, query=query, pacer=pacer)
         try:
             records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
         except (requests.exceptions.RequestException, GdeltError):
@@ -97,6 +115,7 @@ def main() -> None:
         all_records.extend(records)
 
     if not all_records:
+        conn.close()
         if any_query_failed:
             # Усі запити впали (network/429) — справжній провал, не
             # "просто нема свіжих новин". runner.py має його ретраїти
@@ -107,7 +126,6 @@ def main() -> None:
         logger.warning("Немає статей — перевірте query(і) чи доступність GDELT")
         sys.exit(0)
 
-    conn = get_connection()
     try:
         inserted = insert_news_batch(conn, all_records)
     finally:

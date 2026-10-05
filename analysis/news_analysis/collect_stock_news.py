@@ -33,7 +33,6 @@ import argparse
 import logging
 import os
 import sys
-import time
 
 from dotenv import load_dotenv
 import requests
@@ -46,16 +45,25 @@ sys.path.insert(0, _DATA_INGESTION_DIR)
 from collect_universe import fetch_sp500_constituents  # noqa: E402
 from common.db import get_connection  # noqa: E402
 from common.news_db import insert_news_batch  # noqa: E402
+from common.rate_limit import make_pacer  # noqa: E402
 from news.gdelt_adapter import GdeltAdapter, GdeltError  # noqa: E402
 from news.queries import batch_ticker_names, build_stocks_query  # noqa: E402
 from screening.tier_c import run_tier_c  # noqa: E402
 
+from config import (  # noqa: E402
+    GDELT_MIN_REQUEST_INTERVAL_SECONDS,
+    GDELT_THROTTLE_MAX_WAIT_SECONDS,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Пауза (секунди) між групами запитів — GDELT документує ліміт 1
-# запит/5с (той самий, що вже враховує retry в gdelt_adapter.py).
-_SECONDS_BETWEEN_BATCHES = 5
+# Паузу між групами БІЛЬШЕ НЕ тримає цей скрипт: інтервал між
+# запитами до GDELT тепер глобальний і міжпроцесний
+# (`common/rate_limit.py`, config.py розділ 8). Локальна пауза тут була
+# частиною збою 2026-10-05 — вона нічого не знала про запити двох
+# інших джоб збору новин, що стартують у ті самі хвилини
+# (docs/decisions.md).
 
 
 def main() -> None:
@@ -85,13 +93,19 @@ def main() -> None:
     logger.info("Розбито на %d груп(и) запитів (ліміт довжини GDELT query)", len(batches))
 
     conn = get_connection()
+    pacer = make_pacer(
+        conn,
+        api="gdelt",
+        min_interval_seconds=GDELT_MIN_REQUEST_INTERVAL_SECONDS,
+        max_wait_seconds=GDELT_THROTTLE_MAX_WAIT_SECONDS,
+    )
     total_inserted = 0
     try:
         for i, batch in enumerate(batches, start=1):
             query = build_stocks_query(batch)
             logger.info("Група %d/%d (%d символів): %s", i, len(batches), len(query), query)
 
-            adapter = GdeltAdapter(stream="watchlist", query=query)
+            adapter = GdeltAdapter(stream="watchlist", query=query, pacer=pacer)
             try:
                 records = adapter.collect(maxrecords=args.maxrecords, timespan=args.timespan)
             except (requests.exceptions.RequestException, GdeltError):
@@ -108,8 +122,6 @@ def main() -> None:
             if records:
                 total_inserted += insert_news_batch(conn, records)
 
-            if i < len(batches):
-                time.sleep(_SECONDS_BETWEEN_BATCHES)
     finally:
         conn.close()
 

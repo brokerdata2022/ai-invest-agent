@@ -127,7 +127,7 @@ def fetch_recent_candidates(conn, hours: int) -> list[dict]:
     return fetch_dicts(
         conn,
         """
-        SELECT id, ticker, company_name, reasoning
+        SELECT id, ticker, company_name, reasoning, direction, asset_class
         FROM candidate_assets
         WHERE discovered_at >= now() - (%s || ' hours')::interval
           AND notified_at IS NULL
@@ -178,8 +178,14 @@ def format_surprise_message(row: dict) -> str:
     )
 
 
+# Стрілка напрямку руху (не рекомендація) — той самий словник, що
+# candidates_notify.py; дайджест показує той самий рядок коротше.
+_ARROW = {"up": "↑", "down": "↓"}
+
+
 def format_candidate_message(row: dict) -> str:
-    header = f"🆕 {row['ticker']} — {row['company_name']}"
+    arrow = _ARROW.get(row.get("direction"), "")
+    header = f"🆕 {arrow} {row['ticker']} — {row['company_name']}".replace("  ", " ")
     return f"{bold(header)}\n{escape_html(row['reasoning'])}"
 
 

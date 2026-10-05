@@ -101,11 +101,18 @@ def test_format_surprise_message_omits_pct_when_none():
 
 
 def test_format_candidate_message():
-    row = {"ticker": "ACME", "company_name": "Acme Robotics Inc.", "reasoning": "New humanoid robot line."}
+    row = {
+        "ticker": "ACME", "company_name": "Acme Robotics Inc.",
+        "reasoning": "рух -11.2% за 5 торгових днів", "direction": "down",
+        "asset_class": "stock",
+    }
     text = format_candidate_message(row)
     assert "ACME" in text
     assert "Acme Robotics Inc." in text
-    assert "New humanoid robot line." in text
+    assert "рух -11.2%" in text
+    # 2026-10-05: напрямок руху в дайджесті теж видно — інакше рядок
+    # читався б як "ось вам тикер" без головної інформації.
+    assert "↓" in text
 
 
 # --- Regression 2026-09-28: daily_digest дублював notify_synthesis/
@@ -198,7 +205,11 @@ def _surprise_row(id=3):
 
 
 def _candidate_row(id=4):
-    return {"id": id, "ticker": "ACME", "company_name": "Acme Robotics", "reasoning": "New product line."}
+    return {
+        "id": id, "ticker": "ACME", "company_name": "Acme Robotics",
+        "reasoning": "рух +9.1% за 5 торгових днів", "direction": "up",
+        "asset_class": "stock",
+    }
 
 
 def _patch_digest_sources(monkeypatch, conn, sent, *, news=(), market=None, surprises=(), candidates=()):

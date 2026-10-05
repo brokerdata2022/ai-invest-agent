@@ -43,7 +43,7 @@ JOB_DESCRIPTIONS: dict[str, str] = {
     "notify_market_synthesis": "Надіслати стан ринку",
     "fundamental_analysis": "Розбір активів за їхніми чинниками + звітність топ-акцій",
     "notify_fundamental": "Надіслати розгорнутий аналіз активів",
-    "discover_candidates": "LLM-пошук нових перспективних акцій у новинах",
+    "discover_candidates": "Пошук новачків: будь-який актив із рухом вгору або вниз",
     "notify_candidates": "Надіслати нових кандидатів-новачків",
     "daily_digest": "Щоденний дайджест найважливішого за добу",
     "crypto_prices": "Зібрати ціни BTC/ETH/SOL (Binance+CoinGecko)",

@@ -116,7 +116,7 @@ class TwelveDataAdapter(BaseAdapter):
         # metric_id override (2026-10-04, той самий принцип, що
         # crypto/binance_adapter.py:metric_id= для watchlist-активів,
         # доданих через Telegram): None (дефолт, усі існуючі виклики —
-        # screening/discover_candidates/run_collect.py) лишає стару
+        # screening/discovery/run_collect.py) лишає стару
         # поведінку — normalize() сам виводить базу з ticker. Явний
         # override потрібен ЛИШЕ orchestration/jobs.py:_watchlist_prices
         # — коли /watchlist_add резолвнув тикер через symbol_search

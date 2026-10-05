@@ -456,27 +456,28 @@ JOBS = {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "release_impact_notify.py")),
     },
     "news_collect_watchlist": {
-        # retries=3 (не дефолтний 1) — 2026-09-29, живо: двічі за добу
-        # всі 4 внутрішні спроби адаптера (5с/10с/20с бекоф) + 1
-        # дефолтний ретрай runner.py (~60с пізніше) НЕ покрили тривале
-        # вікно GDELT 429 на спільному dev-IP. 3 ретраї — до 4 повних
-        # циклів ~60с один від одного, ширше вікно на те, щоб ліміт
-        # звільнився.
+        # retries=3 СКАСОВАНО 2026-10-05 (повернуто до дефолтного 1).
+        # Рішення 2026-09-29 ("ширше вікно, щоб ліміт звільнився") на
+        # живих даних виявилось протилежним до потрібного: 4 внутрішні
+        # спроби × 4 ретраї = до 16 запитів від ОДНІЄЇ джоби, і три
+        # джоби збору разом давали ~100 запитів за кілька хвилин при
+        # ліміті GDELT 1 запит/5с. 429 означає "ти ПОНАД лімітом" —
+        # ретрай його не лікує, а поглиблює. Тепер ліміт тримає
+        # глобальний обмежувач (common/rate_limit.py), а не ретраї.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "watchlist"),
-        "retries": 3,
     },
     "news_collect_general": {
+        # Без retries (та сама причина, що news_collect_watchlist вище).
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "general"),
-        "retries": 3,
     },
     "news_collect_rss": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_rss.py")),
     },
     "news_collect_stock": {
         # той самий принцип, що news_collect_watchlist/general вище —
-        # теж GDELT, той самий 429-ризик на спільному IP.
+        # теж GDELT, і найбільший споживач квоти (кілька груп запитів
+        # на прогін), тому ретраї тут шкодили найдужче.
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "collect_stock_news.py")),
-        "retries": 3,
     },
     "news_analysis_watchlist": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "watchlist"),
@@ -548,7 +549,12 @@ JOBS = {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "fundamental_notify.py")),
     },
     "discover_candidates": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "discover_candidates.py")),
+        # Переписано 2026-10-05 з "LLM вигадує перспективну акцію з
+        # новин" (news_analysis/discover_candidates.py, 0 рядків за
+        # весь час) на три детектори руху — analysis/discovery/.
+        # Назва джоби лишилась: під нею вже є Telegram-команда й
+        # запис у розкладі.
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "discovery" / "run_discovery.py")),
     },
     "notify_candidates": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "candidates_notify.py")),

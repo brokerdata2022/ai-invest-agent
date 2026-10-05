@@ -38,6 +38,26 @@ CONSUMERS = {
     "MAX_PE": ["screening/tier_c.py"],
     "MAX_PEG": ["screening/tier_c.py"],
     "WEIGHT_REVENUE_GROWTH": ["screening/composite_score.py"],
+    # Пошук новачків (2026-10-05, розділ 7 конфіга).
+    "DISCOVERY_CRYPTO_MIN_VOLUME_24H": ["discovery/crypto_movers.py"],
+    "DISCOVERY_CRYPTO_MIN_MOVE_PCT": ["discovery/crypto_movers.py"],
+    "DISCOVERY_CRYPTO_SATURATION_PCT": ["discovery/crypto_movers.py"],
+    "DISCOVERY_STOCK_MIN_MOVE_PCT": ["discovery/stock_movers.py"],
+    "DISCOVERY_STOCK_SATURATION_PCT": ["discovery/stock_movers.py"],
+    "DISCOVERY_STOCK_SHORT_DAYS": ["discovery/stock_movers.py"],
+    "DISCOVERY_STOCK_LONG_DAYS": ["discovery/stock_movers.py"],
+    "DISCOVERY_STOCK_MIN_POINTS": ["discovery/stock_movers.py", "discovery/news_tickers.py"],
+    "DISCOVERY_STOCK_MAX_DAILY_MOVE_PCT": ["discovery/stock_movers.py"],
+    "DISCOVERY_NEWS_STREAMS": ["discovery/run_discovery.py"],
+    "DISCOVERY_VOLUME_SPIKE_REFERENCE": ["discovery/crypto_movers.py", "discovery/stock_movers.py"],
+    "DISCOVERY_W_MOVE": ["discovery/crypto_movers.py", "discovery/stock_movers.py"],
+    "DISCOVERY_W_VOLUME": ["discovery/crypto_movers.py", "discovery/stock_movers.py"],
+    "DISCOVERY_W_NEWS": ["discovery/crypto_movers.py", "discovery/stock_movers.py"],
+    "DISCOVERY_NEWS_SOURCE_REFERENCE": ["discovery/crypto_movers.py", "discovery/stock_movers.py"],
+    "DISCOVERY_NEWS_MAX_VERIFY": ["discovery/news_tickers.py"],
+    "DISCOVERY_MIN_SCORE": ["discovery/run_discovery.py"],
+    "DISCOVERY_MAX_ITEMS": ["discovery/run_discovery.py"],
+    "DISCOVERY_MAX_PER_DETECTOR": ["discovery/run_discovery.py"],
     # Чинники фундаментального аналізу (2026-10-04).
     "ASSET_FACTORS": ["fundamental/factors.py"],
     "ASSET_FACTOR_GAPS": ["fundamental/factors.py"],
@@ -115,6 +135,50 @@ def test_composite_weights_sum_to_one():
 
 def test_pe_range_is_ordered():
     assert config.MIN_PE < config.MAX_PE
+
+
+def test_discovery_weights_sum_to_one():
+    """Та сама вимога, що composite-скор скринінгу: ваги сигналів
+    новачка мусять давати 1, інакше "сила 0..1" перестає означати те,
+    що написано, і DISCOVERY_MIN_SCORE калібрується в нікуди."""
+    total = config.DISCOVERY_W_MOVE + config.DISCOVERY_W_VOLUME + config.DISCOVERY_W_NEWS
+    assert total == 1
+
+
+def test_discovery_min_score_is_reachable_by_move_alone():
+    """Головний урок "0 рядків за весь час": санітарний поріг не має
+    права відсікати кандидата, у якого є лише рух ціни — обсягу й
+    новин по новачку зазвичай немає."""
+    min_signal = config.DISCOVERY_W_MOVE * (
+        config.DISCOVERY_CRYPTO_MIN_MOVE_PCT / config.DISCOVERY_CRYPTO_SATURATION_PCT
+    )
+    assert min_signal >= config.DISCOVERY_MIN_SCORE
+
+
+def test_discovery_thresholds_below_screening_ones():
+    """Список СПОСТЕРЕЖЕННЯ мусить бути ширшим за список ТОРГІВ —
+    інакше новачок не має шансу зʼявитись (саме це й сталось зі
+    старою реалізацією)."""
+    assert config.DISCOVERY_CRYPTO_MIN_VOLUME_24H < config.MIN_QUOTE_VOLUME_24H
+    assert config.DISCOVERY_MIN_SCORE < config.MIN_SCORE
+
+
+def test_discovery_daily_gate_above_entry_threshold():
+    """Гейт корпоративних дій мусить бути ВИЩЕ за поріг входу, інакше
+    він відкидав би саме ті рухи, які детектор і шукає."""
+    assert config.DISCOVERY_STOCK_MAX_DAILY_MOVE_PCT > config.DISCOVERY_STOCK_MIN_MOVE_PCT
+
+
+def test_discovery_news_streams_exclude_watchlist():
+    """У потоці `watchlist` за визначенням наші ж активи — новачків
+    там бути не може."""
+    assert "watchlist" not in config.DISCOVERY_NEWS_STREAMS
+    assert len(config.DISCOVERY_NEWS_STREAMS) >= 2
+
+
+def test_discovery_stock_windows_ordered():
+    assert config.DISCOVERY_STOCK_SHORT_DAYS < config.DISCOVERY_STOCK_LONG_DAYS
+    assert config.DISCOVERY_STOCK_LOOKBACK_DAYS > config.DISCOVERY_STOCK_LONG_DAYS
 
 
 def test_single_config_has_no_module_level_siblings():

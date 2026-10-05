@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from news.rss_adapter import RssAdapter
+from news.rss_adapter import RssAdapter, parse_pub_date
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -164,3 +164,41 @@ def test_normalize_handles_utf8_bom_bytes(fed_adapter, fed_response):
     records = fed_adapter.normalize(raw_bytes_with_bom)
     assert len(records) == 2
     assert records[0].title == "Federal Reserve Board announces approval of application by Peoples Bancorp Inc."
+
+
+# ============================================================
+# Формати дати публікації
+# ============================================================
+# Живий прогін 2026-10-05 (docs/decisions.md): адаптер знав ЛИШЕ
+# RFC 822, тож `yahoo_finance_rss` втрачав ВСІ 49 статей, а
+# `investing_rss` — усі 10, і в лозі це виглядало як "отримано 0
+# записів" при HTTP 200 — тихий збій того самого класу, що й мʼякий
+# троттл GDELT.
+
+
+@pytest.mark.parametrize(
+    "raw,expected_iso",
+    [
+        # RFC 822 — за специфікацією RSS 2.0 (Fed/ECB/BOJ/BBC/CNBC).
+        ("Mon, 05 Oct 2026 16:18:38 GMT", "2026-10-05T16:18:38+00:00"),
+        # ISO 8601 з "Z" — Yahoo Finance.
+        ("2026-09-23T01:52:26Z", "2026-09-23T01:52:26+00:00"),
+        # ISO 8601 зі зсувом — NPR.
+        ("2026-10-04T08:29:38-04:00", "2026-10-04T08:29:38-04:00"),
+    ],
+)
+def test_parse_pub_date_known_live_formats(raw, expected_iso):
+    assert parse_pub_date(raw).isoformat() == expected_iso
+
+
+def test_parse_pub_date_space_separated_without_zone():
+    """Investing.com: "2026-10-05 16:18:38" — без T і без зони.
+    Зона не вгадується, викликач доповнює UTC."""
+    parsed = parse_pub_date("2026-10-05 16:18:38")
+    assert parsed is not None
+    assert parsed.tzinfo is None
+
+
+def test_parse_pub_date_returns_none_on_garbage():
+    assert parse_pub_date("не дата") is None
+    assert parse_pub_date("") is None

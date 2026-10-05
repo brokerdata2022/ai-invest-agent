@@ -1,7 +1,10 @@
 """
-Регресія 2026-09-29 (живий баг): save_synthesis()/save_market_synthesis()/
-save_candidate() — UPSERT "один рядок на день" (ON CONFLICT ... DO UPDATE),
-але жоден з трьох НЕ скидав notified_at при оновленні існуючого рядка.
+Регресія 2026-09-29 (живий баг): save_synthesis()/save_market_synthesis()
+— UPSERT "один рядок на день" (ON CONFLICT ... DO UPDATE), але жоден НЕ
+скидав notified_at при оновленні існуючого рядка. (Третім у цій трійці
+був save_candidate(); 2026-10-05 він переїхав у discovery/_db.py разом
+із переписаним пошуком новачків — його версія того самого тесту тепер
+у test_discovery_db.py.)
 Наслідок, підтверджений живо: актив уже надіслано вранці нотифай-джобою
 → повторний синтез того самого дня (напр. ручний перезапуск чи новий
 цикл цін/новин) оновлює summary/direction/confidence на СПРАВДІ нові, але
@@ -9,7 +12,7 @@ save_candidate() — UPSERT "один рядок на день" (ON CONFLICT ...
 (`WHERE notified_at IS NULL`) більше ніколи не бачить оновлений рядок аж
 до наступного календарного дня — свіжий аналіз мовчки губиться.
 
-Фікс: усі три ON CONFLICT DO UPDATE SET тепер додають `notified_at = NULL`
+Фікс: усі ON CONFLICT DO UPDATE SET тепер додають `notified_at = NULL`
 поруч із `created_at`/`discovered_at = now()` — оновлений вміст знову стає
 "ще не надісланим".
 
@@ -21,7 +24,7 @@ from decimal import Decimal
 
 import pytest
 
-from news_analysis._db import save_candidate, save_market_synthesis, save_synthesis
+from news_analysis._db import save_market_synthesis, save_synthesis
 from news_analysis.aggregate import AssetSignal, NewsCluster
 from news_analysis.prices import PriceChange
 
@@ -121,16 +124,6 @@ def test_save_market_synthesis_upsert_resets_notified_at():
     assert "notified_at = NULL" in _upsert_set_clause(query)
 
 
-def test_save_candidate_upsert_resets_notified_at():
-    conn = _FakeConn()
-
-    save_candidate(conn, ticker="ACME", company_name="Acme Robotics", reasoning="r", source_refs=[], llm_call_id=1)
-
-    assert conn.committed == 1
-    query, _ = conn.executed[0]
-    assert "notified_at = NULL" in _upsert_set_clause(query)
-
-
 @pytest.mark.parametrize(
     "save_call",
     [
@@ -142,9 +135,8 @@ def test_save_candidate_upsert_resets_notified_at():
             3, _Result(), 1,
         ),
         lambda conn: save_market_synthesis(conn, clusters=[], macro={}, window_days=7, result=_Result(), llm_call_id=1),
-        lambda conn: save_candidate(conn, "ACME", "Acme Robotics", "r", [], 1),
     ],
-    ids=["save_synthesis", "save_market_synthesis", "save_candidate"],
+    ids=["save_synthesis", "save_market_synthesis"],
 )
 def test_upsert_still_commits_and_returns_id(save_call):
     """Регресія самого фіксу: доводить, що додавання notified_at = NULL

@@ -110,6 +110,10 @@ analysis/         — обробка зібраних даних: прогноз
   calendar_outlook/ — ранковий огляд календаря релізів
   news_analysis/    — класифікація новин, агрегація, LLM-синтези
                       (synthesize_market.py — 3 сесійні синтези/добу)
+  discovery/        — ПОШУК НОВАЧКІВ: будь-який актив із рухом угору
+                      або вниз, якого ще немає в наших списках (3
+                      детектори: крипто-ф'ючерси, акції з БД, тикери
+                      з новин). Список СПОСТЕРЕЖЕННЯ, не торгів
   screening/        — скринінг акцій S&P 500 (Tier A/B/C + composite score)
   crypto_screening/ — скринінг ф'ючерсів на лонг/шорт/спостереження
   trading_list/     — список активів ДЛЯ ТОРГІВ: фільтр за каталізатором
@@ -278,6 +282,12 @@ docker compose exec app python reporting/news_notify.py --stream watchlist --lim
 
 # Показати агреговані новини (кластери дублікатів + зведення по активу)
 docker compose exec app python analysis/news_analysis/show_aggregated_news.py
+
+# Пошук новачків — активи з рухом (угору або вниз), яких ще не ведемо;
+# 3×/добу автоматично (джоба discover_candidates)
+docker compose exec app python analysis/discovery/run_discovery.py --dry-run
+docker compose exec app python analysis/discovery/run_discovery.py
+docker compose exec app python reporting/candidates_notify.py
 
 # Крипто-скринінг ф'ючерсів (лонг/шорт/спостереження, Binance+Bybit+OKX)
 docker compose exec app python analysis/crypto_screening/run_screening.py

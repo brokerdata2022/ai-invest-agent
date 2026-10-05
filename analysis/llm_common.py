@@ -9,7 +9,7 @@
 `call_llm()`/`log_llm_call()` були СВІДОМО дубльовані в кожному
 LLM-скрипті ("кожен скрипт самодостатній", docs/decisions.md
 2026-09-27). За чотирма скриптами (`news_analysis/synthesize.py`,
-`news_analysis/synthesize_market.py`, `news_analysis/discover_candidates.py`,
+`news_analysis/synthesize_market.py`, `discovery/news_tickers.py`,
 `expectations/synthesize.py`) це стало ~150 рядків байт-у-байт копій,
 а головне — перехід на Anthropic (CLAUDE.md: "Anthropic API фінальний
 висновок аналіз") вимагав би однакової правки в чотирьох місцях, де
@@ -18,7 +18,7 @@ LLM-скрипті ("кожен скрипт самодостатній", docs/d
 
 Що НЕ винесено сюди (залишається в кожному скрипті, бо справді різне):
 `SYSTEM_PROMPT`, `build_prompt()` і форма результату, коли вона інша
-(`discover_candidates.py` віддає список кандидатів, не
+(`discovery/news_tickers.py` віддає список витягнутих тикерів, не
 `SynthesisResult`; `relevance_filter.py` — `NewsAnalysisResult` з
 `is_relevant`/`asset_id`).
 
@@ -117,7 +117,7 @@ def call_llm(prompt: str, system_prompt: str, api_key: str) -> str:
 
 def parse_json_object(raw_content: str, error_class: type = SynthesisResponseError) -> dict:
     """JSON-об'єкт із сирої відповіді LLM. `error_class` — щоб
-    скрипт з іншою формою виходу (`discover_candidates.py`) кидав свій
+    скрипт з іншою формою виходу (`discovery/news_tickers.py`) кидав свій
     власний тип помилки, не синтезний."""
     try:
         data = json.loads(raw_content)

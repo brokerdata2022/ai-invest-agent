@@ -40,7 +40,7 @@ Telegram") — НЕ з реєстру JOBS, своя гілка диспетче
   commodity-тикери на Twelve Data теж часто БЕЗ "/", напр. природний
   газ/какао). Замість цього — пробує ВСІ генеричні джерела по черзі,
   той самий тикер, доки одне не підтвердить (той самий підхід, що
-  analysis/news_analysis/discover_candidates.py:verify_tradable()):
+  analysis/discovery/news_tickers.py:verify_tradable()):
   1) Twelve Data (форекс/товари/акції — найширше покриття; якщо
   ТОЧНИЙ рядок користувача не підтвердився — ще й `symbol_search()`
   (2026-10-03, живий кейс "NATGAS" дав 404 на точний рядок — лише
@@ -156,7 +156,7 @@ def format_watchlist_list(rows: list[dict]) -> str:
 
 def validate_twelvedata_ticker(ticker: str, api_key: str) -> bool:
     """Живий запит Twelve Data (той самий підхід, що
-    discover_candidates.py:verify_tradable()) — True лише якщо символ
+    discovery/news_tickers.py:verify_tradable()) — True лише якщо символ
     реальний і має хоч одну точку ціни."""
     try:
         records = TwelveDataAdapter(api_key=api_key, ticker=ticker).collect(limit=1)

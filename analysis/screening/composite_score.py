@@ -245,7 +245,7 @@ def _fetch_price_context(conn, tickers: list[str]) -> dict[str, dict]:
 def _fetch_company_names(tickers: list[str]) -> dict[str, str]:
     """{ticker: назва компанії} з constituents.csv -- той самий
     мережевий запит, що вже використовує analysis/news_analysis/
-    discover_candidates.py. Назва -- лише контекст виводу, не критерій
+    discovery/ (пошук новачків). Назва -- лише контекст виводу, не критерій
     скринінгу, тож мережевий збій тут НЕ повинен ламати весь прогін:
     порожній dict -- caller виводить тикер замість назви."""
     try:

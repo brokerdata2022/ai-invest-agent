@@ -235,6 +235,15 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('npr_rss', 'news', 'aggregator', 'NPR — головний RSS (Top Stories), без ключа'),
     ('skynews_rss', 'news', 'aggregator', 'Sky News — RSS World, без ключа'),
     ('dw_rss', 'news', 'aggregator', 'Deutsche Welle — RSS "all" (англомовний), без ключа'),
+    ('cnbc_markets_rss', 'news', 'aggregator', 'CNBC — RSS Markets, без ключа (потік general, 2026-10-05)'),
+    ('yahoo_finance_rss', 'news', 'aggregator', 'Yahoo Finance — RSS news index, без ключа (потік general)'),
+    ('marketwatch_rss', 'news', 'aggregator', 'MarketWatch — RSS Top Stories (Dow Jones), без ключа (потік general)'),
+    ('investing_rss', 'news', 'aggregator', 'Investing.com — RSS news, без ключа (потік general)'),
+    ('bbc_business_rss', 'news', 'aggregator', 'BBC Business — RSS, без ключа (потік general)'),
+    ('guardian_business_rss', 'news', 'aggregator', 'The Guardian Business — RSS, без ключа (потік general)'),
+    ('npr_business_rss', 'news', 'aggregator', 'NPR Business — RSS, без ключа (потік general)'),
+    ('nasdaq_markets_rss', 'news', 'aggregator', 'Nasdaq — RSS Markets, без ключа (потік general)'),
+    ('ft_rss', 'news', 'aggregator', 'Financial Times — RSS home (лише title+url, тіло за пейволлом; потік general)'),
     ('binance', 'crypto', 'official_primary', 'Binance public API — щоденні OHLCV-свічки (klines) BTC/ETH/SOL проти USDT, без ключа'),
     ('coingecko', 'crypto', 'aggregator', 'CoinGecko — щоденний market cap BTC/ETH/SOL (агрегатор по біржах), без ключа'),
     ('binance_futures', 'crypto', 'official_primary', 'Binance USDⓈ-M Futures public API — bulk-знімок ринку (обсяг/funding rate) для крипто-скринінгу лонг/шорт/спостереження, без ключа (docs/decisions.md 2026-09-27)'),
@@ -915,3 +924,63 @@ DROP INDEX IF EXISTS idx_fundamental_analysis_ticker_per_day;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamental_analysis_asset_per_day
     ON fundamental_analysis (asset_id, ((created_at AT TIME ZONE 'UTC')::date));
+
+-- 2026-10-05: ПОШУК НОВАЧКІВ переписано (analysis/discovery/, рішення
+-- користувача того ж дня: "сюди має попадати будь який актив в якого є
+-- потенційне зростання або падіння, список має оновлюватися
+-- автоматично"). Таблиця створювалась під ОДИН детектор —
+-- LLM вигадує перспективну АКЦІЮ поза S&P 500 з новин
+-- (`news_analysis/discover_candidates.py`) — і дала **0 рядків за весь
+-- час**: вигадування ідеї це найважче, що можна попросити в LLM, а
+-- general-потік новин забитий IPO-шумом.
+--
+-- Тепер кандидатів знаходять ТРИ детектори, і рух ВНИЗ — рівноправний
+-- кандидат (до цього поле напрямку було просто відсутнє, бо шукались
+-- лише "перспективні"):
+--   `asset_class` — stock | crypto (клас активу, а не лише акції);
+--   `direction`   — up | down | neutral | unclear (напрямок РУХУ, не
+--                   вказівка купити/продати — analysis/CLAUDE.md);
+--   `detector`    — crypto_movers | stock_movers | news_tickers (ЯКИЙ
+--                   детектор знайшов; без цього неможливо сказати, чи
+--                   джерело взагалі працює — саме цього й бракувало,
+--                   щоб помітити "0 за весь час" раніше);
+--   `score`       — зважена сила сигналу (config.py, розділ 5);
+--   `signals`     — сирі числа, з яких вийшов score (рух %, спайк
+--                   обсягу, к-ть джерел новин) — для калібрування
+--                   порогів на живих даних.
+--
+-- `llm_call_id` лишається NULLABLE і для детермінованих детекторів
+-- просто порожній: крипто/акційні movers — чиста арифметика без LLM
+-- (правило "не викликати LLM для того, що рахується формулою",
+-- analysis/CLAUDE.md).
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS asset_class TEXT NOT NULL DEFAULT 'stock';
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'unclear';
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS detector TEXT NOT NULL DEFAULT 'news_tickers';
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS score NUMERIC;
+ALTER TABLE candidate_assets ADD COLUMN IF NOT EXISTS signals JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_candidate_assets_discovered
+    ON candidate_assets (discovered_at DESC);
+
+-- 2026-10-05: ГЛОБАЛЬНИЙ (міжпроцесний) обмежувач швидкості запитів до
+-- зовнішніх API — спершу для GDELT (common/rate_limit.py).
+--
+-- Живий збій, через який таблиця зʼявилась: потоки новин `general` і
+-- `watchlist` давали НУЛЬ статей, а GDELT віддавав 429 ("Please limit
+-- requests to one every 5 seconds") уже на ПЕРШИЙ запит навіть при
+-- паузі 6с — IP потрапив у тривалий штрафний стан. Причина наша:
+-- три джоби збору (watchlist/general/stock) стартували в межах 5
+-- хвилин, КОЖНА як окремий процес, що не знає про інші, і кожна з
+-- retry-бюджетом 4 внутрішні спроби × 4 ретраї runner.py — до ~100
+-- запитів за кілька хвилин при ліміті 1 запит/5с. 429 у відповідь
+-- запускав ЩЕ більше ретраїв — самопідсилювальний цикл.
+--
+-- Чому саме в БД, а не файл-лок чи пауза в коді: паузa в процесі не
+-- бачить інших процесів (це й був баг), а БД у нас одна на всі
+-- контейнери (app + scheduler) і вже є залежністю збору. Серіалізація
+-- робиться через `pg_advisory_xact_lock` у common/rate_limit.py —
+-- запит до API в один момент часу робить лише один процес.
+CREATE TABLE IF NOT EXISTS api_rate_limit (
+    api             TEXT PRIMARY KEY,
+    last_request_at TIMESTAMPTZ NOT NULL
+);

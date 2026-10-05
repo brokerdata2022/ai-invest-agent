@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import config
 from news.gdelt_adapter import GdeltAdapter, GdeltError, validate_gdelt_term
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -123,7 +124,10 @@ def test_fetch_retries_on_429_then_succeeds():
 
     assert result == {"articles": []}
     assert session.calls == 3
-    assert sleeps == [5, 10]  # перші дві затримки з _RETRY_DELAYS
+    # Затримки — з конфіга (config.py розділ 8), не літерали: 2026-10-05
+    # їх подовжено з (5,10,20) до (30,120), бо швидкий повтор на 429
+    # лише глибше заганяв IP у штрафний стан GDELT.
+    assert sleeps == list(config.GDELT_RETRY_DELAYS)
 
 
 def test_fetch_raises_after_exhausting_retries():
@@ -155,7 +159,7 @@ def test_fetch_retries_on_non_json_response_then_succeeds():
     result = adapter.fetch()
 
     assert result == {"articles": []}
-    assert sleeps == [5]
+    assert sleeps == [config.GDELT_RETRY_DELAYS[0]]
 
 
 def test_fetch_raises_gdelt_error_after_exhausting_retries_on_non_json():
@@ -233,3 +237,94 @@ def test_validate_gdelt_term_does_not_retry():
     session = _RaisingSession()
     validate_gdelt_term("x", session=session)
     assert session.calls == 1
+
+
+# ============================================================
+# Глобальний обмежувач швидкості (pacer)
+# ============================================================
+# Жива причина (2026-10-05, docs/decisions.md): три джоби збору новин —
+# три ОКРЕМІ процеси, тож пауза в коді одного нічого не знала про
+# запити двох інших. GDELT почав відповідати 429 на першому ж запиті.
+
+
+def test_pacer_called_before_every_request_including_retries():
+    """Якщо обмежувач не викликається на ПОВТОРАХ, retry-цикл обходить
+    ліміт — це й був механізм самопідсилення збою."""
+    session = _FakeSession(
+        [_FakeResponse(429), _FakeResponse(429), _FakeResponse(200, {"articles": []})]
+    )
+    paced = []
+    adapter = GdeltAdapter(
+        stream="watchlist", query="bitcoin", session=session,
+        sleep=lambda _: None, pacer=lambda: paced.append(1),
+    )
+
+    adapter.fetch()
+
+    assert session.calls == 3
+    assert len(paced) == 3
+
+
+def test_pacer_is_optional():
+    """Без pacer адаптер працює (ручний одноразовий запуск, тести) —
+    але джоби його передають обовʼязково."""
+    session = _FakeSession([_FakeResponse(200, {"articles": []})])
+    adapter = GdeltAdapter(stream="watchlist", query="bitcoin", session=session)
+
+    assert adapter.fetch() == {"articles": []}
+
+
+# ============================================================
+# Мʼякий троттл GDELT: HTTP 200 з тілом `{}`
+# ============================================================
+# Живо виявлено 2026-10-05 (docs/decisions.md): саме через це потоки
+# `general`/`watchlist` писали в лог "Отримано 0 статей", скрипт
+# виходив з кодом 0, а runner.py вважав прогін УСПІШНИМ — тижні тихого
+# втрачання даних без жодного сигналу.
+
+
+def test_empty_object_is_treated_as_throttle_and_retried():
+    session = _FakeSession(
+        [_FakeResponse(200, {}), _FakeResponse(200, {"articles": [{"url": "u"}]})]
+    )
+    sleeps = []
+    adapter = GdeltAdapter(
+        stream="watchlist", query="bitcoin", session=session, sleep=sleeps.append
+    )
+
+    result = adapter.fetch()
+
+    assert result == {"articles": [{"url": "u"}]}
+    assert session.calls == 2
+    assert sleeps == [config.GDELT_RETRY_DELAYS[0]]
+
+
+def test_empty_object_raises_after_retries_not_silent_zero():
+    """Головне: НЕ повернути "0 статей" тихо. Виняток піднімає скрипт
+    із кодом 1, і runner.py бачить провал."""
+    session = _FakeSession([_FakeResponse(200, {})] * 3)
+    adapter = GdeltAdapter(
+        stream="watchlist", query="bitcoin", session=session, sleep=lambda _: None
+    )
+
+    with pytest.raises(GdeltError) as exc:
+        adapter.fetch()
+    assert "articles" in str(exc.value)
+
+
+def test_genuine_empty_result_is_not_a_throttle():
+    """Справжнє "немає збігів" — це {"articles": []}: ключ Є, список
+    порожній. Воно мусить проходити як успіх, інакше тихий спокійний
+    день на ринку виглядав би як збій."""
+    session = _FakeSession([_FakeResponse(200, {"articles": []})])
+    adapter = GdeltAdapter(stream="watchlist", query="bitcoin", session=session)
+
+    assert adapter.fetch() == {"articles": []}
+
+
+def test_validate_term_returns_false_on_throttle():
+    """Хибне True пустило б НЕПЕРЕВІРЕНИЙ термін у спільний
+    watchlist-запит, а один поганий OR-терм ламає новини для ВСІХ
+    активів (живий кейс "BNB")."""
+    session = _FakeSession([_FakeResponse(200, {})])
+    assert validate_gdelt_term("bitcoin", session=session) is False
