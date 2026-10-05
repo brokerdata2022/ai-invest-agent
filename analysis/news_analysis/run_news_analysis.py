@@ -51,7 +51,7 @@ def resolve_tracked_assets(
     (`default_tracked_assets` — лише watchlist його має, рахує main()
     через `common/watchlist_db.py:fetch_asset_ids(conn)`, 2026-10-03,
     живий редагований список, не хардкод) + тикери з останнього
-    скринінгу (docs/news-purpose.md, "Ціль 2" — щоб DeepSeek міг
+    скринінгу (docs/decisions.md, "Ціль 2" — щоб DeepSeek міг
     проставити asset_id=тикер для акційних новин, не тільки для
     watchlist-активів)."""
     if explicit:

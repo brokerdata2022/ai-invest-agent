@@ -15,7 +15,7 @@
 Розмір кластера (скільки видань написали) — природна, безкоштовна
 шкала значущості: подія, яку підхопили 6 видань, об'єктивно
 важливіша за ту, що згадало одне. Це замінює відсутню "шкалу
-важливості" без додаткового LLM-виклику (docs/news-purpose.md,
+важливості" без додаткового LLM-виклику (docs/decisions.md,
 ціль 5).
 """
 
@@ -183,7 +183,7 @@ def top_clusters(clusters: list[NewsCluster], limit: int = 8) -> list[NewsCluste
     """Найбільш підтверджені історії за вікно (за `source_count` —
     та сама природна шкала значущості з докстрінга модуля вище), не
     прив'язані до конкретного активу. Потрібне для глобального
-    контексту (docs/news-purpose.md, "Ціль 4") — geopolitical/general
+    контексту (docs/decisions.md, "Ціль 4") — geopolitical/general
     новини мають asset_id=NULL, тому aggregate_by_asset() тут не
     застосовний."""
     return sorted(clusters, key=lambda c: c.source_count, reverse=True)[:limit]

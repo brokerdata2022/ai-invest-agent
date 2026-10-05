@@ -92,7 +92,7 @@ def test_resolve_price_source_uses_explicit_mapping_when_known():
 
 
 def test_resolve_price_source_falls_back_to_twelvedata_convention_for_ticker():
-    # тикер зі скринінгу (docs/news-purpose.md, "Ціль 2") -- не в
+    # тикер зі скринінгу (docs/decisions.md, "Ціль 2") -- не в
     # ASSET_PRICE_SOURCES, здогад за конвенцією twelvedata_adapter.py.
     assert _resolve_price_source("AAPL") == ("twelvedata", "aapl_close")
 

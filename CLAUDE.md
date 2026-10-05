@@ -61,7 +61,7 @@
   news/rss_adapter.py) для потоку geopolitical (замінив курований
   GDELT-запит 2026-09-27 — губив непередбачені події, docs/decisions.md);
   активи для відстеження — docs/watchlist.md, **для чого нам новини й що
-  для цього ще потрібно — docs/news-purpose.md** (5 цілей, поставлено
+  для цього ще потрібно — docs/decisions.md** (5 цілей, поставлено
   2026-09-26)
 
 ## Як запустити локально
@@ -86,32 +86,61 @@ docker compose exec app pytest
 
 ## Структура репозиторію
 ```
+config.py         — ЄДИНИЙ конфіг агента: УСІ пороги, ваги й чек-листи,
+                    що редагуються вручну (рішення користувача
+                    2026-10-04: "конфіг один на весь агент"). Жоден
+                    модуль не визначає ці значення сам — усі імпортують
+                    звідси. Виняток — orchestration/schedule.py (це
+                    РОЗКЛАД, не пороги)
 data-ingestion/   — усе, що стосується ЗБОРУ сирих даних (без аналізу)
   macro/            — FRED, ECB, BOJ, e-Stat адаптери
   companies/        — SEC EDGAR (фундаментал акцій)
   quotes/           — Twelve Data (ціни/обсяг акцій)
-  common/           — спільний інтерфейс адаптера, підключення до БД
+  crypto/           — Binance/CoinGecko (спот) + Binance/Bybit/OKX (ф'ючерси)
+  commodities/      — TradingEconomics (товари, яким FRED не дає денної свіжості)
+  common/           — спільний інтерфейс адаптера, підключення до БД,
+                      свіжість (freshness.py), якість ревізій (quality.py),
+                      watchlist (watchlist_db.py)
 analysis/         — обробка зібраних даних: прогнози, порівняння з очікуваннями
   llm_common.py     — спільна LLM-проводка: провайдер, розбір відповіді,
                       аудит-лог виклику (новий LLM-скрипт бере це звідси)
   forecasting/      — LLM-прогноз наступного значення показника
                       (llm_forecast.py) + backtest проти naive/тренду
   expectations/     — факт vs ринкове очікування + LLM-синтез сюрпризу
+  calendar_outlook/ — ранковий огляд календаря релізів
   news_analysis/    — класифікація новин, агрегація, LLM-синтези
+                      (synthesize_market.py — 3 сесійні синтези/добу)
   screening/        — скринінг акцій S&P 500 (Tier A/B/C + composite score)
+  crypto_screening/ — скринінг ф'ючерсів на лонг/шорт/спостереження
+  trading_list/     — список активів ДЛЯ ТОРГІВ: фільтр за каталізатором
+                      поверх скринінгів (docs/trading-list.md)
+  fundamental/      — розгорнутий аналіз кожного активу за ЙОГО чинниками
+                      (config.py:ASSET_FACTORS) + звітність топ-акцій
 monitoring/       — відстеження календаря релізів, тригери на нові дані
 reporting/         — генерація коротких звітів і списків активів
                     (_common.py — спільний бойлерплейт notify-скриптів)
 orchestration/    — автозапуск усього конвеєра за розкладом (APScheduler);
                     schedule.py — єдиний файл для зміни періодичності
+                    (запис джоби може мати власний "timezone" — для
+                    привʼязки до відкриття конкретного ринку)
 db/               — db/schema.sql — схема БД (raw_observations, sources, release_log)
 scripts/          — bootstrap_1_backfill.sh / bootstrap_2_pipeline.sh
                     (єдиний правильний порядок розгортання з нуля)
 logs/             — раннтайм-вивід джоб (у .gitignore, прибирається
                     джобою prune_logs через 14 днів)
 docs/             — архітектурні рішення, дизайн-документи
-  docs/archive/     — повні (нестиснуті) версії журналів рішень/сесій
+  decisions.md      — ЖУРНАЛ РІШЕНЬ: єдине місце, де шукати "чому так"
+  architecture.md   — потік даних
+  metrics-catalog.md / watchlist.md / trading-list.md
+  archive/          — повні (нестиснуті) версії журналів рішень/сесій
 ```
+
+⚠️ **Чого в `docs/` більше немає** (видалено 2026-10-04, рішення
+користувача): `status.md`, `production-readiness.md`,
+`screening-criteria.md`, `news-purpose.md`. Усе, що в них було, тепер
+або в `docs/decisions.md` (журнал рішень із живими цифрами), або в
+`config.py` (критерії скринінгу — як виконувані значення, а не опис).
+Повні зліпки видалених файлів лишились у `docs/archive/`.
 Кожна з цих папок має власний CLAUDE.md з деталями саме цього домену.
 Дивись docs/architecture.md для повної картини потоку даних.
 
@@ -200,6 +229,20 @@ docker compose exec app python reporting/forecast_notify.py
 docker compose exec app python analysis/forecasting/backtest_llm.py --metric cpi
 docker compose exec app python analysis/forecasting/backtest.py --metric cpi
 
+# Список активів ДЛЯ ТОРГІВ (фільтр за каталізатором) — 3×/добу
+docker compose exec app python analysis/trading_list/run_trading_list.py --dry-run
+docker compose exec app python analysis/trading_list/run_trading_list.py
+docker compose exec app python reporting/trading_list_notify.py
+
+# Розгорнутий аналіз активів за ЇХНІМИ чинниками (watchlist) +
+# звітність топ-акцій. Один актив для перевірки: --asset xauusd
+docker compose exec app python analysis/fundamental/run_analysis.py
+docker compose exec app python reporting/fundamental_notify.py
+
+# Сесійний ШІ-аналіз ринку (3 рази/добу за часом відкриття сесій)
+docker compose exec app python analysis/news_analysis/synthesize_market.py --session us
+docker compose exec app python reporting/market_notify.py
+
 # Скринінг акцій — воронка Tier A → B → C → ранжування
 docker compose exec app python analysis/screening/tier_a.py
 docker compose exec app python analysis/screening/tier_b.py
@@ -264,11 +307,11 @@ docker compose exec app python orchestration/register_telegram_commands.py
 ```
 
 ## Статус проєкту
-- **docs/status.md** — що працює живо (з цифрами), що не зроблено,
-  наступний крок.
-- **docs/production-readiness.md** — що потрібно доробити до продакшену,
-  пріоритезовано (P0/P1/P2) + чекліст розгортання на VPS.
-- **PLAN.md** — фази й чекбокси. **docs/decisions.md** — журнал рішень.
+- **PLAN.md** — фази й чекбокси: що зроблено, що відкрито, із живими
+  цифрами по кожному пункту.
+- **docs/decisions.md** — журнал рішень (ADR-лайт): ЧОМУ так зроблено,
+  які альтернативи відкинули, які живі збої це виправило. Єдине місце,
+  куди дивитись із питанням "чому".
 
 **Прогнозування** (головна незакрита задача з 2026-09-27) закрито
 кодом і ПІДТВЕРДЖЕНО живим backtest 2026-10-04: прогноз формує LLM

@@ -9,7 +9,7 @@ APScheduler і тримає процес живим. Розклад — schedule
 якщо процес був недоступний ненормально довго (контейнер/хост не
 піднятий), шле один Telegram-алерт одразу при відновленні, замість
 того щоб користувач дізнавався про причину запізнілого звіту лише
-постфактум розслідуванням логів (docs/production-readiness.md, P0
+постфактум розслідуванням логів (docs/decisions.md, P0
 "Heartbeat планувальника").
 
 Використання:
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # misfire_grace_time (300с, build_scheduler нижче) і звичайний
 # docker compose restart/перезапуск заради зміни коду (секунди-десятки
 # секунд, orchestration/CLAUDE.md) — щоб жоден із цих НОРМАЛЬНИХ
-# випадків не виглядав як справжній простій (docs/production-readiness.md,
+# випадків не виглядав як справжній простій (docs/decisions.md,
 # P0 "Heartbeat планувальника").
 GAP_ALERT_THRESHOLD = timedelta(minutes=20)
 

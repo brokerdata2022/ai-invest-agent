@@ -42,7 +42,7 @@ def notify_scheduler_gap(last_seen: datetime, resumed_at: datetime, gap: timedel
     перевищив поріг — пояснює користувачу ЗАЗДАЛЕГІДЬ (а не після
     здивування "чому звіт так пізно"), що джерело затримки — простій
     самого планувальника, а не повільний конвеєр (живий випадок
-    2026-10-02, docs/production-readiness.md P0)."""
+    2026-10-02, docs/decisions.md P0)."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:

@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 HORIZON = "medium"
 
 # Межі якісної сили сигналу. Дублюють
-# `analysis/trading_list/config.py:STRENGTH_*` свідомо — reporting/ не
+# `config.py:STRENGTH_*` свідомо — reporting/ не
 # імпортує з analysis/ (reporting/CLAUDE.md, контейнерна
 # незалежність), як і METRIC_LABELS дублює підписи показників.
 STRENGTH_STRONG = Decimal("0.70")

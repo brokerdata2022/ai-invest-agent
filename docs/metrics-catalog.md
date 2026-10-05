@@ -81,7 +81,7 @@ Twelve Data — перше, підтверджене живим запитом �
 прогін через ліміт запитів/хв).
 
 Використовується як джерело ціни/обсягу для скринінгу акцій — деталі
-критеріїв, порогів і universe (S&P 500) в `docs/screening-criteria.md`.
+критеріїв, порогів і universe (S&P 500) в `config.py`.
 
 ## Компанії (джерело: SEC EDGAR — `companies/sec_edgar_adapter.py`, ✅ адаптер готовий)
 
@@ -161,7 +161,7 @@ Twelve Data (`quotes/twelvedata_adapter.py`, той самий шлях, що д
 ---
 **Наступний крок (Фаза 1):** Макро (США, єврозона, Японія) повністю
 закрито й підтверджено живими прогонами. Скринінг акцій: universe —
-S&P 500, критерії — `docs/screening-criteria.md`. `quotes/twelvedata_adapter.py`
+S&P 500, критерії — `config.py`. `quotes/twelvedata_adapter.py`
 готовий, підтверджено живим запитом реальних даних (Alpaca і Stooq
 відкинуто — гео-блок і бот-захист відповідно, `docs/decisions.md`).
 Далі — прогін скринера на весь S&P 500 → конкретний список ~10

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Щоденний дайджест (docs/news-purpose.md, "Ціль 5"): кілька СПРАВДІ
+Щоденний дайджест (docs/decisions.md, "Ціль 5"): кілька СПРАВДІ
 важливих подій за останні --hours, не список усього релевантного.
 Жодного нового LLM-виклику — усі "важливі події" вже пораховані
 попередніми кроками (news_synthesis/market_synthesis/
@@ -122,7 +122,7 @@ def fetch_recent_surprises(conn, hours: int) -> list[dict]:
 
 def fetch_recent_candidates(conn, hours: int) -> list[dict]:
     """НОВІ рядки candidate_assets за вікно — не весь поточний список,
-    тільки те, що з'явилось за --hours (docs/news-purpose.md, "Ціль 3").
+    тільки те, що з'явилось за --hours (docs/decisions.md, "Ціль 3").
     `notified_at IS NULL` — той самий принцип, що fetch_recent_news_synthesis()."""
     return fetch_dicts(
         conn,

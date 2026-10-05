@@ -2,7 +2,7 @@
 Зчитування цінового руху watchlist-активів за вікно — звичайний код,
 без LLM (analysis/CLAUDE.md: "числові порівняння — звичайний код").
 Вхід для synthesize.py (зіставлення новинного сигналу з фактичним
-рухом ціни — docs/news-purpose.md, ціль 1).
+рухом ціни — docs/decisions.md, ціль 1).
 
 is_anomalous_move() (2026-10-02, живий фідбек користувача): синтез не
 повинен залежати ЛИШЕ від того, чи є новина — рух ціни сам по собі теж
@@ -135,7 +135,7 @@ def _resolve_price_source(asset_id: str, price_sources: dict[str, tuple[str, str
     ЖИВИЙ, редагований через Telegram список, передає
     `common/watchlist_db.py:fetch_price_sources(conn)` явно, 2026-10-03,
     docs/decisions.md). Для БУДЬ-ЯКОГО іншого asset_id (тикери акцій зі
-    скринінгу, docs/news-purpose.md "Ціль 2") — здогад за конвенцією,
+    скринінгу, docs/decisions.md "Ціль 2") — здогад за конвенцією,
     якою quotes/twelvedata_adapter.py сам будує metric_id
     (`f"{ticker.lower()}_close"`). Безпечно: якщо здогад хибний (актив
     насправді з іншого джерела, напр. крипта) — просто не знайдеться

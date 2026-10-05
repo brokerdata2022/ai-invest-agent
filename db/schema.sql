@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS news_analysis (
 );
 
 -- Синтез "новини + ціна" по активу за вікно (analysis/news_analysis/
--- synthesize.py, docs/news-purpose.md "Ціль 1" — точки входу для
+-- synthesize.py, docs/decisions.md "Ціль 1" — точки входу для
 -- watchlist-пар: чи рух ціни пояснюється новинами, чи це шум/корекція).
 -- Лише активи, для яких є ОБИДВА входи (новинний сигнал + ціна) — тому
 -- price_* NOT NULL, на відміну від news_analysis.asset_id, який буває
@@ -160,7 +160,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_news_synthesis_asset_per_day
     ON news_synthesis (asset_id, ((created_at AT TIME ZONE 'UTC')::date));
 
 -- Синтез глобального контексту (analysis/news_analysis/synthesize_market.py,
--- docs/news-purpose.md "Ціль 4" — risk-on/risk-off стан ринку) —
+-- docs/decisions.md "Ціль 4" — risk-on/risk-off стан ринку) —
 -- geopolitical/general новини не прив'язані до активу (asset_id завжди
 -- NULL), тому окрема від news_synthesis форма: без asset_id/price_*,
 -- замість них macro_context (знімок ключових ставок/дохідностей на
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS market_synthesis (
 -- (живий збій 2026-10-04).
 
 -- Кандидати-новачки, знайдені LLM у general-потоці новин
--- (analysis/news_analysis/discover_candidates.py, docs/news-purpose.md
+-- (analysis/news_analysis/discover_candidates.py, docs/decisions.md
 -- "Ціль 3") — активи, яких ще немає в S&P 500 universe. Журнал
 -- відкриттів (append-only МІЖ днями); "поточний список" (10
 -- найновіших унікальних тикерів) — DISTINCT ON (ticker) ORDER BY
@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS expectation_comparisons (
 ALTER TABLE expectation_comparisons ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 
 -- LLM-синтез причинного висновку поверх уже готового детермінованого
--- сюрпризу (analysis/expectations/synthesize.py, docs/status.md
+-- сюрпризу (analysis/expectations/synthesize.py, docs/decisions.md
 -- "наступний крок Фази 2") — "вийшло X, очікувалось Y, це означає Z"
 -- (PLAN.md, критерій завершення Фази 2). Один рядок НА comparison_id
 -- (не append-only, як news_synthesis/market_synthesis вище) — той
@@ -315,10 +315,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_forecasts_unique
     ON metric_forecasts (source, metric_id, method, based_on_observed_at);
 
 -- Результати кожного прогону composite_score.py (analysis/screening/) —
--- раніше тільки друкувались, ніде не зберігались (docs/status.md), тому
+-- раніше тільки друкувались, ніде не зберігались (docs/decisions.md), тому
 -- ніщо не знало "які тикери зараз пройшли скринінг" (потрібне
 -- analysis/news_analysis/run_news_analysis.py для tracked_assets акцій,
--- docs/news-purpose.md "Ціль 2"). Append-only, як решта проєкту — усі
+-- docs/decisions.md "Ціль 2"). Append-only, як решта проєкту — усі
 -- рядки ОДНОГО прогону мають той самий run_at, "поточний" скринінг =
 -- MAX(run_at). Порожній прогін (ніхто не пройшов) нічого не вставляє —
 -- свідомо: не затирати вчорашній валідний список нульовим/збійним прогоном.
@@ -504,14 +504,14 @@ ALTER TABLE expectation_synthesis ADD COLUMN IF NOT EXISTS impact_notified_at TI
 -- запізненням. Один рядок (id=1): jobs.py:_scheduler_heartbeat
 -- оновлює last_tick_at кожні 5 хв; orchestration/main.py звіряє
 -- розрив при старті процесу й шле один Telegram-алерт, якщо простій
--- був ненормально довгим (docs/production-readiness.md, P0 "Heartbeat
+-- був ненормально довгим (docs/decisions.md, P0 "Heartbeat
 -- планувальника" — перший практичний крок).
 CREATE TABLE IF NOT EXISTS scheduler_heartbeat (
     id           SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     last_tick_at TIMESTAMPTZ NOT NULL
 );
 
--- notified_at для screening_results (2026-10-02, docs/production-readiness.md
+-- notified_at для screening_results (2026-10-02, docs/decisions.md
 -- розділ 3а №1: "скринінг рахується щодня, але жодного reporting-скрипта
 -- для нього немає"): reporting/screening_notify.py — той самий принцип
 -- NULL = ще не надіслано, що всюди в проєкті. Дедуп тут не по id рядків

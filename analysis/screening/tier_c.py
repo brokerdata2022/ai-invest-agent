@@ -4,7 +4,7 @@
 ранжуванням (порядок: Tier A -> Tier B -> Tier C, кожен наступний
 рівень працює тільки з тикерами, що пройшли попередній).
 
-Критерії (docs/screening-criteria.md):
+Критерії (config.py):
     - P/E (price / TTM EPS) в діапазоні (MIN_PE, MAX_PE)
     - P/S (market cap / TTM revenue) < MAX_PS
     - PEG (P/E / (eps_growth_yoy * 100)) < MAX_PEG
@@ -45,12 +45,16 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- Критерії Tier C (docs/screening-criteria.md) ---
-MIN_PE = Decimal("10")
-MAX_PE = Decimal("35")
-MAX_PS = Decimal("8")
-MAX_PEG = Decimal("2")
-TTM_QUARTERS = 4
+# Пороги — з ЄДИНОГО `config.py` у корені (рішення користувача
+# 2026-10-04: один конфіг на весь агент). Тут лишається сама
+# логіка воронки, не числа.
+from config import (  # noqa: E402
+    MAX_PE,
+    MAX_PEG,
+    MAX_PS,
+    MIN_PE,
+    TTM_QUARTERS,
+)
 
 
 @dataclass

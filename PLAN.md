@@ -1,7 +1,7 @@
 # План розробки
 
 Поточний стан і живі числа (скільки компаній пройшло Tier A/B/C, тощо) —
-`docs/status.md`. Повний покроковий журнал сесій — `docs/archive/plan-journal-2026-08-09.md`.
+`docs/decisions.md`. Повний покроковий журнал сесій — `docs/archive/plan-journal-2026-08-09.md`.
 
 ## Фаза 0 — Фундамент (перш ніж будь-яка "розумна" логіка)
 Мета: скелет, що вміє надійно зберігати дані. Без цього аналіз будувати нема
@@ -36,7 +36,7 @@
       liabilities) + ціни/обсяг через Twelve Data (quotes/twelvedata_adapter.py)
 - [x] Новини: news/ повністю реалізовано (GDELT + офіційний RSS,
       3 потоки, класифікація DeepSeek, агрегація) — докладніше
-      docs/status.md
+      docs/decisions.md
 - [x] Крипта (BTC/ETH/SOL, docs/watchlist.md): Binance (ціна/обсяг) +
       CoinGecko (market cap) — `data-ingestion/crypto/`, живо
       підтверджено (docs/decisions.md, 2026-09-26)
@@ -65,7 +65,7 @@ watchlist-парами — закрито як окрема задача (ріш
 - [x] Порівняння факту з очікуванням при виході нових даних —
       `analysis/expectations/` (5 методів приведення до спільних
       одиниць + `expectation_comparisons` + Telegram-сповіщення,
-      2026-09-27, докладніше docs/status.md/decisions.md). Live-прогін
+      2026-09-27, докладніше docs/decisions.md/decisions.md). Live-прогін
       на справжньому релізі — чекає на 30 вересня/2 жовтня
 - [x] LLM-синтез причинного висновку поверх сюрпризу факт/очікування —
       `analysis/expectations/synthesize.py` (2026-09-27,
@@ -235,7 +235,7 @@ watchlist-парами — закрито як окрема задача (ріш
       перспективних торгованих акцій з Twelve Data верифікацією
       (`discover_candidates.py`, Ціль 3) код готовий і тестово
       підтверджений, але live-прогін ще не знайшов реального кандидата
-      (2026-09-27, `docs/news-purpose.md` — general-стрім зараз
+      (2026-09-27, `docs/decisions.md` — general-стрім зараз
       забитий IPO-шумом); звіти (10-K/10-Q текст компаній) — досі не
       покриті
 
@@ -244,12 +244,12 @@ watchlist-парами — закрито як окрема задача (ріш
 
 **Паралельний трек (випередив цю фазу):** скринінг акцій S&P 500
 (analysis/screening/ — Tier A/B/C + composite score, критерії —
-docs/screening-criteria.md) реалізований і живо підтверджений
+config.py) реалізований і живо підтверджений
 повністю. Це інший вид аналізу (детермінований відбір/ранжування
 кандидатів за фундаменталом і valuation, не порівняння факт/очікування
 чи LLM-прогноз) — концептуально ближче до Фази 4 ("список цікавих
 активів"), але не потребував завершення Фази 2/3, тому зроблений уже
-зараз. Деталі — docs/status.md.
+зараз. Деталі — docs/decisions.md.
 
 ## Фаза 3 — Моніторинг і реакція
 - [x] Трекінг календаря релізів + активний тригер збору —
@@ -283,7 +283,7 @@ docs/screening-criteria.md) реалізований і живо підтвер�
 
 ## Фаза 4 — Звітність і списки активів
 - [x] Генерація короткого регулярного звіту (щоденний/щотижневий) —
-      `reporting/daily_digest.py` (2026-09-27, docs/news-purpose.md
+      `reporting/daily_digest.py` (2026-09-27, docs/decisions.md
       "Ціль 5"): щоденний, тільки новинний зріз (news_synthesis/
       market_synthesis/expectation_comparisons/candidate_assets за
       вікно), без нового LLM-виклику. Ширший звіт (макро-показники,
@@ -296,7 +296,7 @@ docs/screening-criteria.md) реалізований і живо підтвер�
       **⚠️ Підтверджено живим використанням (2026-09-28): результат
       рахувався щодня, але ніколи не доходив до користувача** —
       жодного reporting-скрипта для screening_results не існувало
-      (`docs/production-readiness.md`, розділ 3а №1).
+      (`docs/decisions.md`, розділ 3а №1).
       **✅ Виправлено 2026-10-02:** `reporting/screening_notify.py`
       (топ-N за composite score, дедуп `notified_at`) + джоба
       `notify_screening`, 1х/добу (`orchestration/`).
@@ -489,9 +489,9 @@ docs/screening-criteria.md) реалізований і живо підтвер�
       - [x] `db/schema.sql` — таблиця `trading_list` (append-only
             знімок, колонка `horizon` з першого дня, окремі внески
             компонентів, `notified_at`)
-      - [x] `analysis/trading_list/config.py` — усі ваги/вікна/пороги
+      - [x] `config.py` — усі ваги/вікна/пороги
             в одному файлі (той самий принцип, що
-            `crypto_screening/config.py`)
+            `config.py`)
       - [x] статична мапа `asset_impacts.category` → наші активи
             (НЕ парсинг вільного тексту назв від LLM)
       - [x] шар торгуємості для акцій і watchlist — тренд на 20/60

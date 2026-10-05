@@ -2,7 +2,7 @@
 """
 Пакетний збір фундаментальних даних (SEC EDGAR) для всього S&P 500 —
 друге (поруч з quotes/collect_universe.py) джерело даних для
-скринера (docs/screening-criteria.md).
+скринера (config.py).
 
 CIK для кожного тикера береться з того самого constituents.csv, що й
 для quotes/collect_universe.py (колонка CIK) — жодного окремого

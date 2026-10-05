@@ -25,6 +25,23 @@ CONSUMERS = {
     "SIMILARITY_THRESHOLD": ["news_analysis/aggregate.py"],
     "CROSS_RUN_SIMILARITY_THRESHOLD": ["news_analysis/_consolidated_db.py"],
     "MIN_NORMALIZED_LENGTH_FOR_MATCHING": ["news_analysis/aggregate.py"],
+    # Скринінг акцій — перенесений 2026-10-05 (при першому зливанні
+    # лишився в модулях, тобто вимога "один конфіг" була виконана
+    # наполовину).
+    "MIN_PRICE": ["screening/tier_a.py"],
+    "MIN_MARKET_CAP": ["screening/tier_a.py"],
+    "MIN_AVG_DOLLAR_VOLUME": ["screening/tier_a.py"],
+    "MIN_REVENUE_YOY": ["screening/tier_b.py"],
+    "MIN_EPS_YOY": ["screening/tier_b.py"],
+    "MAX_LIABILITIES_TO_ASSETS": ["screening/tier_b.py"],
+    "MIN_PE": ["screening/tier_c.py"],
+    "MAX_PE": ["screening/tier_c.py"],
+    "MAX_PEG": ["screening/tier_c.py"],
+    "WEIGHT_REVENUE_GROWTH": ["screening/composite_score.py"],
+    # Чинники фундаментального аналізу (2026-10-04).
+    "ASSET_FACTORS": ["fundamental/factors.py"],
+    "ASSET_FACTOR_GAPS": ["fundamental/factors.py"],
+    "DEFAULT_ASSET_FACTORS": ["fundamental/factors.py"],
 }
 
 
@@ -84,3 +101,27 @@ def test_min_history_above_one():
 def test_lookback_not_smaller_than_min_history():
     """Інакше тягнули б менше точок, ніж вимагаємо для розрахунку."""
     assert config.ANOMALY_HISTORY_LOOKBACK >= config.ANOMALY_MIN_HISTORY
+
+
+def test_composite_weights_sum_to_one():
+    """Ваги ранжування скринінгу мусять давати 1 — інакше скор виходить
+    за очікувану шкалу й пороги перестають читатись."""
+    total = (
+        config.WEIGHT_REVENUE_GROWTH + config.WEIGHT_EPS_GROWTH
+        + config.WEIGHT_NEG_PE + config.WEIGHT_AVG_DOLLAR_VOLUME
+    )
+    assert total == 1
+
+
+def test_pe_range_is_ordered():
+    assert config.MIN_PE < config.MAX_PE
+
+
+def test_single_config_has_no_module_level_siblings():
+    """Прямий захист вимоги "конфіг один на весь агент": модульних
+    config.py більше бути не повинно."""
+    from pathlib import Path
+
+    analysis_dir = Path(__file__).resolve().parent.parent
+    strays = sorted(p.relative_to(analysis_dir) for p in analysis_dir.glob("*/config.py"))
+    assert not strays, f"зʼявились модульні конфіги: {strays}"

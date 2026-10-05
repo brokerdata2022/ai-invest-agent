@@ -10,7 +10,7 @@
 #
 # Best-effort, як collect_all.py: одна джоба, що впала (напр. GDELT
 # 429 — задокументований, транзієнтний ризик спільного dev-IP,
-# docs/status.md), НЕ повинна зупиняти решту незалежних кроків
+# docs/decisions.md), НЕ повинна зупиняти решту незалежних кроків
 # (ціни/SEC/RSS/DeepSeek/синтез/дайджест) — живо виявлено 2026-09-27:
 # попередня версія мала `set -e`, і провал news_collect_watchlist
 # обірвав увесь конвеєр ще до screening-кроків, які від нього не
@@ -64,7 +64,7 @@ run news_analysis_watchlist
 run news_analysis_general
 run news_analysis_geopolitical
 
-echo "--- LLM-синтез (Цілі 1/2/3/4, docs/news-purpose.md) ---"
+echo "--- LLM-синтез (Цілі 1/2/3/4, docs/decisions.md) ---"
 run news_synthesis
 run market_synthesis
 run discover_candidates

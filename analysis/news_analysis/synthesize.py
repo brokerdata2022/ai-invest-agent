@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM-синтез "новини + ціна" по активу (docs/news-purpose.md, "Ціль 1" —
+LLM-синтез "новини + ціна" по активу (docs/decisions.md, "Ціль 1" —
 точки входу для watchlist-пар): зводить уже готовий новинний сигнал
 (aggregate.py:AssetSignal) з ціновим рухом за те саме вікно
 (prices.py:PriceChange) в один причинний висновок — чи рух ціни

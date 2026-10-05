@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 # v1-спрощення: історія OI/обсягу — лише з Bybit (див. docstring модуля).
 HISTORY_SOURCE = "bybit_futures"
 # Пороги (OI_WINDOW_DAYS_*/VOLUME_LOOKBACK_DAYS/KLINES_LIMIT/RSI_PERIOD/
-# PUMP_THRESHOLD_PCT) — crypto_screening/config.py, єдиний файл для
+# PUMP_THRESHOLD_PCT) — config.py, єдиний файл для
 # ручного редагування (2026-10-03).
 
 

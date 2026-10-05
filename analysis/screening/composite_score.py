@@ -1,6 +1,6 @@
 """Composite score: фінальне ранжування тикерів, що пройшли Tier A/B/C.
 
-Формула (docs/screening-criteria.md):
+Формула (config.py):
     score = 0.35 * percentile(revenue_growth)
           + 0.30 * percentile(eps_growth)
           + 0.20 * percentile(-P/E)
@@ -45,11 +45,15 @@ from screening._results_db import save_screening_run  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Вагові коефіцієнти формули (docs/screening-criteria.md)
-WEIGHT_REVENUE_GROWTH = Decimal("0.35")
-WEIGHT_EPS_GROWTH = Decimal("0.30")
-WEIGHT_NEG_PE = Decimal("0.20")
-WEIGHT_AVG_DOLLAR_VOLUME = Decimal("0.15")
+# Пороги — з ЄДИНОГО `config.py` у корені (рішення користувача
+# 2026-10-04: один конфіг на весь агент). Тут лишається сама
+# логіка воронки, не числа.
+from config import (  # noqa: E402
+    WEIGHT_AVG_DOLLAR_VOLUME,
+    WEIGHT_EPS_GROWTH,
+    WEIGHT_NEG_PE,
+    WEIGHT_REVENUE_GROWTH,
+)
 
 
 @dataclass

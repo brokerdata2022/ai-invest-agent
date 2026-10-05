@@ -20,14 +20,14 @@ email), 800/добу — суттєво для прогону скринера �
 Архітектурна відмінність від macro/*-адаптерів (FRED/ECB/BOJ/e-Stat):
 там METRICS — фіксований словник конкретних показників країни. Тут
 тикер — необмежена множина (universe скринінгу — S&P 500, див.
-docs/screening-criteria.md), тож METRICS-у стилі macro/ не буде:
+config.py), тож METRICS-у стилі macro/ не буде:
 тикер — параметр конструктора, а не хардкод. FIELDS нижче — це
 фіксований (малий) набір **полів одного бару**, не показників.
 metric_id збирається динамічно як "{ticker}_{field}", напр.
 "aapl_close", "aapl_volume" — той самий підхід, що вже задокументовано
 для companies/ (SEC EDGAR) у docs/decisions.md.
 
-Також джерело цін для watchlist-металів (docs/news-purpose.md, ціль
+Також джерело цін для watchlist-металів (docs/decisions.md, ціль
 1): Twelve Data підтверджено підтримує форекс/commodity-символи зі
 слешем (напр. "XAU/USD", "XAG/USD" — twelvedata.com/docs, перевірено
 2026-09-26; FRED видалив LBMA gold/silver fixing у 2022, докладніше
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 TWELVEDATA_URL = "https://api.twelvedata.com/time_series"
 
 # metric_id-суфікс → ключ у JSON "values"-записі Twelve Data. Для
-# скринінгу (docs/screening-criteria.md) потрібні тільки ці два поля —
+# скринінгу (config.py) потрібні тільки ці два поля —
 # open/high/low навмисно не тягнемо, поки для них немає використання.
 FIELDS: dict[str, str] = {
     "close": "close",

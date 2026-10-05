@@ -4,7 +4,7 @@
 analysis/expectations/compare_releases.py (expectation_comparisons) і,
 якщо встиг відпрацювати synthesize.py, доповнене причинним LLM-
 висновком (expectation_synthesis) — "вийшло X, очікувалось Y, це
-означає Z" (docs/status.md, критерій завершення Фази 2). Тільки
+означає Z" (docs/decisions.md, критерій завершення Фази 2). Тільки
 форматування готового результату, жодної аналітики (reporting/CLAUDE.md).
 Синтез — LEFT JOIN: якщо ще не встиг (той самий цикл) або LLM-виклик
 впав, повідомлення все одно йде із самими цифрами — не блокується на

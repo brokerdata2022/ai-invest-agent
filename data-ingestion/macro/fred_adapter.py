@@ -39,7 +39,7 @@ METRICS: dict[str, str] = {
     "mortgage_rate_30y": "MORTGAGE30US",  # 30-Year Fixed Rate Mortgage Average, щотижнева
     "usdjpy_fx_rate": "DEXJPUS",        # USD/JPY, щоденна (Fed H.10) — для carry trade разом з fed_funds_rate/japan_policy_rate
 
-    # Ціни watchlist-активів (docs/news-purpose.md, ціль 1 — потрібні,
+    # Ціни watchlist-активів (docs/decisions.md, ціль 1 — потрібні,
     # щоб зіставляти новини з рухом ціни). Перевірено живим WebFetch
     # 2026-09-26 (не вгадано): усі три активні на fred.stlouisfed.org.
     # Золото/срібло FRED видалив (LBMA fixing, 2022) — вони йдуть через

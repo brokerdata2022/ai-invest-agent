@@ -375,7 +375,7 @@ def _prune_logs() -> None:
 
 
 def _scheduler_heartbeat() -> None:
-    """Власний "пульс" планувальника (docs/production-readiness.md, P0
+    """Власний "пульс" планувальника (docs/decisions.md, P0
     "Heartbeat планувальника") — UPSERT одного рядка з now() у
     scheduler_heartbeat (db/schema.sql). main.py звіряє його з
     поточним часом ПРИ СТАРТІ процесу: великий розрив означає, що

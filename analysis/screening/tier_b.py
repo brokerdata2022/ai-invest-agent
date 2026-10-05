@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tier B скринінгу акцій — фундаментальна якість (docs/screening-criteria.md).
+Tier B скринінгу акцій — фундаментальна якість (config.py).
 
 Приймає на вхід тикери, що пройшли Tier A (analysis/screening/tier_a.py),
 і фільтрує їх далі за SEC EDGAR даними (уже зібраними через
@@ -8,7 +8,7 @@ data-ingestion/collect_companies_universe.py). Як і tier_a.py — не
 звертається до жодного зовнішнього API, тільки читає зі сховища
 (CLAUDE.md, правило розділення data-ingestion/analysis).
 
-Критерії (docs/screening-criteria.md, узгоджено 2026-09-20):
+Критерії (config.py, узгоджено 2026-09-20):
 - NetIncomeLoss > 0 останні 4 квартали поспіль
 - Revenues YoY > 10% (той самий квартал рік тому)
 - EarningsPerShareDiluted YoY > 15%
@@ -42,16 +42,18 @@ from screening._batch_db import batch_series  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-MIN_PROFITABLE_QUARTERS = 4
-MIN_REVENUE_YOY = Decimal("0.10")
-MIN_EPS_YOY = Decimal("0.15")
-MAX_SHARES_YOY = Decimal("0.03")
-MAX_LIABILITIES_TO_ASSETS = Decimal("0.6")
-
-# Квартали не завжди рівно 365 днів одна від одної (різні fiscal
-# calendars) — допуск навколо "рівно рік тому" при пошуку пари для YoY.
-YOY_TARGET_DAYS = 365
-YOY_TOLERANCE_DAYS = 20
+# Пороги — з ЄДИНОГО `config.py` у корені (рішення користувача
+# 2026-10-04: один конфіг на весь агент). Тут лишається сама
+# логіка воронки, не числа.
+from config import (  # noqa: E402
+    MAX_LIABILITIES_TO_ASSETS,
+    MAX_SHARES_YOY,
+    MIN_EPS_YOY,
+    MIN_PROFITABLE_QUARTERS,
+    MIN_REVENUE_YOY,
+    YOY_TARGET_DAYS,
+    YOY_TOLERANCE_DAYS,
+)
 
 
 @dataclass

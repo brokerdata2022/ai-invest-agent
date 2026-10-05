@@ -47,7 +47,7 @@ normalize() фільтрує duration-записи за довжиною пер�
 
 Відомий пробіл (не вирішено в цій версії): деякі компанії звітують
 виручку під тегом `RevenueFromContractWithCustomerExcludingAssessedTax`
-замість `Revenues` (пост-ASC 606) — див. docs/screening-criteria.md.
+замість `Revenues` (пост-ASC 606) — див. config.py.
 Якщо основний тег дає 404, revenue для цієї компанії просто не
 збереться (без падіння) — автоматичного фолбеку на інший тег поки
 немає.

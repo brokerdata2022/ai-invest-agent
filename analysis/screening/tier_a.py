@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tier A скринінгу акцій — ліквідність (docs/screening-criteria.md).
+Tier A скринінгу акцій — ліквідність (config.py).
 
 Читає вже зібрані дані з raw_observations (через views v_current_values/
 v_observations_latest_revision) — Twelve Data для ціни/обсягу, SEC
@@ -9,7 +9,7 @@ EDGAR для shares_outstanding (капіталізація). Не зверта�
 analysis/ тільки читає зі сховища data-ingestion/, ніколи не
 дублює логіку збору.
 
-Критерії (docs/screening-criteria.md, узгоджено 2026-09-20):
+Критерії (config.py, узгоджено 2026-09-20):
 - ціна > $10
 - ринкова капіталізація > $10 млрд (ціна × shares_outstanding)
 - середній доларовий обсяг торгів (3 міс, ~63 торгових дні) > $10 млн/день
@@ -46,10 +46,15 @@ from screening._batch_db import batch_latest_values, batch_series  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-MIN_PRICE = Decimal("10")
-MIN_MARKET_CAP = Decimal("10000000000")      # $10 млрд
-MIN_AVG_DOLLAR_VOLUME = Decimal("10000000")  # $10 млн/день
-LOOKBACK_DAYS = 63  # ~3 торгових місяці (docs/screening-criteria.md)
+# Пороги — з ЄДИНОГО `config.py` у корені (рішення користувача
+# 2026-10-04: один конфіг на весь агент). Тут лишається сама
+# логіка воронки, не числа.
+from config import (  # noqa: E402
+    LOOKBACK_DAYS,
+    MIN_AVG_DOLLAR_VOLUME,
+    MIN_MARKET_CAP,
+    MIN_PRICE,
+)
 
 
 @dataclass

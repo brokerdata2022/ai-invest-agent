@@ -145,7 +145,7 @@ def fetch_klines(session: requests.Session, symbol: str, limit: int = 30, interv
 
     `interval` — Binance kline interval ("1d" за замовчуванням для
     первинного скану/LONG, "4h" для погодинного моніторингу вже
-    активних кандидатів, `crypto_screening/config.py:
+    активних кандидатів, `config.py:
     MONITORING_KLINE_INTERVAL` — рішення користувача, 2026-10-03:
     "денний ТФ підходить для глобальних висновків, моніторинг уже
     відібраних активів потрібно на меншому"). Стандартні значення

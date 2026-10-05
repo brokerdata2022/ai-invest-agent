@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Пакетний збір котирувань (Twelve Data) для всього S&P 500 — вхід для
-скринера (docs/screening-criteria.md). На відміну від run_collect.py
+скринера (config.py). На відміну від run_collect.py
 (один тикер за раз, дебаг-інструмент), цей скрипт проходить весь
 universe і призначений для реального (щокварталу, синхронно з 10-Q —
-docs/screening-criteria.md) запуску.
+config.py) запуску.
 
 Джерело списку тикерів: constituents.csv,
 github.com/datasets/s-and-p-500-companies (docs/decisions.md,
