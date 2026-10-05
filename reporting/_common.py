@@ -40,12 +40,18 @@ import html
 import logging
 import os
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion")
 )
 
 logger = logging.getLogger(__name__)
+
+# Пояс і формат відображення — з ЄДИНОГО config.py у корені (доступний
+# через PYTHONPATH=/app, Dockerfile).
+from config import DISPLAY_DATETIME_FORMAT, DISPLAY_TIMEZONE  # noqa: E402
 
 # Напрямок сигналу з analysis/ → емодзі. Той самий набір значень, що
 # analysis/llm_common.py:DIRECTIONS (без прямого імпорту — reporting/ і
@@ -136,3 +142,24 @@ def mark_notified(conn, table: str, ids: list[int]) -> None:
     with conn.cursor() as cur:
         cur.execute(f"UPDATE {table} SET notified_at = now() WHERE id = ANY(%s)", (ids,))  # noqa: S608 — table з білого списку вище, не користувацький ввід
     conn.commit()
+
+
+def format_local_dt(value, fmt: str = DISPLAY_DATETIME_FORMAT) -> str:
+    """Час у поясі КОРИСТУВАЧА (`config.DISPLAY_TIMEZONE`).
+
+    Живий фідбек користувача 2026-10-05: у Telegram ішло
+    "2026-10-08 12:30:00+00:00" — `release_log.scheduled_at` це
+    TIMESTAMPTZ, і psycopg2 віддає його в UTC, а f-string друкував як є.
+
+    Значення без часового поясу (naive) трактується як UTC — саме так
+    його й віддає БД, якщо сесія без tz; видавати його за локальний
+    означало б зсунути час на кілька годин ТИХО.
+
+    Не-дата (рядок, None) віддається як є: notify-скрипт не повинен
+    падати через несподіваний тип у полі, яке лише показується."""
+    if not isinstance(value, datetime):
+        return str(value) if value is not None else ""
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("UTC"))
+    return value.astimezone(ZoneInfo(DISPLAY_TIMEZONE)).strftime(fmt)

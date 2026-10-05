@@ -40,6 +40,7 @@ from _common import (  # noqa: E402
     bold,
     escape_html,
     fetch_dicts,
+    format_local_dt,
     mark_notified,
     resolve_telegram_credentials,
 )
@@ -120,7 +121,7 @@ def format_forecast_block(row: dict, next_release) -> list[str]:
     lines.append(f"{emoji} Наш прогноз: {bold(forecast_text)}{confidence_suffix}")
 
     if next_release is not None:
-        when = escape_html(next_release["scheduled_at"])
+        when = escape_html(format_local_dt(next_release["scheduled_at"]))
         if next_release.get("expected_value"):
             lines.append(
                 f"Ринкове очікування: {escape_html(next_release['expected_value'])} "

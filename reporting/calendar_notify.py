@@ -22,6 +22,7 @@ from _common import (  # noqa: E402
     bold,
     escape_html,
     fetch_dicts,
+    format_local_dt,
     mark_notified,
     resolve_telegram_credentials,
 )
@@ -74,7 +75,10 @@ def format_outlook_message(row: dict, release_rows: list[dict]) -> str:
         for r in release_rows:
             label = METRIC_LABELS.get(r["metric_id"], r["metric_id"])
             emoji = IMPACT_EMOJI.get(r["impact_level"], "❔")
-            lines.append(f"{emoji} {r['scheduled_at']} — {escape_html(label)}")
+            lines.append(
+                f"{emoji} {escape_html(format_local_dt(r['scheduled_at']))} — "
+                f"{escape_html(label)}"
+            )
 
     lines.append("")
     direction_emoji = DIRECTION_EMOJI.get(row["direction"], "❓")

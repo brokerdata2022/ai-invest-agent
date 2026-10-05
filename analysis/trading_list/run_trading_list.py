@@ -30,8 +30,10 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -77,6 +79,22 @@ from trading_list.scoring import (  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _local_dt(value) -> str:
+    """Час релізу в поясі користувача (`config.DISPLAY_TIMEZONE`).
+
+    Той самий фікс, що `reporting/_common.py:format_local_dt` — але
+    тут, бо `when` потрапляє в `trading_list.reasons` (JSONB) уже
+    готовим рядком, і reporting/ його не переформатовує. Живий фідбек
+    2026-10-05: у Telegram ішов UTC замість київського часу."""
+    if not isinstance(value, datetime):
+        return str(value) if value is not None else ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("UTC"))
+    return value.astimezone(ZoneInfo(config.DISPLAY_TIMEZONE)).strftime(
+        config.DISPLAY_DATETIME_FORMAT
+    )
 
 _IMPACT_WEIGHT = {
     "high": config.CATALYST_WEIGHT_RELEASE_HIGH,
@@ -160,11 +178,12 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
     for release in fetch_upcoming_releases(conn, config.CATALYST_UPCOMING_DAYS):
         weight = _IMPACT_WEIGHT.get(release["impact_level"], config.CATALYST_WEIGHT_RELEASE_LOW)
         category = _METRIC_CATEGORY.get(release["metric_id"])
-        text = f"реліз {release['metric_id']} {release['scheduled_at']:%d.%m %H:%M}"
+        when = _local_dt(release["scheduled_at"])
+        text = f"реліз {release['metric_id']} {when}"
         hit = CatalystHit(
             "release_upcoming", weight, "neutral", text,
             metric_id=release["metric_id"],
-            when=f"{release['scheduled_at']:%d.%m %H:%M}",
+            when=when,
         )
 
         event_key = f"release:{release['metric_id']}:{release['scheduled_at']:%Y%m%d%H%M}"

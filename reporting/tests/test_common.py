@@ -91,3 +91,60 @@ def test_bold_wraps_and_escapes():
 def test_link_wraps_text_and_href_escaped():
     text = link("Джерело 1", "https://example.com/a?x=1&y=2")
     assert text == '<a href="https://example.com/a?x=1&amp;y=2">Джерело 1</a>'
+
+
+# --- час у поясі користувача ------------------------------------------
+# Живий фідбек 2026-10-05: у Telegram ішло
+# "2026-10-08 12:30:00+00:00" — scheduled_at це TIMESTAMPTZ, psycopg2
+# віддає його в UTC, а f-string друкував як є.
+
+
+def test_format_local_dt_converts_utc_to_display_timezone():
+    from datetime import datetime, timezone
+
+    import config
+    from _common import format_local_dt
+
+    # 12:30 UTC = 15:30 Києва (EEST, UTC+3) у жовтні до переходу.
+    utc = datetime(2026, 10, 8, 12, 30, tzinfo=timezone.utc)
+    assert config.DISPLAY_TIMEZONE == "Europe/Kyiv"
+    assert format_local_dt(utc) == "08.10 15:30"
+
+
+def test_format_local_dt_treats_naive_as_utc():
+    """Naive-значення — саме так його віддає БД без tz у сесії.
+    Видавати його за локальний означало б зсунути час ТИХО."""
+    from datetime import datetime
+
+    from _common import format_local_dt
+
+    assert format_local_dt(datetime(2026, 10, 8, 12, 30)) == "08.10 15:30"
+
+
+def test_format_local_dt_respects_winter_time():
+    """Після останньої неділі жовтня Київ на EET (UTC+2) — зсув має
+    змінитись сам, без правок у коді."""
+    from datetime import datetime, timezone
+
+    from _common import format_local_dt
+
+    utc = datetime(2026, 12, 8, 12, 30, tzinfo=timezone.utc)
+    assert format_local_dt(utc) == "08.12 14:30"
+
+
+def test_format_local_dt_passes_through_non_datetime():
+    """Notify-скрипт не повинен падати через несподіваний тип у полі,
+    яке лише показується."""
+    from _common import format_local_dt
+
+    assert format_local_dt("уже рядок") == "уже рядок"
+    assert format_local_dt(None) == ""
+
+
+def test_format_local_dt_custom_format():
+    from datetime import datetime, timezone
+
+    from _common import format_local_dt
+
+    utc = datetime(2026, 10, 8, 12, 30, tzinfo=timezone.utc)
+    assert format_local_dt(utc, "%H:%M") == "15:30"
