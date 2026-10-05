@@ -46,14 +46,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-def update_forecasts_cycle(conn, api_key: str) -> list[str]:
+def update_forecasts_cycle(conn) -> list[str]:
     entries = get_detected_entries(conn)
     metric_ids = sorted({e["metric_id"] for e in entries if e["metric_id"] in FORECASTABLE_METRICS})
 
     updated = []
     for metric_id in metric_ids:
         try:
-            forecast_id = run_forecast(conn, metric_id, api_key)
+            forecast_id = run_forecast(conn, metric_id)
             if forecast_id is not None:
                 updated.append(metric_id)
         except Exception:
@@ -69,11 +69,11 @@ def update_forecasts_cycle(conn, api_key: str) -> list[str]:
 def main() -> None:
     load_dotenv()
 
-    api_key = require_api_key()
+    require_api_key("metric_forecast")
 
     conn = get_connection()
     try:
-        updated = update_forecasts_cycle(conn, api_key)
+        updated = update_forecasts_cycle(conn)
         logger.info(
             "Оновлено прогнозів: %d (%s)", len(updated), ", ".join(updated) if updated else "-"
         )

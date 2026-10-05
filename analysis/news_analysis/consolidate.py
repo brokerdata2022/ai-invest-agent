@@ -57,13 +57,13 @@ sys.path.insert(0, _DATA_INGESTION_DIR)
 
 from common.db import get_connection  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     DIRECTIONS,
     call_llm,
     log_llm_call,
     parse_confidence,
     parse_json_object,
     require_api_key,
-    resolve_provider,
 )
 from common.watchlist_db import fetch_asset_ids  # noqa: E402
 from news_analysis._consolidated_db import (  # noqa: E402
@@ -202,7 +202,7 @@ def parse_response(raw_content: str, n_clusters: int) -> list[dict]:
 
 
 def consolidate_stream(
-    conn, stream: str, articles: list[dict], api_key: str, tracked_assets: list[str] = None
+    conn, stream: str, articles: list[dict], tracked_assets: list[str] = None
 ) -> list[dict]:
     """Механічна кластеризація → промпт із представників → LLM →
     парсить → зберігає кожен запис, що НЕ дублює вже збережене цього
@@ -222,12 +222,13 @@ def consolidate_stream(
     articles_by_id = {a["id"]: a for a in articles}
 
     prompt = build_prompt(clusters, articles_by_id, tracked_assets)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="news_consolidation")
+    raw_content = llm.text
     items = parse_response(raw_content, len(clusters))
 
     llm_call_id = log_llm_call(
-        conn, provider=resolve_provider(), purpose="news_consolidation",
-        prompt=prompt, response=raw_content, source_ref=stream,
+        conn, llm=llm, purpose="news_consolidation",
+        prompt=prompt, source_ref=stream,
     )
 
     recent_summaries = fetch_recent_summaries(conn, stream)
@@ -276,7 +277,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=60, help="стеля на розмір одного LLM-промпту")
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("news_consolidation")
 
     conn = get_connection()
     try:
@@ -300,12 +301,12 @@ def main() -> None:
             tracked_assets = fetch_asset_ids(conn) + fetch_latest_tickers(conn)
 
         try:
-            saved = consolidate_stream(conn, args.stream, articles, api_key, tracked_assets=tracked_assets)
+            saved = consolidate_stream(conn, args.stream, articles, tracked_assets=tracked_assets)
         except ConsolidationResponseError:
             logger.exception("%s: некоректна відповідь LLM — прогін пропущено", args.stream)
             return
-        except requests.exceptions.RequestException:
-            logger.exception("%s: мережева помилка виклику LLM — прогін пропущено", args.stream)
+        except LlmError:
+            logger.exception("%s: збій виклику LLM — прогін пропущено", args.stream)
             return
 
         # Позначаємо ВСІ вхідні статті як враховані (навіть ті, що LLM

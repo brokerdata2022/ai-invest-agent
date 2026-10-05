@@ -157,7 +157,7 @@ def test_consolidate_stream_uses_mechanical_source_count_not_llm_count(monkeypat
     monkeypatch.setattr("news_analysis.consolidate.log_llm_call", lambda *a, **k: 42)
     monkeypatch.setattr("news_analysis.consolidate.fetch_recent_summaries", lambda conn, stream: [])
 
-    result = consolidate_stream(_FakeConn(), "watchlist", ARTICLES_SAME_STORY, api_key="fake-key")
+    result = consolidate_stream(_FakeConn(), "watchlist", ARTICLES_SAME_STORY)
 
     assert len(result) == 1
     assert result[0]["source_count"] == 2  # механічний факт кластера, не LLM
@@ -180,7 +180,7 @@ def test_consolidate_stream_skips_items_duplicating_recent_summaries(monkeypatch
         lambda conn, **kwargs: saved_calls.append(kwargs),
     )
 
-    result = consolidate_stream(_FakeConn(), "watchlist", ARTICLES_SAME_STORY, api_key="fake-key")
+    result = consolidate_stream(_FakeConn(), "watchlist", ARTICLES_SAME_STORY)
 
     assert result == []
     assert saved_calls == []

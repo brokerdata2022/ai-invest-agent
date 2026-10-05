@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     DIRECTIONS,
     SYNTHESIS_FIELDS,
     SynthesisResponseError,
@@ -58,7 +59,6 @@ from llm_common import (  # noqa: E402
     parse_confidence,
     parse_json_object,
     require_api_key,
-    resolve_provider,
 )
 
 from expectations._db import fetch_unsynthesized_comparisons, save_synthesis  # noqa: E402
@@ -197,14 +197,14 @@ def build_prompt(comparison: dict) -> str:
     return "\n".join(lines)
 
 
-def synthesize_comparison(comparison: dict, api_key: str):
+def synthesize_comparison(comparison: dict):
     """Будує промпт → LLM → парсить. Повертає (результат, промпт,
-    сира_відповідь) — обов'язкові для логування в llm_call_log
+    відповідь_LLM) — обов'язкові для логування в llm_call_log
     (rule 5), той самий контракт, що news_analysis/synthesize.py."""
     prompt = build_prompt(comparison)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_expectation_synthesis_response(raw_content)
-    return result, prompt, raw_content
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="expectation_synthesis")
+    result = parse_expectation_synthesis_response(llm.text)
+    return result, prompt, llm
 
 
 def main() -> None:
@@ -214,7 +214,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20)
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("expectation_synthesis")
 
     conn = get_connection()
     try:
@@ -224,24 +224,23 @@ def main() -> None:
         synthesized = 0
         for comparison in comparisons:
             try:
-                result, prompt, raw_content = synthesize_comparison(comparison, api_key)
+                result, prompt, llm = synthesize_comparison(comparison)
             except SynthesisResponseError:
                 logger.exception(
                     "%s: некоректна відповідь LLM — пропущено", comparison["metric_id"]
                 )
                 continue
-            except requests.exceptions.RequestException:
+            except LlmError:
                 logger.exception(
-                    "%s: мережева помилка виклику LLM — пропущено", comparison["metric_id"]
+                    "%s: збій виклику LLM — пропущено", comparison["metric_id"]
                 )
                 continue
 
             llm_call_id = log_llm_call(
                 conn,
-                provider=resolve_provider(),
+                llm=llm,
                 purpose="expectation_synthesis",
                 prompt=prompt,
-                response=raw_content,
                 source_ref=str(comparison["comparison_id"]),
             )
             source_refs = [{

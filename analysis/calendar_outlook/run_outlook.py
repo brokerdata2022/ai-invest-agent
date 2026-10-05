@@ -29,7 +29,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
-from llm_common import SynthesisResult, log_llm_call, require_api_key, resolve_provider  # noqa: E402
+from llm_common import LlmError, SynthesisResult, log_llm_call, require_api_key  # noqa: E402
 
 from calendar_outlook._db import fetch_upcoming, has_outlook, save_outlook  # noqa: E402
 from calendar_outlook.synthesize import synthesize_outlook  # noqa: E402
@@ -56,7 +56,7 @@ def determine_scope(today: date) -> list[tuple[str, date, date]]:
     return []
 
 
-def _generate_outlook(conn, today: date, scope: str, start: date, end: date, api_key: str) -> int | None:
+def _generate_outlook(conn, today: date, scope: str, start: date, end: date) -> int | None:
     """Один конкретний огляд (одного scope) — ідемпотентний виклик, що
     повертає id нового рядка calendar_outlook, або None якщо він уже
     існує чи LLM-синтез провалився."""
@@ -75,13 +75,13 @@ def _generate_outlook(conn, today: date, scope: str, start: date, end: date, api
         llm_call_id = None
     else:
         try:
-            result, prompt, raw_content = synthesize_outlook(entries, scope, api_key)
+            result, prompt, llm = synthesize_outlook(entries, scope)
         except Exception:
             logger.exception("Помилка LLM-синтезу огляду календаря (%s) — пропущено", scope)
             return None
         llm_call_id = log_llm_call(
-            conn, provider=resolve_provider(), purpose="calendar_outlook",
-            prompt=prompt, response=raw_content, source_ref=f"{today}:{scope}",
+            conn, llm=llm, purpose="calendar_outlook",
+            prompt=prompt, source_ref=f"{today}:{scope}",
         )
 
     outlook_id = save_outlook(
@@ -93,7 +93,7 @@ def _generate_outlook(conn, today: date, scope: str, start: date, end: date, api
     return outlook_id
 
 
-def run_outlook(conn, today: date, api_key: str) -> list[int]:
+def run_outlook(conn, today: date) -> list[int]:
     """Генерує всі огляди, належні цьому дню (determine_scope) — у
     понеділок це два окремі рядки calendar_outlook (week + day), в
     інший робочий день один. Повертає id усіх НОВО створених рядків
@@ -105,7 +105,7 @@ def run_outlook(conn, today: date, api_key: str) -> list[int]:
 
     outlook_ids = []
     for scope, start, end in scopes:
-        outlook_id = _generate_outlook(conn, today, scope, start, end, api_key)
+        outlook_id = _generate_outlook(conn, today, scope, start, end)
         if outlook_id is not None:
             outlook_ids.append(outlook_id)
     return outlook_ids
@@ -113,12 +113,12 @@ def run_outlook(conn, today: date, api_key: str) -> list[int]:
 
 def main() -> None:
     load_dotenv()
-    api_key = require_api_key()
+    require_api_key("calendar_outlook")
 
     conn = get_connection()
     try:
         today = datetime.now(timezone.utc).date()
-        run_outlook(conn, today, api_key)
+        run_outlook(conn, today)
     finally:
         conn.close()
 

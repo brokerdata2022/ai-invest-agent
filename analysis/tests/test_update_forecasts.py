@@ -20,13 +20,13 @@ def test_update_forecasts_cycle_runs_forecast_for_forecastable_metric(monkeypatc
     )
     monkeypatch.setattr(
         "forecasting.update_forecasts.run_forecast",
-        lambda conn, metric_id, api_key: called.append((metric_id, api_key)) or 42,
+        lambda conn, metric_id: called.append(metric_id) or 42,
     )
 
-    updated = update_forecasts_cycle(conn=None, api_key=API_KEY)
+    updated = update_forecasts_cycle(conn=None)
 
     assert updated == ["cpi"]
-    assert called == [("cpi", API_KEY)]
+    assert called == ["cpi"]
 
 
 def test_update_forecasts_cycle_covers_all_calendar_metrics(monkeypatch):
@@ -42,10 +42,10 @@ def test_update_forecasts_cycle_covers_all_calendar_metrics(monkeypatch):
     )
     monkeypatch.setattr(
         "forecasting.update_forecasts.run_forecast",
-        lambda conn, metric_id, api_key: called.append(metric_id) or 1,
+        lambda conn, metric_id: called.append(metric_id) or 1,
     )
 
-    updated = update_forecasts_cycle(conn=None, api_key=API_KEY)
+    updated = update_forecasts_cycle(conn=None)
 
     assert updated == ["unemployment_rate"]
     assert called == ["unemployment_rate"]
@@ -63,10 +63,10 @@ def test_update_forecasts_cycle_skips_metrics_outside_release_calendar(monkeypat
     )
     monkeypatch.setattr(
         "forecasting.update_forecasts.run_forecast",
-        lambda conn, metric_id, api_key: called.append(metric_id) or 1,
+        lambda conn, metric_id: called.append(metric_id) or 1,
     )
 
-    updated = update_forecasts_cycle(conn=None, api_key=API_KEY)
+    updated = update_forecasts_cycle(conn=None)
 
     assert updated == []
     assert called == []
@@ -82,14 +82,14 @@ def test_update_forecasts_cycle_continues_after_one_metric_fails(monkeypatch):
     def fake_get_detected(conn):
         return [CPI_ENTRY]
 
-    def fake_run_forecast(conn, metric_id, api_key):
+    def fake_run_forecast(conn, metric_id):
         calls.append(metric_id)
         raise RuntimeError("boom")
 
     monkeypatch.setattr("forecasting.update_forecasts.get_detected_entries", fake_get_detected)
     monkeypatch.setattr("forecasting.update_forecasts.run_forecast", fake_run_forecast)
 
-    updated = update_forecasts_cycle(conn=FakeConn(), api_key=API_KEY)
+    updated = update_forecasts_cycle(conn=FakeConn())
 
     assert updated == []
     assert calls == ["cpi", "rollback"]

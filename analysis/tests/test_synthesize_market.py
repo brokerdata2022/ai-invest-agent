@@ -9,7 +9,8 @@ call_deepseek — той самий підхід, що test_synthesize.py.
 import json
 from datetime import datetime, timezone
 
-import llm_common
+import news_analysis.synthesize_market as synthesize_market_module
+from llm_common import LlmResponse
 from news_analysis.aggregate import NewsCluster
 from news_analysis.synthesize_market import (
     build_prompt,
@@ -58,16 +59,16 @@ def test_build_prompt_handles_missing_macro_context():
 
 
 def test_synthesize_market_calls_llm_and_parses(monkeypatch):
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
-        return json.dumps(VALID_RESPONSE)
+    def fake_call_llm(prompt, system_prompt, purpose=None):
+        return LlmResponse(text=json.dumps(VALID_RESPONSE), provider="deepseek", model="deepseek-chat")
 
-    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(synthesize_market_module, "call_llm", fake_call_llm)
 
-    result, prompt, raw_content = run_synthesize_market([CLUSTER], MACRO, api_key="fake-key")
+    result, prompt, llm = run_synthesize_market([CLUSTER], MACRO)
 
     assert result.direction == "down"
     assert "Fed signals rates" in prompt
-    assert raw_content == json.dumps(VALID_RESPONSE)
+    assert llm.text == json.dumps(VALID_RESPONSE)
 
 
 # --- сесійний контекст (спек 2026-09-28, реалізовано 2026-10-04) ------

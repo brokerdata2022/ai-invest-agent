@@ -984,3 +984,22 @@ CREATE TABLE IF NOT EXISTS api_rate_limit (
     api             TEXT PRIMARY KEY,
     last_request_at TIMESTAMPTZ NOT NULL
 );
+
+-- 2026-10-05: перехід на Anthropic для висновків (рішення користувача:
+-- Sonnet 5 за замовчуванням, Opus 5 для прогнозу, DeepSeek лишається
+-- на механіці — обґрунтування й заміряні обсяги в config.py розділ 9).
+--
+-- `provider` сам по собі перестав бути достатнім: на одному провайдері
+-- тепер ДВІ моделі з різною ціною й якістю, а бектест порівнює саме
+-- моделі. Без `model` неможливо сказати, чим зроблено прогноз у
+-- конкретному рядку.
+--
+-- `fallback_from` — коли маршрут вів на Anthropic, але виклик упав
+-- транспортно й пішов на резервний DeepSeek (llm_common.call_llm).
+-- Потрібен, щоб "працює, але на дешевшій моделі" не виглядало як
+-- норма — той самий урок, що тихий збій GDELT того ж дня.
+ALTER TABLE llm_call_log ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE llm_call_log ADD COLUMN IF NOT EXISTS fallback_from TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_purpose_created
+    ON llm_call_log (purpose, created_at DESC);

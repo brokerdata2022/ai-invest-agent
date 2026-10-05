@@ -53,7 +53,7 @@ from crypto.okx_futures_adapter import fetch_market_snapshot as fetch_okx_snapsh
 
 import config  # noqa: E402
 from crypto_screening.aggregate_sources import aggregate_snapshots  # noqa: E402
-from llm_common import call_llm, log_llm_call, require_api_key, resolve_provider  # noqa: E402
+from llm_common import LlmError, call_llm, log_llm_call, require_api_key, resolve_provider  # noqa: E402
 from news_analysis._db import fetch_relevant_for_aggregation  # noqa: E402
 from news_analysis.aggregate import cluster_articles, top_clusters  # noqa: E402
 
@@ -109,7 +109,7 @@ def collect_news(conn, tracked: set[str], twelvedata_key: str) -> list:
     """LLM-екстракція тикерів із новин + детермінована верифікація.
     Аудит-лог виклику (rule 5, CLAUDE.md) пишеться тут, у проводці —
     тому сам `news_tickers.detect()` тестується без мережі."""
-    llm_api_key = require_api_key()
+    require_api_key("candidate_discovery")
 
     # Потоки — переліком із конфіга, не один хардкоджений (живий
     # прогін 2026-10-05: `general` був порожній, працював лише
@@ -142,21 +142,21 @@ def collect_news(conn, tracked: set[str], twelvedata_key: str) -> list:
 
     prompt = news_tickers.build_prompt(top, sorted(tracked))
     try:
-        raw_content = call_llm(prompt, news_tickers.SYSTEM_PROMPT, llm_api_key)
+        llm = call_llm(prompt, news_tickers.SYSTEM_PROMPT, purpose="candidate_discovery")
+        raw_content = llm.text
         extracted = news_tickers.parse_response(raw_content)
     except news_tickers.NewsTickerResponseError:
         logger.exception("Некоректна відповідь LLM — новинний детектор пропущено")
         return []
-    except requests.exceptions.RequestException:
-        logger.exception("Мережева помилка виклику LLM — новинний детектор пропущено")
+    except LlmError:
+        logger.exception("Збій виклику LLM (обидва провайдери) — новинний детектор пропущено")
         return []
 
     llm_call_id = log_llm_call(
         conn,
-        provider=resolve_provider(),
+        llm=llm,
         purpose="candidate_discovery",
         prompt=prompt,
-        response=raw_content,
         source_ref=None,
     )
     logger.info("LLM витягнув %d тикерів із %d історій", len(extracted), len(top))

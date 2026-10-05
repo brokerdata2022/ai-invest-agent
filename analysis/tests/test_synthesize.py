@@ -11,7 +11,8 @@ from decimal import Decimal
 
 import pytest
 
-import llm_common
+import news_analysis.synthesize as synthesize_module
+from llm_common import LlmResponse
 from llm_common import SynthesisResponseError
 from news_analysis.aggregate import AssetSignal
 from news_analysis.prices import compute_pct_change
@@ -70,17 +71,17 @@ def test_build_prompt_states_explicitly_when_no_news_at_all():
 
 
 def test_synthesize_asset_calls_llm_and_parses(monkeypatch):
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
-        return json.dumps(VALID_RESPONSE)
+    def fake_call_llm(prompt, system_prompt, purpose=None):
+        return LlmResponse(text=json.dumps(VALID_RESPONSE), provider="deepseek", model="deepseek-chat")
 
-    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(synthesize_module, "call_llm", fake_call_llm)
 
-    result, prompt, raw_content = synthesize_asset("xauusd", SIGNAL, PRICE, api_key="fake-key")
+    result, prompt, llm = synthesize_asset("xauusd", SIGNAL, PRICE)
 
     assert result.direction == "up"
     assert result.confirmation_factors == VALID_RESPONSE["confirmation_factors"]
     assert "xauusd" in prompt
-    assert raw_content == json.dumps(VALID_RESPONSE)
+    assert llm.text == json.dumps(VALID_RESPONSE)
 
 
 def test_parse_price_news_response_requires_confirmation_factors():

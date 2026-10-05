@@ -8,7 +8,8 @@ test_synthesize_expectations.py (monkeypatch call_deepseek, без
 
 import json
 
-import llm_common
+import calendar_outlook.synthesize as calendar_synthesize_module
+from llm_common import LlmResponse
 from calendar_outlook.synthesize import build_prompt, synthesize_outlook
 
 ENTRY = {
@@ -50,13 +51,13 @@ def test_build_prompt_week_scope_mentions_week():
 
 
 def test_synthesize_outlook_calls_llm_and_parses(monkeypatch):
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
-        return json.dumps(VALID_RESPONSE)
+    def fake_call_llm(prompt, system_prompt, purpose=None):
+        return LlmResponse(text=json.dumps(VALID_RESPONSE), provider="deepseek", model="deepseek-chat")
 
-    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(calendar_synthesize_module, "call_llm", fake_call_llm)
 
-    result, prompt, raw_content = synthesize_outlook([ENTRY], scope="day", api_key="fake-key")
+    result, prompt, llm = synthesize_outlook([ENTRY], scope="day")
 
     assert result.direction == "unclear"
     assert "cpi" in prompt
-    assert raw_content == json.dumps(VALID_RESPONSE)
+    assert llm.text == json.dumps(VALID_RESPONSE)

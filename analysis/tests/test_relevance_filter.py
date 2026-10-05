@@ -6,6 +6,9 @@ analyze_article() з підміненим call_deepseek — те саме, чо�
 
 import json
 
+import news_analysis.relevance_filter as relevance_filter_module
+from llm_common import LlmResponse
+
 import pytest
 
 from news_analysis.relevance_filter import (
@@ -111,23 +114,28 @@ def test_parse_response_rejects_confidence_out_of_range():
         parse_response(json.dumps(data))
 
 
-def test_analyze_article_calls_deepseek_and_parses(monkeypatch):
+def test_analyze_article_calls_llm_and_parses(monkeypatch):
+    """2026-10-05: фільтр більше не кличе DeepSeek напряму — усі
+    виклики йдуть через `llm_common.call_llm`, щоб провайдер вибирався
+    в ОДНОМУ місці (`config.py:LLM_ROUTES`) і аудит-лог знав
+    фактичну модель."""
     captured = {}
 
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
+    def fake_call_llm(prompt, system_prompt, purpose=None):
         captured["prompt"] = prompt
-        captured["api_key"] = api_key
         captured["system_prompt"] = system_prompt
-        return json.dumps(VALID_RESPONSE)
+        captured["purpose"] = purpose
+        return LlmResponse(text=json.dumps(VALID_RESPONSE), provider="deepseek", model="deepseek-chat")
 
-    monkeypatch.setattr("news_analysis.relevance_filter.call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(relevance_filter_module, "call_llm", fake_call_llm)
 
-    result, prompt, raw_content = analyze_article(
-        ARTICLE, stream="watchlist", api_key="fake-key", tracked_assets=["NVDA"]
+    result, prompt, llm = analyze_article(
+        ARTICLE, stream="watchlist", tracked_assets=["NVDA"]
     )
 
     assert result.asset_id == "NVDA"
     assert prompt == captured["prompt"]
-    assert raw_content == json.dumps(VALID_RESPONSE)
-    assert captured["api_key"] == "fake-key"
+    assert llm.text == json.dumps(VALID_RESPONSE)
+    # Призначення обов'язкове — саме воно й обирає маршрут.
+    assert captured["purpose"] == "news_relevance_filter"
     assert captured["system_prompt"] is not None

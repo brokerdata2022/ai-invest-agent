@@ -16,7 +16,7 @@ LLM"): самі дані релізу (час/impact_level/ринковий пр
 (impacts), бо вихід тут нічим не відрізняється від стандартного.
 """
 
-from llm_common import SynthesisResult, call_llm, parse_synthesis_response
+from llm_common import LlmResponse, SynthesisResult, call_llm, parse_synthesis_response
 
 SYSTEM_PROMPT = (
     "Ти макро-аналітик. Тобі дають перелік запланованих макроекономічних "
@@ -65,10 +65,10 @@ def build_prompt(entries: list[dict], scope: str) -> str:
     return "\n".join(lines)
 
 
-def synthesize_outlook(entries: list[dict], scope: str, api_key: str) -> tuple[SynthesisResult, str, str]:
+def synthesize_outlook(entries: list[dict], scope: str) -> tuple[SynthesisResult, str, LlmResponse]:
     """Будує промпт → LLM → парсить. Повертає (результат, промпт,
-    сира_відповідь) — обов'язкові для llm_common.log_llm_call (rule 5)."""
+    відповідь_LLM) — обов'язкові для llm_common.log_llm_call (rule 5)."""
     prompt = build_prompt(entries, scope)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_synthesis_response(raw_content)
-    return result, prompt, raw_content
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="calendar_outlook")
+    result = parse_synthesis_response(llm.text)
+    return result, prompt, llm

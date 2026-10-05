@@ -36,12 +36,12 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection, fetch_recent  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
     parse_synthesis_response,
     require_api_key,
-    resolve_provider,
 )
 from news_analysis._db import fetch_relevant_for_aggregation, save_market_synthesis  # noqa: E402
 from news_analysis.aggregate import NewsCluster, cluster_articles, top_clusters  # noqa: E402
@@ -171,16 +171,16 @@ def build_prompt(
 
 
 def synthesize_market(
-    clusters: list[NewsCluster], macro: dict, api_key: str,
+    clusters: list[NewsCluster], macro: dict,
     session: str = DEFAULT_SESSION,
 ):
     """Той самий контракт, що synthesize.synthesize_asset(): повертає
-    (результат, промпт, сира_відповідь) для обов'язкового логування
+    (результат, промпт, відповідь_LLM) для обов'язкового логування
     (rule 5)."""
     prompt = build_prompt(clusters, macro, session=session)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_synthesis_response(raw_content)
-    return result, prompt, raw_content
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="market_context_synthesis")
+    result = parse_synthesis_response(llm.text)
+    return result, prompt, llm
 
 
 def main() -> None:
@@ -200,7 +200,7 @@ def main() -> None:
 
     session = args.session or DEFAULT_SESSION
 
-    api_key = require_api_key()
+    require_api_key("market_context_synthesis")
 
     conn = get_connection()
     try:
@@ -221,22 +221,21 @@ def main() -> None:
         logger.info("Макро-контекст: %d показників", len(macro))
 
         try:
-            result, prompt, raw_content = synthesize_market(
-                top, macro, api_key, session=session
+            result, prompt, llm = synthesize_market(
+                top, macro, session=session
             )
         except SynthesisResponseError:
             logger.exception("Некоректна відповідь LLM — синтез пропущено")
             return
-        except requests.exceptions.RequestException:
-            logger.exception("Мережева помилка виклику LLM — синтез пропущено")
+        except LlmError:
+            logger.exception("Збій виклику LLM (обидва провайдери) — синтез пропущено")
             return
 
         llm_call_id = log_llm_call(
             conn,
-            provider=resolve_provider(),
+            llm=llm,
             purpose="market_context_synthesis",
             prompt=prompt,
-            response=raw_content,
             source_ref=session,
         )
         save_market_synthesis(

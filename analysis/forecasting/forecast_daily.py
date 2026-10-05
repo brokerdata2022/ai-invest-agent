@@ -77,7 +77,7 @@ def has_forecast_for_latest(conn, source: str, metric_id: str) -> bool:
         return cur.fetchone() is not None
 
 
-def forecast_daily_cycle(conn, api_key: str, skip_existing: bool = True) -> dict:
+def forecast_daily_cycle(conn, skip_existing: bool = True) -> dict:
     """Повертає {"forecasted": [...], "skipped": [...], "failed": [...]}."""
     result: dict[str, list[str]] = {"forecasted": [], "skipped": [], "failed": []}
 
@@ -92,7 +92,7 @@ def forecast_daily_cycle(conn, api_key: str, skip_existing: bool = True) -> dict
                 result["skipped"].append(metric_id)
                 continue
 
-            forecast_id = run_forecast(conn, metric_id, api_key)
+            forecast_id = run_forecast(conn, metric_id)
             if forecast_id is None:
                 result["failed"].append(metric_id)
             else:
@@ -119,11 +119,11 @@ def main() -> None:
     parser.set_defaults(skip_existing=True)
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("metric_forecast")
 
     conn = get_connection()
     try:
-        result = forecast_daily_cycle(conn, api_key, skip_existing=args.skip_existing)
+        result = forecast_daily_cycle(conn, skip_existing=args.skip_existing)
     finally:
         conn.close()
 

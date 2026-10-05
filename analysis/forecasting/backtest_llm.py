@@ -44,11 +44,12 @@ sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection, fetch_recent  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
     require_api_key,
-    resolve_provider,
+    resolve_route,
 )
 
 from forecasting._metric_source import resolve_source  # noqa: E402
@@ -151,7 +152,7 @@ def backtest_llm_metric(
     }
 
 
-def make_llm_forecast_fn(conn, metric_id: str, api_key: str) -> Callable[[list[dict]], Optional[float]]:
+def make_llm_forecast_fn(conn, metric_id: str) -> Callable[[list[dict]], Optional[float]]:
     """forecast_fn для backtest_llm_metric(): той САМИЙ промпт і той
     самий гейт правдоподібності, що в бойовому forecast_metric.py —
     інакше backtest міряв би не те, що працює в продакшені.
@@ -164,17 +165,17 @@ def make_llm_forecast_fn(conn, metric_id: str, api_key: str) -> Callable[[list[d
     def forecast_fn(history_rows: list[dict]) -> Optional[float]:
         prompt = build_prompt(metric_id, describe_metric(metric_id), history_rows)
         try:
-            raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-        except requests.exceptions.RequestException:
-            logger.exception("%s: мережева помилка виклику LLM", metric_id)
+            llm = call_llm(prompt, SYSTEM_PROMPT, purpose="metric_forecast_backtest")
+            raw_content = llm.text
+        except LlmError:
+            logger.exception("%s: збій виклику LLM", metric_id)
             return None
 
         log_llm_call(
             conn,
-            provider=resolve_provider(),
+            llm=llm,
             purpose="metric_forecast_backtest",
             prompt=prompt,
-            response=raw_content,
             source_ref=f"{metric_id}:{history_rows[-1]['observed_at']}",
         )
 
@@ -221,6 +222,14 @@ def format_verdict(result: dict) -> str:
     return f"naive кращий — LLM гірший на {abs(diff_pct):.1f}%"
 
 
+def _route_label() -> str:
+    """Маршрут цього прогону одним рядком — `provider/model`. Іде і в
+    підсумковий лог, і в текст вердикту: без нього дві таблиці
+    бектесту неможливо порівняти (2026-10-05)."""
+    route = resolve_route("metric_forecast_backtest")
+    return f"{route.provider}/{route.model}"
+
+
 def main() -> None:
     load_dotenv()
 
@@ -236,7 +245,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("metric_forecast_backtest")
 
     try:
         source = resolve_source(args.metric)
@@ -257,7 +266,7 @@ def main() -> None:
         result = backtest_llm_metric(
             args.metric,
             observations,
-            make_llm_forecast_fn(conn, args.metric, api_key),
+            make_llm_forecast_fn(conn, args.metric),
             points=args.points,
             min_history=args.min_history,
         )
@@ -272,14 +281,15 @@ def main() -> None:
         sys.exit(1)
 
     # Провайдер у виводі ОБОВ'ЯЗКОВО (2026-10-04, питання користувача):
-    # числа в колонці LLM специфічні для конкретної моделі, і при
-    # переході на іншу (планується при більшому бюджеті) порівнювати
-    # можна лише знаючи, чим міряно. naive/лінійний тренд від
+    # числа в колонці LLM специфічні для конкретної МОДЕЛІ (не лише
+    # провайдера — на Anthropic їх дві з різною ціною), тож у підсумок
+    # іде повний маршрут. Порівнювати колонку LLM між прогонами можна
+    # тільки за однакового маршруту. naive/лінійний тренд від
     # провайдера не залежать — чиста арифметика на самому ряді.
     logger.info(
-        "%s [provider=%s]: %d точок перевірено (пропущено %d), MAE LLM=%.6g, "
+        "%s [%s]: %d точок перевірено (пропущено %d), MAE LLM=%.6g, "
         "naive=%.6g, лінійний тренд=%s — %s",
-        result["metric_id"], resolve_provider(), result["n_points"], result["n_skipped"],
+        result["metric_id"], _route_label(), result["n_points"], result["n_skipped"],
         result["llm_mae"], result["naive_mae"],
         f"{result['trend_mae']:.6g}" if result["trend_mae"] is not None else "n/a",
         format_verdict(result),

@@ -53,7 +53,7 @@ def _patch(monkeypatch, *, has_existing, run_result):
     )
     calls = []
 
-    def fake_run_forecast(conn, metric_id, api_key):
+    def fake_run_forecast(conn, metric_id):
         calls.append(metric_id)
         if isinstance(run_result, Exception):
             raise run_result
@@ -66,7 +66,7 @@ def _patch(monkeypatch, *, has_existing, run_result):
 def test_cycle_forecasts_every_daily_metric(monkeypatch):
     calls = _patch(monkeypatch, has_existing=False, run_result=7)
 
-    result = forecast_daily_cycle(conn=None, api_key=API_KEY)
+    result = forecast_daily_cycle(conn=None)
 
     assert set(result["forecasted"]) == DAILY_METRICS
     assert result["skipped"] == []
@@ -81,7 +81,7 @@ def test_cycle_skips_without_calling_llm_when_forecast_already_exists(monkeypatc
     щодня."""
     calls = _patch(monkeypatch, has_existing=True, run_result=7)
 
-    result = forecast_daily_cycle(conn=None, api_key=API_KEY)
+    result = forecast_daily_cycle(conn=None)
 
     assert set(result["skipped"]) == DAILY_METRICS
     assert result["forecasted"] == []
@@ -91,7 +91,7 @@ def test_cycle_skips_without_calling_llm_when_forecast_already_exists(monkeypatc
 def test_cycle_honours_no_skip_existing(monkeypatch):
     calls = _patch(monkeypatch, has_existing=True, run_result=7)
 
-    result = forecast_daily_cycle(conn=None, api_key=API_KEY, skip_existing=False)
+    result = forecast_daily_cycle(conn=None, skip_existing=False)
 
     assert set(result["forecasted"]) == DAILY_METRICS
     assert set(calls) == DAILY_METRICS
@@ -102,7 +102,7 @@ def test_cycle_counts_none_result_as_failed(monkeypatch):
     правдоподібності, збійна відповідь); це провал, не успіх."""
     _patch(monkeypatch, has_existing=False, run_result=None)
 
-    result = forecast_daily_cycle(conn=None, api_key=API_KEY)
+    result = forecast_daily_cycle(conn=None)
 
     assert result["forecasted"] == []
     assert set(result["failed"]) == DAILY_METRICS
@@ -121,7 +121,7 @@ def test_cycle_continues_after_one_metric_raises(monkeypatch):
     )
     seen = []
 
-    def fake_run_forecast(conn, metric_id, api_key):
+    def fake_run_forecast(conn, metric_id):
         seen.append(metric_id)
         if metric_id == "fed_funds_rate":
             raise RuntimeError("boom")
@@ -129,7 +129,7 @@ def test_cycle_continues_after_one_metric_raises(monkeypatch):
 
     monkeypatch.setattr(forecast_daily, "run_forecast", fake_run_forecast)
 
-    result = forecast_daily_cycle(conn=FakeConn(), api_key=API_KEY)
+    result = forecast_daily_cycle(conn=FakeConn())
 
     # Решта показників усе одно опрацьована, попри виняток на одному.
     assert set(seen) == DAILY_METRICS

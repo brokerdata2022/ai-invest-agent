@@ -39,11 +39,11 @@ sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
     require_api_key,
-    resolve_provider,
 )
 
 import config  # noqa: E402
@@ -81,7 +81,7 @@ def collect_series(conn, ticker: str) -> tuple[dict, int]:
     return series, revenue_points
 
 
-def analyze_stock(conn, stock: dict, api_key: str) -> bool:
+def analyze_stock(conn, stock: dict) -> bool:
     """True — аналіз збережено. False — тикер пропущено (замало даних
     або збійна відповідь LLM); причина в лозі."""
     ticker = stock["ticker"]
@@ -100,16 +100,16 @@ def analyze_stock(conn, stock: dict, api_key: str) -> bool:
         "eps_growth": stock.get("eps_growth"),
     }
     prompt = build_prompt(ticker, stock.get("company_name"), series, valuation)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="fundamental_analysis")
+    raw_content = llm.text
 
     # Аудит-лог ДО розбору (rule 5): збійну відповідь найцікавіше
     # розбирати постфактум, і без запису від неї не лишилось би сліду.
     llm_call_id = log_llm_call(
         conn,
-        provider=resolve_provider(),
+        llm=llm,
         purpose="fundamental_analysis",
         prompt=prompt,
-        response=raw_content,
         source_ref=ticker,
     )
 
@@ -132,7 +132,7 @@ def analyze_stock(conn, stock: dict, api_key: str) -> bool:
     return True
 
 
-def analyze_watchlist_asset(conn, asset: dict, api_key: str) -> bool:
+def analyze_watchlist_asset(conn, asset: dict) -> bool:
     """Розгорнутий аналіз активу СПИСКУ ОБРАНИХ за ЙОГО чинниками
     (рішення користувача 2026-10-04). На відміну від акцій, вхід — не
     звітність, а власний для кожного активу набір чинників
@@ -161,14 +161,14 @@ def analyze_watchlist_asset(conn, asset: dict, api_key: str) -> bool:
         return False
 
     prompt = build_asset_prompt(asset_factors)
-    raw_content = call_llm(prompt, ASSET_SYSTEM_PROMPT, api_key)
+    llm = call_llm(prompt, ASSET_SYSTEM_PROMPT, purpose="fundamental_analysis_asset")
+    raw_content = llm.text
 
     llm_call_id = log_llm_call(
         conn,
-        provider=resolve_provider(),
+        llm=llm,
         purpose="fundamental_analysis_asset",
         prompt=prompt,
-        response=raw_content,
         source_ref=asset_id,
     )
 
@@ -221,7 +221,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("fundamental_analysis")
 
     conn = get_connection()
     try:
@@ -243,13 +243,13 @@ def main() -> None:
             for asset in assets:
                 total += 1
                 try:
-                    if analyze_watchlist_asset(conn, asset, api_key):
+                    if analyze_watchlist_asset(conn, asset):
                         analyzed += 1
                 except SynthesisResponseError:
                     logger.exception("%s: некоректна відповідь LLM", asset["asset_id"])
                     conn.rollback()
-                except requests.exceptions.RequestException:
-                    logger.exception("%s: мережева помилка LLM", asset["asset_id"])
+                except LlmError:
+                    logger.exception("%s: збій виклику LLM", asset["asset_id"])
                     conn.rollback()
                 except Exception:
                     # Один актив не валить цикл — той самий патерн, що
@@ -274,13 +274,13 @@ def main() -> None:
                 for stock in stocks:
                     total += 1
                     try:
-                        if analyze_stock(conn, stock, api_key):
+                        if analyze_stock(conn, stock):
                             analyzed += 1
                     except SynthesisResponseError:
                         logger.exception("%s: некоректна відповідь LLM", stock["ticker"])
                         conn.rollback()
-                    except requests.exceptions.RequestException:
-                        logger.exception("%s: мережева помилка LLM", stock["ticker"])
+                    except LlmError:
+                        logger.exception("%s: збій виклику LLM", stock["ticker"])
                         conn.rollback()
                     except Exception:
                         logger.exception("%s: аналіз провалився", stock["ticker"])

@@ -7,7 +7,11 @@ test_update_forecasts.py (monkeypatch, без реальної БД/мережі
 from datetime import date
 
 from calendar_outlook.run_outlook import NO_EVENTS_SUMMARY, determine_scope, run_outlook
-from llm_common import SynthesisResult
+from llm_common import LlmResponse, SynthesisResult
+
+# Фейкова відповідь LLM — провайдер/модель тут не важливі, важливо що
+# це LlmResponse, як віддає справжній call_llm (2026-10-05).
+_LLM = LlmResponse(text="RAW", provider="deepseek", model="deepseek-chat")
 
 MONDAY = date(2026, 10, 5)
 TUESDAY = date(2026, 10, 6)
@@ -45,7 +49,7 @@ def test_run_outlook_skips_weekend_without_touching_db(monkeypatch):
     calls = []
     monkeypatch.setattr("calendar_outlook.run_outlook.has_outlook", lambda *a, **k: calls.append("has_outlook"))
 
-    result = run_outlook(conn=None, today=SATURDAY, api_key="unused")
+    result = run_outlook(conn=None, today=SATURDAY)
 
     assert result == []
     assert calls == []
@@ -58,7 +62,7 @@ def test_run_outlook_skips_when_already_generated(monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("не мало викликатись")),
     )
 
-    result = run_outlook(conn=None, today=TUESDAY, api_key="unused")
+    result = run_outlook(conn=None, today=TUESDAY)
 
     assert result == []
 
@@ -79,7 +83,7 @@ def test_run_outlook_no_events_skips_llm_but_still_saves(monkeypatch):
         ) or 1,
     )
 
-    outlook_ids = run_outlook(conn=None, today=TUESDAY, api_key="unused")
+    outlook_ids = run_outlook(conn=None, today=TUESDAY)
 
     assert outlook_ids == [1]
     assert saved["release_log_ids"] == []
@@ -97,12 +101,12 @@ def test_run_outlook_with_events_calls_llm_and_logs(monkeypatch):
     monkeypatch.setattr("calendar_outlook.run_outlook.fetch_upcoming", lambda *a, **k: [ENTRY])
     monkeypatch.setattr(
         "calendar_outlook.run_outlook.synthesize_outlook",
-        lambda entries, scope, api_key: (result, "PROMPT", "RAW"),
+        lambda entries, scope: (result, "PROMPT", _LLM),
     )
     monkeypatch.setattr(
         "calendar_outlook.run_outlook.log_llm_call",
-        lambda conn, provider, purpose, prompt, response, source_ref: logged.update(
-            purpose=purpose, prompt=prompt, response=response,
+        lambda conn, purpose, prompt, source_ref, llm: logged.update(
+            purpose=purpose, prompt=prompt, response=llm.text,
         ) or 99,
     )
     monkeypatch.setattr(
@@ -112,7 +116,7 @@ def test_run_outlook_with_events_calls_llm_and_logs(monkeypatch):
         ) or 2,
     )
 
-    outlook_ids = run_outlook(conn=None, today=TUESDAY, api_key="key")
+    outlook_ids = run_outlook(conn=None, today=TUESDAY)
 
     assert outlook_ids == [2]
     assert saved["release_log_ids"] == [7]
@@ -142,7 +146,7 @@ def test_run_outlook_monday_generates_both_scopes_independently(monkeypatch):
         lambda conn, outlook_date, scope, release_log_ids, result, llm_call_id: saved_scopes.append(scope) or 1,
     )
 
-    outlook_ids = run_outlook(conn=None, today=MONDAY, api_key="unused")
+    outlook_ids = run_outlook(conn=None, today=MONDAY)
 
     assert outlook_ids == [1]
     assert saved_scopes == ["day"]

@@ -19,8 +19,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from llm_common import DIRECTIONS, parse_confidence, parse_json_object
-from news_analysis.deepseek_client import call_deepseek
+from llm_common import LlmResponse, DIRECTIONS, parse_confidence, parse_json_object
+from llm_common import call_llm
 
 logger = logging.getLogger(__name__)
 
@@ -135,14 +135,13 @@ def parse_response(raw_content: str) -> NewsAnalysisResult:
 def analyze_article(
     article: dict,
     stream: str,
-    api_key: str,
     tracked_assets: Optional[list[str]] = None,
-) -> tuple[NewsAnalysisResult, str, str]:
-    """Будує промпт → DeepSeek → парсить. Повертає (результат, промпт,
-    сира_відповідь) — прompt/сира відповідь потрібні викликаючому коду
+) -> tuple[NewsAnalysisResult, str, LlmResponse]:
+    """Будує промпт → LLM → парсить. Повертає (результат, промпт,
+    відповідь_LLM) — прompt/сира відповідь потрібні викликаючому коду
     для обов'язкового логування в llm_call_log (rule 5); ця функція без
     побічних ефектів у БД, як і адаптери в data-ingestion."""
     prompt = build_prompt(article, stream, tracked_assets)
-    raw_content = call_deepseek(prompt, api_key=api_key, system_prompt=SYSTEM_PROMPT)
-    result = parse_response(raw_content)
-    return result, prompt, raw_content
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="news_relevance_filter")
+    result = parse_response(llm.text)
+    return result, prompt, llm

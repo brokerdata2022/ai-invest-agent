@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from common.watchlist_db import fetch_asset_ids  # noqa: E402
-from llm_common import log_llm_call  # noqa: E402
+from llm_common import LlmError, log_llm_call, require_api_key  # noqa: E402
 from news_analysis._db import fetch_unanalyzed, save_analysis  # noqa: E402
 from news_analysis.relevance_filter import analyze_article, DeepSeekResponseError  # noqa: E402
 from screening._results_db import fetch_latest_tickers  # noqa: E402
@@ -77,10 +77,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        logger.error("DEEPSEEK_API_KEY не задано. Додайте його в .env (див. .env.example).")
-        sys.exit(1)
+    # Ключ перевіряється через маршрут призначення, а не власним
+    # читанням env: з 2026-10-05 провайдер для кожного виклику
+    # обирається в `config.py:LLM_ROUTES`, і локальна перевірка саме
+    # DEEPSEEK_API_KEY брехала б, якби маршрут перевели на Anthropic.
+    require_api_key("news_relevance_filter")
 
     explicit_tracked_assets = args.tracked_assets.split(",") if args.tracked_assets else None
 
@@ -105,13 +106,13 @@ def main() -> None:
                 default_tracked_assets=default_tracked_assets,
             )
             try:
-                result, prompt, raw_content = analyze_article(
-                    article, article["stream"], api_key, tracked_assets=tracked_assets
+                result, prompt, llm = analyze_article(
+                    article, article["stream"], tracked_assets=tracked_assets
                 )
             except DeepSeekResponseError:
                 logger.exception("Пропускаю статтю %s: некоректна відповідь DeepSeek", article["url"])
                 continue
-            except requests.exceptions.RequestException:
+            except LlmError:
                 # Тимчасовий мережевий збій (DNS/timeout/5xx) на ОДНІЙ
                 # статті не повинен губити решту вже готового пакету —
                 # решта articles обробляються далі, цю можна повторити
@@ -124,10 +125,9 @@ def main() -> None:
 
             llm_call_id = log_llm_call(
                 conn,
-                provider="deepseek",
+                llm=llm,
                 purpose="news_relevance_filter",
                 prompt=prompt,
-                response=raw_content,
                 source_ref=article["url"],
             )
             save_analysis(conn, article["id"], result, llm_call_id)

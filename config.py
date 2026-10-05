@@ -994,3 +994,96 @@ GDELT_THROTTLE_MAX_WAIT_SECONDS = 60.0
 # Тепер ДВІ спроби замість чотирьох, але з довгими паузами: сумарний
 # бюджет одного query впав із 4 запитів за 35с до 3 запитів за ~2.5хв.
 GDELT_RETRY_DELAYS = (30, 120)
+
+
+########################################################################
+# 9. LLM — ЯКИЙ ПРОВАЙДЕР І МОДЕЛЬ НА ЯКЕ ЗАВДАННЯ
+########################################################################
+# Рішення користувача 2026-10-05, після заміру реальних обсягів
+# (`llm_call_log` за 7 днів: 188 викликів і ~100k токенів на добу):
+# **Sonnet 5 за замовчуванням для висновків, Opus 5 тільки для
+# прогнозу, механіка лишається на DeepSeek.**
+#
+# Чому МАПА за призначенням, а не одне глобальне значення
+# `SYNTHESIS_LLM_PROVIDER`: завдання тут різні за природою, і платити
+# за них однаково немає сенсу. Заміряні числа (7 днів):
+#   - `news_consolidation` — 43% УСІХ токенів (промпт ~3.7k токенів),
+#     але це механічне злиття дублікатів;
+#   - `news_relevance_filter` — найбільше ВИКЛИКІВ (131/добу, зросте
+#     у 2-3 рази після фіксу RSS), задача бінарна;
+#   - увесь "набір висновків" (прогноз, сюрприз, сесійний аналіз,
+#     фундаментал, ціна↔новини, календар) — лише 13 викликів і ~13%
+#     токенів на добу, тобто ~$6/міс на Opus 5.
+# Тобто дорога модель потрібна там, де мало викликів і важить якість,
+# а дешева — там, де багато викликів і механіка. Глобальний
+# перемикач змішав би це в одне.
+#
+# Структура маршруту: provider, model, effort (глибина розмірковування
+# Anthropic), max_tokens. `effort` — головний важіль ВАРТОСТІ на
+# Anthropic: токени розмірковування тарифікуються як вихідні, і саме
+# вони, не вибір моделі, визначають рахунок.
+LLM_ROUTE_DEFAULT = {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "effort": None,
+    "max_tokens": 4096,
+}
+
+# Моделі Anthropic — точні ID, без суфіксів дати.
+ANTHROPIC_MODEL_FORECAST = "claude-opus-5"
+ANTHROPIC_MODEL_SYNTHESIS = "claude-sonnet-5"
+
+_ANTHROPIC_FORECAST = {
+    "provider": "anthropic",
+    "model": ANTHROPIC_MODEL_FORECAST,
+    # Прогноз формує ЧИСЛО, яким користується людина — єдине місце,
+    # де глибина розмірковування варта своєї ціни.
+    "effort": "high",
+    # Щедро: при adaptive thinking токени розмірковування йдуть у
+    # вихідні, і замалий ліміт обрізав би відповідь на півслові.
+    "max_tokens": 8192,
+}
+
+_ANTHROPIC_SYNTHESIS = {
+    "provider": "anthropic",
+    "model": ANTHROPIC_MODEL_SYNTHESIS,
+    # Текстовий висновок — "medium" свідомо: різниця в якості тексту
+    # менш критична, ніж у числі прогнозу, а вартість нижча.
+    "effort": "medium",
+    "max_tokens": 4096,
+}
+
+LLM_ROUTES: dict[str, dict] = {
+    # ---- Opus 5: прогноз ----
+    "metric_forecast": _ANTHROPIC_FORECAST,
+    # Бектест ОБОВ'ЯЗКОВО на тому самому маршруті, що бойовий прогноз
+    # (рішення користувача: "бектест робимо на тому, на чому буде
+    # працювати") — інакше міряли б не те, що потім піде в Telegram.
+    "metric_forecast_backtest": _ANTHROPIC_FORECAST,
+
+    # ---- Sonnet 5: висновки, які читає людина ----
+    "expectation_synthesis": _ANTHROPIC_SYNTHESIS,
+    "market_context_synthesis": _ANTHROPIC_SYNTHESIS,
+    "news_price_synthesis": _ANTHROPIC_SYNTHESIS,
+    "fundamental_analysis": _ANTHROPIC_SYNTHESIS,
+    "fundamental_analysis_asset": _ANTHROPIC_SYNTHESIS,
+    "calendar_outlook": _ANTHROPIC_SYNTHESIS,
+
+    # ---- DeepSeek: механіка (багато викликів, проста задача) ----
+    "news_relevance_filter": LLM_ROUTE_DEFAULT,
+    "news_consolidation": LLM_ROUTE_DEFAULT,
+    "news_merge_duplicates": LLM_ROUTE_DEFAULT,
+    "candidate_discovery": LLM_ROUTE_DEFAULT,
+}
+
+# Резервний провайдер: якщо маршрут веде на Anthropic і виклик
+# провалився з ТРАНСПОРТНОЇ причини (429/5xx/таймаут) — повторити на
+# DeepSeek, а не втратити прогін.
+#
+# Пряме застосування уроку 2026-10-05 (потоки новин стояли тижнями, бо
+# джерело було одне, а збій — тихий): одноджерельність неприпустима, і
+# підміна провайдера ЗАПИСУЄТЬСЯ в `llm_call_log.fallback_from`, щоб
+# "працювало, але на дешевшій моделі" не виглядало як норма.
+# None вимикає резерв.
+LLM_FALLBACK_PROVIDER = "deepseek"
+LLM_FALLBACK_MODEL = "deepseek-chat"

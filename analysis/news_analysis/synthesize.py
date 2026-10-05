@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     DIRECTIONS,
     SynthesisResponseError,
     call_llm,
@@ -77,7 +78,6 @@ from llm_common import (  # noqa: E402
     parse_confidence,
     parse_json_object,
     require_api_key,
-    resolve_provider,
 )
 from common.watchlist_db import fetch_asset_ids, fetch_price_sources  # noqa: E402
 from news_analysis._db import fetch_relevant_for_aggregation, save_synthesis  # noqa: E402
@@ -219,14 +219,14 @@ def _empty_signal(asset_id: str) -> AssetSignal:
     )
 
 
-def synthesize_asset(asset_id: str, signal: AssetSignal, price: PriceChange, api_key: str):
+def synthesize_asset(asset_id: str, signal: AssetSignal, price: PriceChange):
     """Будує промпт → LLM → парсить. Повертає (результат, промпт,
-    сира_відповідь) — обов'язкові для логування в llm_call_log
+    відповідь_LLM) — обов'язкові для логування в llm_call_log
     (rule 5), той самий контракт, що relevance_filter.analyze_article()."""
     prompt = build_prompt(asset_id, signal, price)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
-    result = parse_price_news_response(raw_content)
-    return result, prompt, raw_content
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="news_price_synthesis")
+    result = parse_price_news_response(llm.text)
+    return result, prompt, llm
 
 
 def main() -> None:
@@ -237,7 +237,7 @@ def main() -> None:
     parser.add_argument("--max-age-days", type=int, default=7)
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("news_price_synthesis")
 
     conn = get_connection()
     try:
@@ -304,20 +304,19 @@ def main() -> None:
                 )
 
             try:
-                result, prompt, raw_content = synthesize_asset(asset_id, signal, price, api_key)
+                result, prompt, llm = synthesize_asset(asset_id, signal, price)
             except SynthesisResponseError:
                 logger.exception("%s: некоректна відповідь LLM — пропущено", asset_id)
                 continue
-            except requests.exceptions.RequestException:
-                logger.exception("%s: мережева помилка виклику LLM — пропущено", asset_id)
+            except LlmError:
+                logger.exception("%s: збій виклику LLM — пропущено", asset_id)
                 continue
 
             llm_call_id = log_llm_call(
                 conn,
-                provider=resolve_provider(),
+                llm=llm,
                 purpose="news_price_synthesis",
                 prompt=prompt,
-                response=raw_content,
                 source_ref=asset_id,
             )
             save_synthesis(

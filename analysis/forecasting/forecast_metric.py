@@ -36,11 +36,11 @@ sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection, fetch_recent  # noqa: E402
 from llm_common import (  # noqa: E402
+    LlmError,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
     require_api_key,
-    resolve_provider,
 )
 from metric_sources import ADAPTER_BY_METRIC, DAILY_ADAPTER_BY_METRIC  # noqa: E402
 
@@ -88,7 +88,7 @@ MIN_HISTORY = 5
 
 
 def run_forecast(
-    conn, metric_id: str, api_key: str, periods_ahead: int = 1, limit: int = 24
+    conn, metric_id: str, periods_ahead: int = 1, limit: int = 24
 ) -> Optional[int]:
     """Формує й зберігає LLM-прогноз для одного показника. Спільна
     логіка між CLI (main(), ручний прогін) і update_forecasts.py
@@ -110,7 +110,8 @@ def run_forecast(
     based_on_observed_at = chronological[-1]["observed_at"]
 
     prompt = build_prompt(metric_id, describe_metric(metric_id), chronological)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="metric_forecast")
+    raw_content = llm.text
     result = parse_forecast_response(raw_content)
 
     # Аудит-лог виклику — ОБОВ'ЯЗКОВО до гейта нижче (rule 5,
@@ -119,10 +120,9 @@ def run_forecast(
     # і сліду.
     llm_call_id = log_llm_call(
         conn,
-        provider=resolve_provider(),
+        llm=llm,
         purpose="metric_forecast",
         prompt=prompt,
-        response=raw_content,
         source_ref=f"{source}:{metric_id}:{based_on_observed_at}",
     )
 
@@ -168,7 +168,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("metric_forecast")
 
     conn = get_connection()
     try:
@@ -176,7 +176,6 @@ def main() -> None:
             forecast_id = run_forecast(
                 conn,
                 args.metric,
-                api_key,
                 periods_ahead=args.periods_ahead,
                 limit=args.limit,
             )
@@ -191,8 +190,8 @@ def main() -> None:
             # resolve_source() — невідомий metric_id.
             logger.error(str(e))
             sys.exit(1)
-        except requests.exceptions.RequestException:
-            logger.exception("%s: мережева помилка виклику LLM", args.metric)
+        except LlmError:
+            logger.exception("%s: збій виклику LLM", args.metric)
             sys.exit(1)
 
         if forecast_id is None:

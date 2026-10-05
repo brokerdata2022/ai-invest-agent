@@ -9,7 +9,8 @@ test_synthesize.py (monkeypatch call_deepseek, без мережі/БД).
 
 import json
 
-import llm_common
+import expectations.synthesize as expectations_synthesize_module
+from llm_common import LlmResponse
 from expectations.synthesize import (
     build_prompt,
     parse_expectation_synthesis_response,
@@ -54,17 +55,17 @@ def test_build_prompt_omits_pct_line_when_none():
 
 
 def test_synthesize_comparison_calls_llm_and_parses(monkeypatch):
-    def fake_call_deepseek(prompt, api_key, system_prompt=None, **kwargs):
-        return json.dumps(VALID_RESPONSE)
+    def fake_call_llm(prompt, system_prompt, purpose=None):
+        return LlmResponse(text=json.dumps(VALID_RESPONSE), provider="deepseek", model="deepseek-chat")
 
-    monkeypatch.setattr(llm_common, "call_deepseek", fake_call_deepseek)
+    monkeypatch.setattr(expectations_synthesize_module, "call_llm", fake_call_llm)
 
-    result, prompt, raw_content = synthesize_comparison(COMPARISON, api_key="fake-key")
+    result, prompt, llm = synthesize_comparison(COMPARISON)
 
     assert result.direction == "up"
     assert result.impacts == []  # VALID_RESPONSE без impacts — список порожній, не падає
     assert "cpi" in prompt
-    assert raw_content == json.dumps(VALID_RESPONSE)
+    assert llm.text == json.dumps(VALID_RESPONSE)
 
 
 def test_parse_keeps_only_well_formed_impacts():

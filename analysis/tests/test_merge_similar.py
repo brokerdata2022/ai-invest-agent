@@ -86,7 +86,7 @@ def test_merge_stream_merges_and_returns_removed_count(monkeypatch):
         lambda conn, group_rows: merge_calls.append(group_rows) or (len(group_rows) - 1),
     )
 
-    removed = merge_stream(conn=None, stream="watchlist", api_key="fake-key")
+    removed = merge_stream(conn=None, stream="watchlist")
 
     assert removed == 2
     assert len(merge_calls) == 1
@@ -95,7 +95,7 @@ def test_merge_stream_merges_and_returns_removed_count(monkeypatch):
 
 def test_merge_stream_skips_when_fewer_than_two_rows(monkeypatch):
     monkeypatch.setattr("news_analysis.merge_similar.fetch_mergeable", lambda conn, stream, window_hours: ROWS[:1])
-    removed = merge_stream(conn=None, stream="watchlist", api_key="fake-key")
+    removed = merge_stream(conn=None, stream="watchlist")
     assert removed == 0
 
 
@@ -104,5 +104,5 @@ def test_merge_stream_noop_when_llm_finds_no_duplicates(monkeypatch):
     monkeypatch.setattr("news_analysis.merge_similar.fetch_mergeable", lambda conn, stream, window_hours: ROWS)
     monkeypatch.setattr("news_analysis.merge_similar.log_llm_call", lambda *a, **k: 42)
 
-    removed = merge_stream(conn=None, stream="watchlist", api_key="fake-key")
+    removed = merge_stream(conn=None, stream="watchlist")
     assert removed == 0

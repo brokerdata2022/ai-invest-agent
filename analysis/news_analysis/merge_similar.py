@@ -42,7 +42,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 sys.path.insert(0, _DATA_INGESTION_DIR)
 
 from common.db import get_connection  # noqa: E402
-from llm_common import call_llm, log_llm_call, parse_json_object, require_api_key, resolve_provider  # noqa: E402
+from llm_common import LlmError, call_llm, log_llm_call, parse_json_object, require_api_key, resolve_provider  # noqa: E402
 from news_analysis._consolidated_db import fetch_mergeable, merge_consolidated_rows  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -124,7 +124,7 @@ def parse_response(raw_content: str, n_rows: int) -> list[list[int]]:
     return resolved
 
 
-def merge_stream(conn, stream: str, api_key: str, window_hours: int = 24) -> int:
+def merge_stream(conn, stream: str, window_hours: int = 24) -> int:
     """Повертає кількість ЗЛИТИХ (видалених дублікатних) записів."""
     rows = fetch_mergeable(conn, stream, window_hours=window_hours)
     if len(rows) < 2:
@@ -132,12 +132,13 @@ def merge_stream(conn, stream: str, api_key: str, window_hours: int = 24) -> int
         return 0
 
     prompt = build_prompt(rows)
-    raw_content = call_llm(prompt, SYSTEM_PROMPT, api_key)
+    llm = call_llm(prompt, SYSTEM_PROMPT, purpose="news_merge_duplicates")
+    raw_content = llm.text
     groups = parse_response(raw_content, len(rows))
 
     log_llm_call(
-        conn, provider=resolve_provider(), purpose="news_merge_duplicates",
-        prompt=prompt, response=raw_content, source_ref=stream,
+        conn, llm=llm, purpose="news_merge_duplicates",
+        prompt=prompt, source_ref=stream,
     )
 
     if not groups:
@@ -164,7 +165,7 @@ def main() -> None:
     parser.add_argument("--window-hours", type=int, default=24)
     args = parser.parse_args()
 
-    api_key = require_api_key()
+    require_api_key("news_merge_duplicates")
     streams = [args.stream] if args.stream else list(STREAMS)
 
     conn = get_connection()
@@ -172,11 +173,11 @@ def main() -> None:
         total = 0
         for stream in streams:
             try:
-                total += merge_stream(conn, stream, api_key, window_hours=args.window_hours)
+                total += merge_stream(conn, stream, window_hours=args.window_hours)
             except MergeResponseError:
                 logger.exception("%s: некоректна відповідь LLM — пропущено", stream)
-            except requests.exceptions.RequestException:
-                logger.exception("%s: мережева помилка виклику LLM — пропущено", stream)
+            except LlmError:
+                logger.exception("%s: збій виклику LLM — пропущено", stream)
         logger.info("Готово: %d дублікатів об'єднано загалом", total)
     finally:
         conn.close()
