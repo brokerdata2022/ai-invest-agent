@@ -24,7 +24,7 @@ JOB_DESCRIPTIONS: dict[str, str] = {
     "notify_expectations": "Надіслати сюрприз факт/очікування",
     "notify_release_impact": "Надіслати розбір впливу релізу на інші активи",
     "news_collect_watchlist": "Зібрати новини по watchlist-активах (GDELT)",
-    "news_collect_general": "Зібрати загальні ринкові новини (GDELT)",
+    "revalidate_news_terms": "Перепровірити новинні терміни watchlist, що не пройшли перевірку",
     "news_collect_rss": "Зібрати геополітичні новини (RSS Fed/ECB/BOJ + редакційні)",
     "news_collect_stock": "Зібрати новини по тикерах зі скринінгу (GDELT)",
     "news_analysis_watchlist": "DeepSeek-аналіз новин watchlist",

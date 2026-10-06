@@ -55,11 +55,14 @@
   (рішення користувача, 2026-09-26) — розширення переліку валютних
   пар/товарів понад watchlist (docs/watchlist.md) користувач вносить
   сам через файл вибраних активів, не через нові адаптери на запит
-- **Новини/звіти:** ✅ GDELT (2 потоки: watchlist/general,
-  news/gdelt_adapter.py) + ✅ 9 RSS-фідів (Fed/ECB/BOJ + 6 широких
-  редакційних — BBC/Al Jazeera/Guardian/NPR/Sky News/DW,
-  news/rss_adapter.py) для потоку geopolitical (замінив курований
-  GDELT-запит 2026-09-27 — губив непередбачені події, docs/decisions.md);
+- **Новини/звіти:** ✅ GDELT (ЄДИНИЙ потік — watchlist, цільовий запит
+  по активах, news/gdelt_adapter.py) + ✅ 17 RSS-фідів
+  (news/rss_adapter.py): 9 для geopolitical (Fed/ECB/BOJ + 6 широких
+  редакційних) і 8 ринкових для general (CNBC/Yahoo Finance/
+  MarketWatch/Investing/BBC Business/Guardian Business/NPR Business/
+  FT). RSS замінив GDELT для geopolitical 2026-09-27 (курований запит
+  губив непередбачені події) і для general 2026-10-06 (GDELT у
+  тривалому бані, джоба падала щопрогону — docs/decisions.md);
   активи для відстеження — docs/watchlist.md, **для чого нам новини й що
   для цього ще потрібно — docs/decisions.md** (5 цілей, поставлено
   2026-09-26)
@@ -265,8 +268,11 @@ docker compose exec app python data-ingestion/run_collect_news.py --stream watch
 # теж raw_news/watchlist, окремий query від команди вище
 docker compose exec app python analysis/news_analysis/collect_stock_news.py
 
-# Зібрати загальний ринковий потік (GDELT) → raw_news/general
-docker compose exec app python data-ingestion/run_collect_news.py --stream general
+# Зібрати загальний ринковий потік → raw_news/general. НЕ через GDELT
+# (--stream general видалено 2026-10-06: IP у тривалому штрафному стані,
+# джоба падала щопрогону, а RSS дає ~140 статей/добу) — 8 ринкових
+# RSS-фідів тією самою командою, що geopolitical:
+docker compose exec app python data-ingestion/run_collect_rss.py
 
 # Зібрати геополітичний потік → raw_news/geopolitical. НЕ через GDELT
 # (--stream geopolitical більше не існує в run_collect_news.py, видалено

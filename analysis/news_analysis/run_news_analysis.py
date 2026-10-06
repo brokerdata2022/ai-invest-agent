@@ -91,10 +91,27 @@ def main() -> None:
         logger.info("Тикери з останнього скринінгу: %d", len(screening_tickers))
 
         # Дефолтні tracked_assets per stream, коли --tracked-assets не
-        # задано явно. Тільки watchlist має фіксований список активів;
-        # для general/geopolitical дефолту нема (None — build_prompt()
-        # просто не додає рядок "Відстежувані активи").
-        default_tracked_assets = {"watchlist": fetch_asset_ids(conn)}
+        # задано явно.
+        #
+        # 2026-10-06: `general` теперь ТЕЖ отримує список
+        # watchlist-активів (було — лише `watchlist`). Причина: GDELT
+        # у тривалому штрафному стані, цільовий запит "лише про
+        # золото" не працює, і без тегування статті ринкових RSS-фідів
+        # (нафта, золото, BTC, курси) лягали з `asset_id=NULL` —
+        # тобто синтез по активах (`synthesize.py`, читає ВСІ потоки)
+        # їх не бачив. Питання до DeepSeek тут те саме, що для
+        # watchlist-потоку ("чи стаття про один із цих активів?"), і
+        # відповідь на нього не залежить від того, яким механізмом
+        # статтю зібрано.
+        #
+        # `geopolitical` свідомо БЕЗ списку: це широкі редакційні
+        # стрічки про події, не про активи, і тегування там дало б
+        # хибні привʼязки (стаття про вибори — не новина про EUR/USD).
+        watchlist_assets = fetch_asset_ids(conn)
+        default_tracked_assets = {
+            "watchlist": watchlist_assets,
+            "general": watchlist_assets,
+        }
 
         articles = fetch_unanalyzed(conn, stream=args.stream, limit=args.limit)
         logger.info("Знайдено %d непроаналізованих статей", len(articles))

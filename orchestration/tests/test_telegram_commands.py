@@ -470,22 +470,48 @@ def test_handle_watchlist_add_accepts_symbol_with_usdt_suffix_already(monkeypatc
 
 def test_resolve_news_search_term_accepts_primary_when_gdelt_confirms(monkeypatch):
     monkeypatch.setattr(telegram_commands, "validate_gdelt_term", lambda term: True)
-    assert _resolve_news_search_term("EUR/USD") == '"EUR/USD"'
+    assert _resolve_news_search_term("EUR/USD") == ('"EUR/USD"', "validated")
 
 
 def test_resolve_news_search_term_falls_back_to_widened(monkeypatch):
     monkeypatch.setattr(telegram_commands, "validate_gdelt_term", lambda term: term == "BNB crypto")
-    assert _resolve_news_search_term("BNB", widened="BNB crypto") == '"BNB crypto"'
+    assert _resolve_news_search_term("BNB", widened="BNB crypto") == ('"BNB crypto"', "validated")
 
 
-def test_resolve_news_search_term_returns_none_when_nothing_confirms(monkeypatch):
+def test_resolve_news_search_term_rejected_when_gdelt_refuses_both(monkeypatch):
+    """GDELT ВІДМОВИВ (False) — остаточно: фраза не стане довшою від
+    повтору, тож актив іде без новинного терміну."""
     monkeypatch.setattr(telegram_commands, "validate_gdelt_term", lambda term: False)
-    assert _resolve_news_search_term("BNB", widened="BNB crypto") is None
+    assert _resolve_news_search_term("BNB", widened="BNB crypto") == (None, "rejected")
 
 
-def test_resolve_news_search_term_no_widened_option_returns_none(monkeypatch):
+def test_resolve_news_search_term_no_widened_option_returns_rejected(monkeypatch):
     monkeypatch.setattr(telegram_commands, "validate_gdelt_term", lambda term: False)
-    assert _resolve_news_search_term("NG") is None
+    assert _resolve_news_search_term("NG") == (None, "rejected")
+
+
+def test_resolve_news_search_term_pending_when_check_impossible(monkeypatch):
+    """КОРІНЬ живого фідбеку 2026-10-06 ("не бачу в запиті активів,
+    доданих через телеграм"): коли перевірку не вдалось провести
+    (None — 429/мʼякий троттл), термін МУСИТЬ зберегтись як 'pending',
+    а не зникнути. Інакше з баном GDELT кожен новий актив назавжди
+    лишався б без новин, мовчки."""
+    monkeypatch.setattr(telegram_commands, "validate_gdelt_term", lambda term: None)
+    term, status = _resolve_news_search_term("BNB", widened="BNB crypto")
+    assert status == "pending"
+    # Кандидатом береться ШИРШИЙ варіант — у нього більше шансів
+    # пройти, бо коротка фраза і є головною причиною відмов GDELT.
+    assert term == '"BNB crypto"'
+
+
+def test_resolve_news_search_term_prefers_a_confirmed_term_over_pending(monkeypatch):
+    """Якщо основний термін підтверджено, недоступність перевірки для
+    ширшого варіанту вже не має значення."""
+    monkeypatch.setattr(
+        telegram_commands, "validate_gdelt_term",
+        lambda term: True if term == "gold price" else None,
+    )
+    assert _resolve_news_search_term("gold price", widened="gold") == ('"gold price"', "validated")
 
 
 def test_handle_watchlist_add_still_adds_asset_when_gdelt_rejects_all_terms(monkeypatch):

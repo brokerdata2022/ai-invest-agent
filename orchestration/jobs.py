@@ -466,9 +466,13 @@ JOBS = {
         # глобальний обмежувач (common/rate_limit.py), а не ретраї.
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "watchlist"),
     },
-    "news_collect_general": {
-        # Без retries (та сама причина, що news_collect_watchlist вище).
-        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_news.py"), "--stream", "general"),
+    "revalidate_news_terms": {
+        # Самолікування: доводить до кінця live-перевірку новинних
+        # термінів, яку не вдалось провести при додаванні активу через
+        # Telegram (2026-10-06, живий фідбек — активи з Telegram не
+        # потрапляли в новинний запит). Без ретраїв: сама джоба
+        # ІДЕМПОТЕНТНА й повторюється щодня.
+        "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "revalidate_news_terms.py")),
     },
     "news_collect_rss": {
         "subprocess": _py(str(REPO_ROOT / "data-ingestion" / "run_collect_rss.py")),

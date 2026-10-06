@@ -17,7 +17,14 @@ def _row(
         "company_name": company_name or f"{ticker} Inc.",
         "price_change_24h_pct": Decimal(price_change_24h_pct) if price_change_24h_pct is not None else None,
         "volume_change_24h_pct": Decimal(volume_change_24h_pct) if volume_change_24h_pct is not None else None,
-        "price_date": price_date or date(2026, 10, 2),
+        # Дефолт — СЬОГОДНІ, не прибита дата (2026-10-06, живий збій):
+        # повідомлення свідомо дописує застарілі тикери ПОВЕРХ ліміту
+        # (screening_notify.py:stale_tickers), тож фікстура з фіксованою
+        # датою через кілька робочих днів починала сама себе робити
+        # застарілою — і тест "ліміт дотримано" падав не через код, а
+        # через календар. Тести, яким потрібна саме застарілість,
+        # передають дату явно (нижче).
+        "price_date": price_date or date.today(),
         "score": Decimal(score),
         "run_at": run_at or datetime(2026, 10, 2, 5, 0, tzinfo=timezone.utc),
     }
@@ -32,7 +39,7 @@ def test_format_message_known_rows():
     assert "<b>MSFT</b> — Microsoft Corp." in text
     assert "-0.45%" in text
     assert "2 тикерів" in text
-    assert "дані на 2026-10-02" in text
+    assert f"дані на {date.today().isoformat()}" in text
     assert "обсяг: +15.5%" in text
     assert "обсяг: -8.2%" in text
     # Жодних сирих компонентів score (живий фідбек користувача,
@@ -62,9 +69,10 @@ def test_format_message_falls_back_to_ticker_when_name_missing():
 
 
 def test_format_message_uses_latest_price_date_when_rows_diverge():
-    rows = [_row("AAPL", price_date=date(2026, 10, 1)), _row("MSFT", price_date=date(2026, 10, 2))]
+    older, newer = date.today() - timedelta(days=1), date.today()
+    rows = [_row("AAPL", price_date=older), _row("MSFT", price_date=newer)]
     text = format_message(rows)
-    assert "дані на 2026-10-02" in text
+    assert f"дані на {date.today().isoformat()}" in text
 
 
 def test_format_message_flags_stale_ticker_even_if_header_date_is_fresh():

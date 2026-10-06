@@ -56,16 +56,31 @@ _SEENDATE_FORMAT = "%Y%m%dT%H%M%SZ"
 _RETRY_DELAYS = tuple(GDELT_RETRY_DELAYS)
 
 
-def validate_gdelt_term(term: str, session: Optional[requests.Session] = None) -> bool:
+def validate_gdelt_term(
+    term: str, session: Optional[requests.Session] = None
+) -> Optional[bool]:
     """ОДИН (без retry) легкий GDELT-запит лише з цим ОДНИМ квотованим
-    терміном — True, якщо GDELT прийняв його (валідний JSON), False
-    якщо відхилив (напр. "The specified phrase is too short" — той
-    самий "Uber"-урок, docs/decisions.md 2026-09-25: дуже короткі/
-    загальновживані слова GDELT відхиляє навіть у лапках) чи мережева
-    помилка. Без retry навмисно — ЦЯ відмова детермінована (та сама
-    фраза не стане "достатньо довгою" від повторної спроби), на
-    відміну від транзієнтного 429, retry тут лише видовжив би
-    очікування даремно.
+    терміном. ТРИ можливі результати, і їх НЕ можна плутати
+    (2026-10-06, живий фідбек користувача — активи, додані через
+    Telegram, не потрапляли в новинний запит):
+
+    - `True` — GDELT прийняв термін;
+    - `False` — GDELT ВІДМОВИВ остаточно (напр. "The specified phrase
+      is too short" — той самий "Uber"-урок, docs/decisions.md
+      2026-09-25: дуже короткі/загальновживані слова відхиляються
+      навіть у лапках). Повторювати безглуздо: фраза не стане довшою;
+    - `None` — перевірку НЕ ВДАЛОСЬ провести (429, мʼякий троттл
+      "200 {}", мережа). Це "невідомо", і воно мусить бути
+      ТИМЧАСОВИМ — викликач зберігає термін як 'pending', а джоба
+      `revalidate_news_terms` пробує знову.
+
+    Доти `False` повертався і для відмови, і для недоступності — і з
+    баном GDELT (2026-10-05) кожен новий актив мовчки лишався без
+    новин НАЗАВЖДИ. Рівно той клас тихого збою, що й сам мʼякий
+    троттл.
+
+    Без retry навмисно: остаточна відмова від повтору не зміниться, а
+    недоступність повторює окрема джоба, не користувач у Telegram.
 
     Додано 2026-10-04 (orchestration/telegram_commands.py:
     /watchlist_add, docs/decisions.md) — живий кейс: доданий без цієї
@@ -83,29 +98,40 @@ def validate_gdelt_term(term: str, session: Optional[requests.Session] = None) -
             },
             timeout=15,
         )
-        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        logger.warning("Термін %r: мережева помилка — перевірку не проведено", term)
+        return None
+
+    # 429 — це НЕ відмова в терміні, а відмова в обслуговуванні.
+    if response.status_code == 429:
+        logger.warning("Термін %r: GDELT 429 — перевірку не проведено", term)
+        return None
+    if response.status_code >= 400:
+        logger.warning(
+            "Термін %r: GDELT HTTP %d — перевірку не проведено", term, response.status_code
+        )
+        return None
+
+    try:
         payload = response.json()
-    except (requests.exceptions.RequestException, ValueError):
+    except ValueError:
+        # Не-JSON тіло — саме так GDELT повідомляє про відхилений
+        # запит ("The specified phrase is too short"), тобто це
+        # ОСТАТОЧНА відмова в терміні.
+        logger.info("Термін %r відхилено GDELT: %s", term, response.text[:120])
         return False
 
     # Мʼякий троттл (200 з тілом `{}`, без ключа "articles") — GDELT
-    # НЕ оцінював термін, тож "валідний" сказати не можна. Повертаємо
-    # False СВІДОМО, хоч це й не "термін поганий": ціна помилки
-    # асиметрична. Хибне True пускає неперевірений термін у СПІЛЬНИЙ
-    # watchlist-запит, і один поганий OR-терм ламає новини для ВСІХ
-    # активів одразу (живий кейс "BNB", 2026-10-04); хибне False лише
-    # додає актив без новинного терміна — градація мʼяка й зворотна
-    # (common/watchlist_db.py:set_search_term). У лозі причина
-    # названа окремо, щоб "не змогли перевірити" не читалось як
-    # "GDELT відхилив" (2026-10-05, docs/decisions.md).
+    # НЕ оцінював термін, тож ні "валідний", ні "відхилений" сказати
+    # не можна. Саме це й повертається як None (2026-10-06): термін
+    # збережеться як 'pending' і буде перевірений знову.
     if "articles" not in payload:
         logger.warning(
-            "Не вдалось перевірити термін %r: GDELT віддав 200 без 'articles' "
-            "(мʼякий троттл ліміту запитів). Термін НЕ додається в спільний "
-            "запит — повторіть пізніше.",
+            "Термін %r: GDELT віддав 200 без 'articles' (мʼякий троттл) — "
+            "перевірку не проведено, буде повторена",
             term,
         )
-        return False
+        return None
 
     return True
 

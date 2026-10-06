@@ -1,17 +1,34 @@
 #!/usr/bin/env python3
 """
-Ручний запуск збору новин (GDELT) для одного потоку — watchlist
-(docs/watchlist.md, не-акційна частина) або general (докладніше
-news/queries.py, docs/decisions.md 2026-09-25/26). Акції зі скринінгу —
-окремий скрипт, analysis/news_analysis/collect_stock_news.py.
+Ручний запуск збору новин (GDELT) для потоку **watchlist** —
+цільовий запит по конкретних активах (docs/watchlist.md, не-акційна
+частина). Акції зі скринінгу — окремий скрипт,
+analysis/news_analysis/collect_stock_news.py.
 
-geopolitical-стрім більше НЕ збирається через GDELT тут — замінено на
-широкі RSS-фіди (news/rss_feeds.py, run_collect_rss.py),
-docs/decisions.md 2026-09-27.
+**Через GDELT тут лишився ЄДИНИЙ потік.** Два інші прибрані з тієї
+самої причини, але в різний час:
+- `geopolitical` (2026-09-27) — курований GDELT-запит губив
+  непередбачені події, замінено на 9 широких RSS-фідів;
+- `general` (2026-10-06) — RSS-фіди ринкових видань дають ~140 статей
+  на добу, тоді як GDELT на тому самому IP у тривалому штрафному
+  стані (429 + мʼякий троттл) і джоба падала щопрогону. Живий фідбек
+  користувача: "опять провалилися джоби... чому не застосовано
+  резервне джерело автоматично?" — резерв працював на рівні ДАНИХ
+  (RSS), але джоба GDELT про нього не знала й далі сигналізувала
+  провал, хоч потік був живий. Прибрати джерело, яке нічого не додає
+  і щоразу падає, честніше, ніж гасити його сигнал.
+
+**Чому watchlist лишається саме на GDELT і БЕЗ резерву:** тільки
+пошуковий запит умієте "лише про золото". RSS такого не вміє — у
+нього є лише те, що редакція поклала у стрічку. Тому тут збій
+ЗАЛИШАЄТЬСЯ гучним (exit 1): це єдине джерело, і його втрата —
+справжня втрата даних, не шум. Частковий замінник усе ж є: статті
+потоку `general` з RSS тепер теж тегуються watchlist-активами
+(run_news_analysis.py), тож новини про золото/нафту/BTC доходять до
+синтезу й без цільового запиту.
 
 Використання:
     python run_collect_news.py --stream watchlist
-    python run_collect_news.py --stream general
 """
 
 import argparse
@@ -29,10 +46,7 @@ from common.news_db import insert_news_batch  # noqa: E402
 from common.rate_limit import make_pacer  # noqa: E402
 from common.watchlist_db import fetch_terms  # noqa: E402
 from news.gdelt_adapter import GdeltAdapter, GdeltError  # noqa: E402
-from news.queries import (  # noqa: E402
-    build_general_queries,
-    build_watchlist_query,
-)
+from news.queries import build_watchlist_query  # noqa: E402
 
 from config import (  # noqa: E402
     GDELT_MIN_REQUEST_INTERVAL_SECONDS,
@@ -57,13 +71,14 @@ def _build_watchlist_queries() -> list[str]:
     return [build_watchlist_query(terms)]
 
 
-# Кожен білдер повертає list[str] — один чи кілька окремих GDELT-запитів
-# для того самого стріму (general — два, через ліміт довжини GDELT,
-# news/queries.py). watchlist лишається одним, обгорнутим у список для
-# однакової обробки нижче.
+# Білдер повертає list[str] — кілька окремих GDELT-запитів для того
+# самого стріму (watchlist — один, обгорнутий у список для однакової
+# обробки нижче). `general` прибраний 2026-10-06 (див. докстрінг
+# модуля), його запити лишаються в news/queries.py невикористаними —
+# не видаляю разом із джобою, щоб повернення не вимагало писати їх
+# заново, якщо GDELT колись стане надійним.
 QUERY_BUILDERS = {
     "watchlist": _build_watchlist_queries,
-    "general": build_general_queries,
 }
 
 
@@ -121,7 +136,15 @@ def main() -> None:
             # "просто нема свіжих новин". runner.py має його ретраїти
             # й сповістити, якщо ретрай теж не допоможе — інакше
             # мережевий збій тихо виглядав би як "0 статей", exit(0).
-            logger.error("Усі GDELT-запити (%s) провалились", args.stream)
+            # Гучно й з наслідком: у цього потоку РЕЗЕРВУ НЕМА (RSS не
+            # вміє цільового запиту по активу), тож це справжня втрата
+            # даних, а не шум сигналізації.
+            logger.error(
+                "Усі GDELT-запити (%s) провалились. У цього потоку немає "
+                "резервного джерела — новини по активах watchlist за цей "
+                "прогін не зібрані (частково покриється потоком general з RSS).",
+                args.stream,
+            )
             sys.exit(1)
         logger.warning("Немає статей — перевірте query(і) чи доступність GDELT")
         sys.exit(0)

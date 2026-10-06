@@ -31,7 +31,13 @@ class SourceCandidate(NamedTuple):
 
 DYNAMICALLY_ADDABLE_SOURCES = frozenset({"twelvedata"})
 
-_COLUMNS = "asset_id, source, metric_id, ticker, label, search_term, enabled"
+# `search_term_status` у наборі обов'язково (2026-10-06): fetch_terms()
+# фільтрує за ним, і без колонки в SELECT фільтр тихо пропускав би ВСІ
+# терміни (dict.get -> None).
+_COLUMNS = (
+    "asset_id, source, metric_id, ticker, label, search_term, "
+    "search_term_status, enabled"
+)
 
 
 def fetch_watchlist(conn, enabled_only: bool = True) -> list[dict]:
@@ -54,17 +60,64 @@ def fetch_asset_ids(conn, enabled_only: bool = True) -> list[str]:
     return [row["asset_id"] for row in fetch_watchlist(conn, enabled_only=enabled_only)]
 
 
+# Статуси новинного терміну (db/schema.sql:
+# watchlist_assets.search_term_status, 2026-10-06).
+TERM_VALIDATED = "validated"
+TERM_PENDING = "pending"
+TERM_REJECTED = "rejected"
+
+
 def fetch_terms(conn, enabled_only: bool = True) -> dict[str, str]:
     """Той самий словник, що раніше news/queries.py:WATCHLIST_TERMS.
-    Пропускає рядки з search_term=NULL (2026-10-04, живий кейс "BNB":
-    актив, чий термін не пройшов live-перевірку GDELT при додаванні,
-    бере участь у збиранні ЦІНИ, але НЕ в GDELT-запиті — один поганий
-    OR-термін псував запит для ВСІХ watchlist-активів одразу)."""
+
+    У спільний GDELT-запит потрапляють ЛИШЕ терміни зі статусом
+    'validated' (2026-10-04, живий кейс "BNB": один поганий OR-термін
+    псував запит для ВСІХ watchlist-активів одразу).
+
+    2026-10-06: фільтр за СТАТУСОМ, не за `search_term IS NULL`.
+    Різниця принципова — тепер термін зберігається навіть коли
+    перевірку не вдалось провести ('pending'), і джоба
+    `revalidate_news_terms` доводить його до кінця. Доти "не вдалось
+    перевірити" було нерозрізнимим від "відмовлено назавжди", і з
+    баном GDELT кожен новий актив мовчки лишався без новин."""
     return {
         row["asset_id"]: row["search_term"]
         for row in fetch_watchlist(conn, enabled_only=enabled_only)
-        if row["search_term"]
+        if row["search_term"] and row.get("search_term_status") == TERM_VALIDATED
     }
+
+
+def fetch_pending_terms(conn) -> list[dict]:
+    """Активи, чий новинний термін чекає на повторну перевірку —
+    вхід для джоби `revalidate_news_terms`."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT asset_id, label, search_term
+            FROM watchlist_assets
+            WHERE enabled AND search_term IS NOT NULL
+              AND search_term_status = %s
+            ORDER BY asset_id
+            """,
+            (TERM_PENDING,),
+        )
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def set_term_status(conn, asset_id: str, status: str) -> None:
+    """Переводить термін у 'validated'/'rejected' після повторної
+    перевірки. Сам термін не чіпається — він лишається в БД і для
+    'rejected' теж: інакше наступна перевірка не знала б, що саме
+    пробувалось."""
+    if status not in (TERM_VALIDATED, TERM_PENDING, TERM_REJECTED):
+        raise ValueError(f"Невідомий статус терміну: {status!r}")
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE watchlist_assets SET search_term_status = %s WHERE asset_id = %s",
+            (status, asset_id),
+        )
+    conn.commit()
 
 
 def fetch_price_sources(conn, enabled_only: bool = True) -> dict[str, tuple[str, str]]:
@@ -89,20 +142,27 @@ def find_asset(conn, asset_id: str) -> Optional[dict]:
 def add_asset(
     conn, asset_id: str, source: str, metric_id: str,
     ticker: Optional[str], label: str, search_term: Optional[str],
+    search_term_status: str = TERM_VALIDATED,
 ) -> None:
     """Викликач (telegram_commands.py) МАЄ перевірити find_asset() is
     None заздалегідь для зрозумілого повідомлення користувачу — тут
     просто INSERT, порушення PRIMARY KEY кидається як є.
-    `search_term=None` — актив збирає ЦІНУ, але не бере участі в
-    GDELT-запиті (2026-10-04, живий кейс "BNB" — fetch_terms() вище
-    пропускає такі рядки)."""
+
+    `search_term_status` (2026-10-06) — 'validated' / 'pending' /
+    'rejected'. У спільний GDELT-запит іде лише 'validated'
+    (fetch_terms() вище), але сам термін зберігається й для 'pending':
+    інакше "перевірку не вдалось провести" було б нерозрізнимим від
+    "відмовлено назавжди", і з баном GDELT актив мовчки лишався б без
+    новин назавжди (живий фідбек користувача 2026-10-06)."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO watchlist_assets (asset_id, source, metric_id, ticker, label, search_term, added_via)
-            VALUES (%s, %s, %s, %s, %s, %s, 'telegram')
+            INSERT INTO watchlist_assets
+                (asset_id, source, metric_id, ticker, label, search_term,
+                 search_term_status, added_via)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'telegram')
             """,
-            (asset_id, source, metric_id, ticker, label, search_term),
+            (asset_id, source, metric_id, ticker, label, search_term, search_term_status),
         )
     conn.commit()
     logger.info("watchlist_assets: додано %s (%s/%s)", asset_id, source, metric_id)

@@ -11,12 +11,23 @@ import common.watchlist_db as watchlist_db
 from common.watchlist_db import SourceCandidate
 
 
+# Набір полів за замовчуванням = watchlist_db._COLUMNS.
+_DEFAULT_COLUMNS = [
+    ("asset_id",), ("source",), ("metric_id",), ("ticker",), ("label",),
+    ("search_term",), ("search_term_status",), ("enabled",),
+]
+
+
 class _FakeCursor:
-    def __init__(self, rows, log):
+    def __init__(self, rows, log, columns=None):
         self._rows = rows
         self._log = log
         self.rowcount = 1 if rows else 0
-        self.description = [("asset_id",), ("source",), ("metric_id",), ("ticker",), ("label",), ("search_term",), ("enabled",)]
+        # `search_term_status` у наборі з 2026-10-06 — без нього
+        # fetch_terms() тихо повертав би ПОРОЖНІЙ словник (фільтр за
+        # статусом не знаходив би поля). Запити з іншим набором полів
+        # (fetch_pending_terms) передають `columns` явно.
+        self.description = columns or _DEFAULT_COLUMNS
 
     def execute(self, sql, params=None):
         self._log.append((" ".join(sql.split()), params))
@@ -35,23 +46,32 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, rows=()):
+    def __init__(self, rows=(), columns=None):
         self.log = []
         self.committed = False
         self._rows = list(rows)
+        self._columns = columns
 
     def cursor(self):
-        return _FakeCursor(self._rows, self.log)
+        return _FakeCursor(self._rows, self.log, columns=self._columns)
 
     def commit(self):
         self.committed = True
 
 
-_XAUUSD_ROW = ("xauusd", "twelvedata", "xauusd_close", "XAU/USD", "Золото (XAU/USD)", '"gold price"', True)
-_BTC_ROW = ("btc", "binance", "btc_close", None, "BTC/USDT", "Bitcoin", True)
+# Порядок полів = watchlist_db._COLUMNS (із 2026-10-06 там є
+# search_term_status перед enabled).
+_XAUUSD_ROW = ("xauusd", "twelvedata", "xauusd_close", "XAU/USD", "Золото (XAU/USD)",
+               '"gold price"', "validated", True)
+_BTC_ROW = ("btc", "binance", "btc_close", None, "BTC/USDT", "Bitcoin", "validated", True)
 # search_term=None — 2026-10-04, живий кейс "BNB": термін не пройшов
 # live-перевірку GDELT, актив збирає лише ціну.
-_BNB_NO_TERM_ROW = ("bnb", "binance", "bnb_close", "BNBUSDT", "BNB/USDT", None, True)
+_BNB_NO_TERM_ROW = ("bnb", "binance", "bnb_close", "BNBUSDT", "BNB/USDT", None,
+                    "rejected", True)
+# 2026-10-06: термін ЗБЕРЕЖЕНО, але перевірку не вдалось провести —
+# у спільний запит не йде, джоба revalidate_news_terms спробує знову.
+_BNB_PENDING_ROW = ("bnb", "binance", "bnb_close", "BNBUSDT", "BNB/USDT", '"BNB crypto"',
+                    "pending", True)
 
 
 def test_fetch_watchlist_returns_list_of_dicts():
@@ -99,6 +119,46 @@ def test_fetch_terms_skips_rows_with_null_search_term():
     assert "bnb" not in watchlist_db.fetch_terms(conn)
 
 
+def test_fetch_terms_skips_pending_terms():
+    """2026-10-06: термін, який ЗБЕРЕЖЕНО, але ще не перевірено, у
+    спільний запит іти не має — інакше одна неперевірена фраза могла б
+    зіпсувати новини для ВСІХ активів (причина фільтра 2026-10-04)."""
+    conn = _FakeConn(rows=[_XAUUSD_ROW, _BNB_PENDING_ROW])
+    assert watchlist_db.fetch_terms(conn) == {"xauusd": '"gold price"'}
+
+
+def test_fetch_pending_terms_returns_only_pending():
+    # Цей запит віддає ТРИ поля, не весь _COLUMNS.
+    conn = _FakeConn(
+        rows=[("bnb", "BNB/USDT", '"BNB crypto"')],
+        columns=[("asset_id",), ("label",), ("search_term",)],
+    )
+    pending = watchlist_db.fetch_pending_terms(conn)
+    assert pending == [{"asset_id": "bnb", "label": "BNB/USDT", "search_term": '"BNB crypto"'}]
+    sql, params = conn.log[0]
+    assert "search_term_status = %s" in sql
+    assert params == (watchlist_db.TERM_PENDING,)
+
+
+def test_set_term_status_updates_and_commits():
+    conn = _FakeConn()
+    watchlist_db.set_term_status(conn, "bnb", watchlist_db.TERM_VALIDATED)
+    assert conn.committed is True
+    sql, params = conn.log[0]
+    assert "search_term_status = %s" in sql
+    assert params == ("validated", "bnb")
+
+
+def test_set_term_status_rejects_unknown_status():
+    """Друкарська помилка в статусі тихо вивела б актив із новинного
+    запиту назавжди — краще виняток."""
+    import pytest
+
+    conn = _FakeConn()
+    with pytest.raises(ValueError):
+        watchlist_db.set_term_status(conn, "bnb", "вигадка")
+
+
 def test_fetch_price_sources_maps_asset_id_to_source_and_metric_id():
     conn = _FakeConn(rows=[_XAUUSD_ROW, _BTC_ROW])
     assert watchlist_db.fetch_price_sources(conn) == {
@@ -128,7 +188,8 @@ def test_add_asset_inserts_and_commits():
     assert conn.committed is True
     sql, params = conn.log[0]
     assert "INSERT INTO watchlist_assets" in sql
-    assert params == ("gbpusd", "twelvedata", "gbpusd_close", "GBP/USD", "GBP/USD", '"GBP/USD"')
+    assert params == ("gbpusd", "twelvedata", "gbpusd_close", "GBP/USD", "GBP/USD",
+                      '"GBP/USD"', "validated")
 
 
 def test_add_asset_accepts_null_search_term():
@@ -138,10 +199,26 @@ def test_add_asset_accepts_null_search_term():
     watchlist_db.add_asset(
         conn, asset_id="bnb", source="binance", metric_id="bnb_close",
         ticker="BNBUSDT", label="BNB/USDT", search_term=None,
+        search_term_status="rejected",
     )
 
     sql, params = conn.log[0]
-    assert params == ("bnb", "binance", "bnb_close", "BNBUSDT", "BNB/USDT", None)
+    assert params == ("bnb", "binance", "bnb_close", "BNBUSDT", "BNB/USDT", None, "rejected")
+
+
+def test_add_asset_stores_pending_term_for_later_check():
+    """2026-10-06, корінь живого фідбеку: термін, який не вдалось
+    перевірити, МУСИТЬ зберегтись — інакше його ніколи не перевірять
+    знову, і актив лишиться без новин назавжди."""
+    conn = _FakeConn()
+    watchlist_db.add_asset(
+        conn, asset_id="bnb", source="binance", metric_id="bnb_close",
+        ticker="BNBUSDT", label="BNB/USDT", search_term='"BNB crypto"',
+        search_term_status=watchlist_db.TERM_PENDING,
+    )
+
+    _, params = conn.log[0]
+    assert params[-2:] == ('"BNB crypto"', "pending")
 
 
 def test_set_search_term_updates_and_commits():

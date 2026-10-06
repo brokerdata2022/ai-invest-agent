@@ -1041,3 +1041,45 @@ CREATE TABLE IF NOT EXISTS backtest_verdicts (
 
 CREATE INDEX IF NOT EXISTS idx_backtest_verdicts_metric
     ON backtest_verdicts (metric_id, model, run_at DESC);
+
+-- 2026-10-06: СТАТУС новинного терміну watchlist-активу.
+--
+-- Живий фідбек користувача: "я тут в запиті не бачу активів, які були
+-- добавлені в список обраних через телеграм". Справді: `bnb` мав
+-- `search_term = NULL`, тож не брав участі в GDELT-запиті — і ніщо
+-- ніколи не пробувало знову.
+--
+-- Корінь не в самому `bnb`, а в тому, що ДВА РІЗНІ результати
+-- зберігались однаково (NULL):
+--   1. GDELT відмовив у терміні ("занадто коротка фраза" — той самий
+--      "Uber"-урок, 2026-09-25) — це остаточна відмова;
+--   2. перевірку НЕ ВДАЛОСЬ провести (429/мʼякий троттл/мережа) — це
+--      "невідомо", і воно мусить бути тимчасовим.
+-- З баном GDELT (2026-10-05) другий випадок став постійним: кожен
+-- новий актив, доданий через Telegram, назавжди лишався б без новин,
+-- мовчки. Рівно той клас тихого збою, що й мʼякий троттл сам.
+--
+-- Тепер термін зберігається ЗАВЖДИ, а участь у запиті визначає статус:
+--   'validated' — GDELT прийняв, іде в спільний запит;
+--   'pending'   — перевірку не вдалось провести, НЕ йде в запит,
+--                 але джоба `revalidate_news_terms` пробує знову;
+--   'rejected'  — GDELT відмовив остаточно, НЕ йде в запит.
+-- Один поганий OR-терм і далі не може зіпсувати запит для всіх
+-- активів (причина оригінального рішення 2026-10-04) — у запит
+-- потрапляє лише 'validated'.
+ALTER TABLE watchlist_assets
+    ADD COLUMN IF NOT EXISTS search_term_status TEXT NOT NULL DEFAULT 'validated';
+
+-- Наявні рядки: термін є -> він свого часу пройшов перевірку.
+UPDATE watchlist_assets SET search_term_status = 'validated'
+WHERE search_term IS NOT NULL AND search_term_status <> 'validated';
+
+-- `bnb` — єдиний актив із втраченим терміном на момент міграції.
+-- Ставимо КАНДИДАТА з контекстним словом ("BNB" сам по собі GDELT
+-- відхиляв як занадто коротку фразу, telegram_commands.py:
+-- _try_add_via_binance додає "crypto") і статус 'pending', щоб
+-- re-validation спробувала його, коли GDELT стане доступним. Якщо
+-- відмовить — статус сам стане 'rejected', і це буде видно.
+UPDATE watchlist_assets
+SET search_term = '"BNB crypto"', search_term_status = 'pending'
+WHERE asset_id = 'bnb' AND search_term IS NULL;

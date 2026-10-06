@@ -79,7 +79,15 @@ sys.path.insert(0, str(REPO_ROOT / "reporting"))
 from _common import bold, escape_html  # noqa: E402
 from command_descriptions import INFO_JOB_NAMES, JOB_DESCRIPTIONS, SPECIAL_COMMAND_DESCRIPTIONS  # noqa: E402
 from common.db import get_connection  # noqa: E402
-from common.watchlist_db import add_asset, fetch_watchlist, find_asset, set_enabled  # noqa: E402
+from common.watchlist_db import (  # noqa: E402
+    TERM_PENDING,
+    TERM_REJECTED,
+    TERM_VALIDATED,
+    add_asset,
+    fetch_watchlist,
+    find_asset,
+    set_enabled,
+)
 from crypto.binance_adapter import BinanceAdapter  # noqa: E402
 from news.gdelt_adapter import validate_gdelt_term  # noqa: E402
 from quotes.twelvedata_adapter import TwelveDataAdapter  # noqa: E402
@@ -191,21 +199,61 @@ def _reactivate_or_report_existing(conn, asset_id: str) -> str | None:
     return f"✅ {bold(asset_id)} повернуто у watchlist (був вимкнений)."
 
 
-def _resolve_news_search_term(primary: str, widened: str | None = None) -> str | None:
+def _term_note(status: str) -> str:
+    """Що саме сказати користувачу про новинний пошук. Три різні
+    стани — три різні тексти: "перевіримо пізніше" і "термін
+    відхилено назавжди" це не те саме, і плутати їх означало б
+    приховати, що новини по активу зʼявляться самі (2026-10-06)."""
+    return {
+        TERM_VALIDATED: "",
+        TERM_PENDING: (
+            " ⏳ Новинний пошук поки без цього активу: GDELT недоступний, "
+            "термін перевіриться автоматично (джоба revalidate_news_terms)."
+        ),
+        TERM_REJECTED: (
+            " (без новинного пошуку — GDELT відхилив термін як занадто "
+            "короткий/загальний; ціна збирається як завжди)"
+        ),
+    }.get(status, "")
+
+
+def _resolve_news_search_term(primary: str, widened: str | None = None) -> tuple[str | None, str]:
     """Live-перевірка GDELT (validate_gdelt_term) ПЕРЕД тим, як термін
     піде в продакшн watchlist-запит — 2026-10-04, живий кейс "BNB":
     доданий без цієї перевірки термін зламав ЦІЛИЙ watchlist-запит
     (один поганий OR-термін псує запит для ВСІХ активів одразу, не
     лише нового). `primary` пробується першим; якщо GDELT відхилив і
     задано `widened` (ширший варіант, напр. з уточнювальним словом) —
-    пробує його; якщо й це не пройшло — None (актив іде в watchlist і
-    збирає ЦІНУ, просто без участі в GDELT-запиті — fetch_terms()
-    сам пропускає рядки з search_term=NULL)."""
-    if validate_gdelt_term(primary):
-        return f'"{primary}"'
-    if widened is not None and validate_gdelt_term(widened):
-        return f'"{widened}"'
-    return None
+    пробує його.
+
+    Повертає `(термін, статус)` — 2026-10-06, живий фідбек
+    користувача ("не бачу в запиті активів, доданих через телеграм"):
+    - `(термін, 'validated')` — GDELT прийняв, іде в спільний запит;
+    - `(термін, 'pending')` — перевірку НЕ ВДАЛОСЬ провести (429,
+      мʼякий троттл): термін зберігається, у запит НЕ йде, але джоба
+      `revalidate_news_terms` пробує знову. Доти це зберігалось як
+      NULL — нерозрізнимо від остаточної відмови, тож із баном GDELT
+      актив мовчки лишався без новин назавжди;
+    - `(None, 'rejected')` — GDELT відмовив в обох варіантах
+      остаточно (занадто коротка/загальна фраза). Актив усе одно йде
+      в watchlist і збирає ЦІНУ."""
+    could_not_check = False
+    for candidate in (primary, widened):
+        if candidate is None:
+            continue
+        verdict = validate_gdelt_term(candidate)
+        if verdict is True:
+            return f'"{candidate}"', TERM_VALIDATED
+        if verdict is None:
+            could_not_check = True
+
+    if could_not_check:
+        # Беремо ШИРШИЙ варіант як кандидата, якщо він є: саме він
+        # має більше шансів пройти (коротка фраза — головна причина
+        # відмов GDELT).
+        candidate = widened or primary
+        return f'"{candidate}"', TERM_PENDING
+    return None, TERM_REJECTED
 
 
 def _try_add_via_twelvedata(conn, ticker_arg: str, asset_id: str, twelvedata_api_key: str | None) -> str | None:
@@ -234,12 +282,13 @@ def _try_add_via_twelvedata(conn, ticker_arg: str, asset_id: str, twelvedata_api
         resolved = candidate
 
     metric_id = f"{asset_id}_close"
-    search_term = _resolve_news_search_term(resolved)
+    search_term, term_status = _resolve_news_search_term(resolved)
     add_asset(
         conn, asset_id=asset_id, source="twelvedata", metric_id=metric_id,
         ticker=resolved, label=resolved, search_term=search_term,
+        search_term_status=term_status,
     )
-    note = "" if search_term else " (без новинного пошуку — термін не пройшов перевірку GDELT)"
+    note = _term_note(term_status)
     return f"✅ Додано {bold(resolved)} у watchlist (asset_id={asset_id}, джерело: Twelve Data){note}."
 
 
@@ -258,12 +307,13 @@ def _try_add_via_binance(conn, asset_id: str) -> str | None:
     # Короткі тикери (3-4 символи) — САМЕ той випадок, що GDELT
     # відхиляє як "too short" (той самий "Uber"-урок) — "crypto"
     # додає контекст/довжину без зміни суті пошуку.
-    search_term = _resolve_news_search_term(base, widened=f"{base} crypto")
+    search_term, term_status = _resolve_news_search_term(base, widened=f"{base} crypto")
     add_asset(
         conn, asset_id=asset_id, source="binance", metric_id=metric_id,
         ticker=symbol, label=label, search_term=search_term,
+        search_term_status=term_status,
     )
-    note = "" if search_term else " (без новинного пошуку — термін не пройшов перевірку GDELT)"
+    note = _term_note(term_status)
     return f"✅ Додано {bold(label)} у watchlist (asset_id={asset_id}, джерело: Binance){note}."
 
 

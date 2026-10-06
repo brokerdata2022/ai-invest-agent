@@ -225,9 +225,12 @@ class _RaisingSession:
         raise requests.exceptions.ConnectionError("boom")
 
 
-def test_validate_gdelt_term_false_on_request_error():
+def test_validate_gdelt_term_none_on_request_error():
+    """2026-10-06: мережева помилка це "не змогли перевірити" (None), а
+    НЕ "термін поганий" (False). Плутати їх означало назавжди лишити
+    актив без новин через одну транзієнтну помилку."""
     session = _RaisingSession()
-    assert validate_gdelt_term("x", session=session) is False
+    assert validate_gdelt_term("x", session=session) is None
 
 
 def test_validate_gdelt_term_does_not_retry():
@@ -322,9 +325,19 @@ def test_genuine_empty_result_is_not_a_throttle():
     assert adapter.fetch() == {"articles": []}
 
 
-def test_validate_term_returns_false_on_throttle():
-    """Хибне True пустило б НЕПЕРЕВІРЕНИЙ термін у спільний
-    watchlist-запит, а один поганий OR-терм ламає новини для ВСІХ
-    активів (живий кейс "BNB")."""
+def test_validate_term_returns_none_on_throttle():
+    """Мʼякий троттл — "не змогли перевірити" (None), не відмова.
+    Хибне True пустило б НЕПЕРЕВІРЕНИЙ термін у спільний
+    watchlist-запит (один поганий OR-терм ламає новини для ВСІХ
+    активів, живий кейс "BNB"), а хибне False назавжди лишило б актив
+    без новин — тому третій стан (2026-10-06)."""
     session = _FakeSession([_FakeResponse(200, {})])
-    assert validate_gdelt_term("bitcoin", session=session) is False
+    assert validate_gdelt_term("bitcoin", session=session) is None
+
+
+def test_validate_term_returns_false_when_gdelt_rejects_the_phrase():
+    """Відхилення фрази GDELT віддає НЕ-JSON тілом ("The specified
+    phrase is too short") — це остаточна відмова, повторювати
+    безглуздо."""
+    session = _FakeSession([_FakeResponse(200, payload=None, text="phrase is too short")])
+    assert validate_gdelt_term("bnb", session=session) is False
