@@ -1,7 +1,11 @@
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+import pytest
 from apscheduler.triggers.cron import CronTrigger
 
 from jobs import JOBS
-from schedule import SCHEDULE
+from schedule import SCHEDULE, TIMEZONE
 
 
 def test_schedule_and_jobs_names_match():
@@ -42,3 +46,76 @@ def test_expectations_chain_second_offsets_preserve_order():
     seconds = [SCHEDULE[name]["trigger"].get("second", 0) for name in chain]
     assert seconds == sorted(seconds), f"{chain} мають зростаючий 'second': {seconds}"
     assert len(set(seconds)) == len(seconds), "кожен крок ланцюжка має власний 'second', без колізій"
+
+
+# ============================================================
+# Звіт НЕ МОЖЕ стояти перед джобою, що готує йому дані
+# ============================================================
+# Живий збій 2026-10-06 (фідбек користувача: "кава прийшла ціна в
+# телеграм за 02.10"): `notify_watchlist` стояв о 5:20, а
+# `watchlist_prices` — о 6:00. Звіт виходив ЗА 40 ХВИЛИН ДО збору,
+# тобто фізично не міг показати свіжі дані, і щодня подавав учорашні
+# як поточні. Жоден тест цього не ловив, бо кожен запис розкладу
+# перевірявся ОКРЕМО.
+#
+# Пояси тут критичні: сесійні синтези живуть у часі свого ринку
+# (Asia/Tokyo, Europe/London, America/New_York), а notify — у
+# київському. Порівнювати "хвилини від полуночі" без перерахунку в
+# один пояс означає знайти інверсію там, де її немає (саме так я й
+# помилився при першій перевірці вручну). Тому обидва боки
+# переводяться в UTC-інстанти.
+
+# (хто готує дані, хто їх надсилає)
+PRODUCER_NOTIFIER_PAIRS = [
+    ("watchlist_prices", "notify_watchlist"),
+    ("screening_composite_score", "notify_screening"),
+    ("crypto_screening_daily", "notify_crypto_screening"),
+    ("trading_list", "notify_trading_list"),
+    ("fundamental_analysis", "notify_fundamental"),
+    ("calendar_outlook", "notify_calendar_outlook"),
+    ("discover_candidates", "notify_candidates"),
+    ("news_consolidate_watchlist", "news_notify"),
+]
+
+# Дві дати: літній і зимовий час — інверсія може зʼявитись лише в
+# одному з режимів, якщо пояси джоб різні (той самий клас помилки, що
+# DST-фікс сесійних синтезів 2026-10-04).
+_DST_REFERENCE_DATES = (date(2026, 7, 1), date(2026, 1, 15))
+
+
+def _fire_times_utc(name: str, reference: date) -> list[datetime]:
+    """Усі моменти запуску джоби за добу `reference`, у UTC."""
+    cfg = SCHEDULE[name]
+    trigger = cfg["trigger"]
+    zone = ZoneInfo(cfg.get("timezone", TIMEZONE))
+
+    def field(key, default):
+        raw = trigger.get(key, default)
+        if raw in ("*", None):
+            return list(range(24)) if key == "hour" else [0]
+        return [int(x) for x in str(raw).split(",")]
+
+    return sorted(
+        datetime(reference.year, reference.month, reference.day, h, m, tzinfo=zone).astimezone(
+            ZoneInfo("UTC")
+        )
+        for h in field("hour", 0)
+        for m in field("minute", 0)
+    )
+
+
+@pytest.mark.parametrize("producer,notifier", PRODUCER_NOTIFIER_PAIRS)
+@pytest.mark.parametrize("reference", _DST_REFERENCE_DATES)
+def test_notifier_runs_after_its_producer(producer, notifier, reference):
+    """КОЖЕН запуск звіту мусить мати запуск джоби-постачальника
+    ПЕРЕД ним у ту саму добу. Інакше звіт подає старі дані як
+    поточні — і це не видно ні в логах, ні в самому звіті."""
+    producer_times = _fire_times_utc(producer, reference)
+    notifier_times = _fire_times_utc(notifier, reference)
+
+    for sent_at in notifier_times:
+        assert any(made_at < sent_at for made_at in producer_times), (
+            f"{notifier} о {sent_at:%H:%M} UTC ({reference}) виходить ДО того, як "
+            f"{producer} приготував дані (запуски: "
+            f"{[f'{t:%H:%M}' for t in producer_times]} UTC)"
+        )

@@ -167,6 +167,21 @@ def format_message(rows: list[dict]) -> str:
         # показувались із датою 5+ днів тому, і це помітив лише
         # користувач, не сам звіт.
         stale_marker = f" ⚠️ застаріло ({row['staleness_days']}дн)" if row.get("is_stale") else ""
+        # "остання сесія" (2026-10-06, живий фідбек користувача: "ціна
+        # кави застаріла, чого не застосований резерв") — дата ПОЗАДУ
+        # сьогоднішньої, але В МЕЖАХ допуску `is_stale()`. Це не
+        # застарілість, а останнє закриття ринку, який не торгується
+        # 24/7: кава (ICE) має сесію, тоді як крипта йде 24/7, а
+        # нафта й форекс — майже безперервно, тому в них дата вже
+        # сьогоднішня. Без цієї позначки звіт показував голу дату, і
+        # "ринок закритий" виглядало РІВНО так само, як "наш збір
+        # відстав" — користувач прочитав це як збій, і був правий, що
+        # відрізнити неможливо.
+        session_marker = (
+            " · остання сесія"
+            if not row.get("is_stale") and (row.get("staleness_days") or 0) >= 1
+            else ""
+        )
         # 🔀 (2026-10-04, common/quality.py:has_volatile_recent_revisions())
         # — ІНШИЙ сигнал за ⚠️: не "старе", а "те саме минуле значення
         # недавно само переписалось заднім числом на суттєву величину"
@@ -174,7 +189,7 @@ def format_message(rows: list[dict]) -> str:
         volatile_marker = " 🔀 нестабільні ревізії" if row.get("is_volatile") else ""
         lines.append(
             f"• {bold(row['label'])}{web_marker} — {_format_price(row['price'])}{date_str} "
-            f"| {change_str}{stale_marker}{volatile_marker}"
+            f"| {change_str}{session_marker}{stale_marker}{volatile_marker}"
         )
 
     if stale_rows:

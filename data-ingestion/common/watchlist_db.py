@@ -87,6 +87,41 @@ def fetch_terms(conn, enabled_only: bool = True) -> dict[str, str]:
     }
 
 
+def fetch_watchlist_health(conn) -> list[dict]:
+    """Повний стан кожного активу списку обраних ОДНИМ запитом: джерело,
+    остання ціна з датою, статус новинного терміну.
+
+    Додано 2026-10-06 після прямого фідбеку користувача: "ти маєш
+    контролювати список обраних, а не в логах шукати додані активи".
+    Доти `/watchlist_list` показував лише назву й джерело, тож стан
+    власного списку (чи свіжа ціна, чи бере актив участь у новинному
+    запиті) з бота не було видно взагалі — і перевірити це можна було
+    лише ззовні, руками. Тепер усе, що потрібно для відповіді "що з
+    моїм списком", віддає ця функція, а рендерить
+    `telegram_commands.format_watchlist_list()`.
+
+    LEFT JOIN — актив без жодної зібраної ціни (щойно доданий, або
+    джерело відмовило) мусить БУТИ У СПИСКУ з порожньою ціною, а не
+    зникнути з нього."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT w.asset_id, w.label, w.source, w.metric_id, w.enabled,
+                   w.search_term, w.search_term_status, w.added_via,
+                   p.value AS price, p.observed_at
+            FROM watchlist_assets w
+            LEFT JOIN (
+                SELECT DISTINCT ON (source, metric_id) source, metric_id, value, observed_at
+                FROM v_observations_latest_revision
+                ORDER BY source, metric_id, observed_at DESC
+            ) p ON p.source = w.source AND p.metric_id = w.metric_id
+            ORDER BY w.enabled DESC, w.asset_id
+            """
+        )
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def fetch_pending_terms(conn) -> list[dict]:
     """Активи, чий новинний термін чекає на повторну перевірку —
     вхід для джоби `revalidate_news_terms`."""

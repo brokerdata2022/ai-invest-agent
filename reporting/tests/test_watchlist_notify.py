@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from watchlist_notify import format_message
@@ -132,3 +132,40 @@ def test_format_message_no_volatile_section_when_all_stable():
     text = format_message(rows)
     assert "Нестабільні ревізії" not in text
     assert "🔀" not in text
+
+
+# ============================================================
+# "Остання сесія" проти "застаріло"
+# ============================================================
+# Живий фідбек користувача 2026-10-06: "ціна кави застаріла, чого не
+# застосований резерв". Насправді `is_stale()` її застарілою НЕ
+# вважав (1 робочий день), а 292.55 за 05.10 — це останнє закриття
+# ICE: кава не торгується 24/7, на відміну від крипти й форексу. Але
+# звіт показував голу дату, тож відрізнити "ринок закритий" від "наш
+# збір відстав" було НЕМОЖЛИВО.
+
+
+def test_yesterday_close_is_labelled_as_last_session_not_stale():
+    rows = [_row("Кава", observed_at=date.today() - timedelta(days=1), staleness_days=1)]
+    text = format_message(rows)
+
+    assert "остання сесія" in text
+    assert "застаріло" not in text
+
+
+def test_today_price_has_no_session_label():
+    """Актив, що торгується 24/7 (крипта), має дату сьогоднішню —
+    жодних пояснень не потрібно, рядок лишається коротким."""
+    text = format_message([_row("BTC/USDT", observed_at=date.today(), staleness_days=0)])
+    assert "остання сесія" not in text
+
+
+def test_genuinely_stale_still_gets_the_warning():
+    """Межа лишається за `is_stale()`: 2+ робочих днів — це вже збій
+    збору, і він мусить кричати, а не прикриватись "сесією"."""
+    rows = [_row("Кава", observed_at=date.today() - timedelta(days=10),
+                 staleness_days=10, is_stale=True)]
+    text = format_message(rows)
+
+    assert "застаріло" in text
+    assert "остання сесія" not in text

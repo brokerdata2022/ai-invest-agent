@@ -4,6 +4,9 @@ format_*) без мережі/БД, і process_update()/get_offset()/save_offset
 на фейкових conn/cursor та підміненими launch_job/send_telegram_message
 (той самий підхід, що test_scheduler_heartbeat.py)."""
 
+from datetime import date
+from decimal import Decimal
+
 import telegram_commands
 from telegram_commands import (
     _resolve_news_search_term,
@@ -571,13 +574,25 @@ def test_handle_watchlist_remove_disables_enabled_asset(monkeypatch):
 
 def test_process_update_watchlist_list_dispatches(monkeypatch):
     sent = []
-    monkeypatch.setattr(telegram_commands, "fetch_watchlist", lambda conn: [{"asset_id": "btc", "source": "binance", "label": "BTC/USDT"}])
+    # 2026-10-06: /watchlist_list показує СТАН списку (ціна+дата+статус
+    # новинного терміну), тож читає fetch_watchlist_health(), не
+    # fetch_watchlist().
+    monkeypatch.setattr(
+        telegram_commands, "fetch_watchlist_health",
+        lambda conn: [{
+            "asset_id": "btc", "source": "binance", "label": "BTC/USDT",
+            "metric_id": "btc_close", "enabled": True, "added_via": "seed",
+            "search_term": "Bitcoin", "search_term_status": "validated",
+            "price": Decimal("65000"), "observed_at": date.today(),
+        }],
+    )
     monkeypatch.setattr(telegram_commands, "send_telegram_message", lambda token, chat_id, text, **k: sent.append(text))
 
     process_update(_message("/watchlist_list"), configured_chat_id="123456", token="T", conn=object())
 
     assert len(sent) == 1
     assert "btc" in sent[0]
+    assert "у новинному запиті" in sent[0]
 
 
 def test_process_update_watchlist_add_dispatches_with_parsed_args(monkeypatch):

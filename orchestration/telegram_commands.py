@@ -64,6 +64,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -79,12 +80,13 @@ sys.path.insert(0, str(REPO_ROOT / "reporting"))
 from _common import bold, escape_html  # noqa: E402
 from command_descriptions import INFO_JOB_NAMES, JOB_DESCRIPTIONS, SPECIAL_COMMAND_DESCRIPTIONS  # noqa: E402
 from common.db import get_connection  # noqa: E402
+from common.freshness import is_stale  # noqa: E402
 from common.watchlist_db import (  # noqa: E402
     TERM_PENDING,
     TERM_REJECTED,
     TERM_VALIDATED,
     add_asset,
-    fetch_watchlist,
+    fetch_watchlist_health,
     find_asset,
     set_enabled,
 )
@@ -153,13 +155,62 @@ def format_unknown_command(command: str) -> str:
     return f"❓ Невідома команда: {bold('/' + command)}\n/help — список команд"
 
 
+# Статус новинного терміну людською мовою. Три стани — три різні
+# тексти: "очікує перевірки" ≠ "відхилено назавжди" (2026-10-06).
+_TERM_LABEL = {
+    TERM_VALIDATED: "✅ у новинному запиті",
+    TERM_PENDING: "⏳ термін очікує перевірки",
+    TERM_REJECTED: "⛔ без новин (GDELT відхилив термін)",
+}
+
+
 def format_watchlist_list(rows: list[dict]) -> str:
+    """Звіт про СТАН списку обраних, не просто перелік назв.
+
+    Переписано 2026-10-06 після фідбеку користувача ("ти маєш
+    контролювати список обраних"): раніше тут були лише asset_id,
+    назва й джерело — тобто побачити, чи ціна свіжа і чи актив узагалі
+    бере участь у новинному запиті, з бота було НЕМОЖЛИВО. Тепер
+    кожен рядок відповідає на три питання: яка ціна і на яку дату, чи
+    вона не застаріла, і що з новинами."""
     if not rows:
         return "📋 Watchlist порожній."
-    lines = [bold(f"📋 Watchlist ({len(rows)}):"), ""]
+
+    active = [r for r in rows if r.get("enabled", True)]
+    lines = [bold(f"📋 Watchlist — стан списку ({len(active)} активних)"), ""]
     for row in rows:
-        lines.append(f"• {bold(row['asset_id'])} — {escape_html(row['label'])} ({escape_html(row['source'])})")
-    return "\n".join(lines)
+        source = escape_html(row["source"])
+        head = f"• {bold(row['asset_id'])} — {escape_html(row['label'])} ({source})"
+        if not row.get("enabled", True):
+            head += " · <i>вимкнено</i>"
+        if row.get("added_via") == "telegram":
+            # Прямо показуємо, що актив доданий саме через бота —
+            # відповідь на "чи він узагалі додався".
+            head += " · <i>додано через Telegram</i>"
+        lines.append(head)
+
+        observed_at = row.get("observed_at")
+        if observed_at is None:
+            lines.append("   ⚠️ ціни ще немає — джерело не віддало жодної точки")
+        else:
+            days = (date.today() - observed_at).days
+            if is_stale(observed_at):
+                mark = f" ⚠️ застаріло ({days}дн)"
+            elif days >= 1:
+                # Не застарілість, а остання закрита сесія (кава/
+                # ф'ючерси не торгуються 24/7) — та сама позначка, що
+                # в reporting/watchlist_notify.py.
+                mark = " · остання сесія"
+            else:
+                mark = ""
+            lines.append(f"   ціна {row['price']} · {observed_at.isoformat()}{mark}")
+
+        status = row.get("search_term_status")
+        term = f" {escape_html(row['search_term'])}" if row.get("search_term") else ""
+        lines.append(f"   новини: {_TERM_LABEL.get(status, status or '—')}{term}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
 
 
 def validate_twelvedata_ticker(ticker: str, api_key: str) -> bool:
@@ -425,7 +476,7 @@ def process_update(
     if command in HELP_COMMANDS:
         send_telegram_message(token, configured_chat_id, format_help(), parse_mode="HTML")
     elif command == "watchlist_list":
-        rows = fetch_watchlist(conn)
+        rows = fetch_watchlist_health(conn)
         send_telegram_message(token, configured_chat_id, format_watchlist_list(rows), parse_mode="HTML")
     elif command == "watchlist_add":
         reply = handle_watchlist_add(conn, parse_command_args(text), twelvedata_api_key)
