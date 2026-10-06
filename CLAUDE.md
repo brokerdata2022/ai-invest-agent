@@ -221,8 +221,10 @@ docker compose exec app python data-ingestion/run_collect.py --source sec_edgar 
 # Масовий збір по всьому S&P 500 (companies/ — SEC EDGAR фундаментал)
 docker compose exec app python data-ingestion/collect_companies_universe.py
 
-# Прогноз наступного значення показника (LLM, усі 15 показників
-# календаря; автоматично — джоба update_forecasts одразу після релізу)
+# Прогноз наступного значення показника. МЕТОД обирається за показником
+# (analysis/forecasting/method_selector.py): ШІ лише де бектест довів
+# перевагу над naive, інакше naive без виклику. Автоматично — джоба
+# update_forecasts одразу після релізу
 docker compose exec app python analysis/forecasting/forecast_metric.py --metric cpi
 docker compose exec app python reporting/forecast_notify.py
 

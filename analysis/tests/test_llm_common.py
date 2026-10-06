@@ -138,14 +138,20 @@ def test_call_llm_uses_route_provider(monkeypatch):
     assert captured == {"prompt": "some prompt", "system_prompt": "system"}
 
 
-def test_forecast_route_goes_to_anthropic_opus(monkeypatch):
-    """Рішення користувача 2026-10-05: Opus 5 саме на прогноз, бо він
-    формує ЧИСЛО, а не текст."""
+def test_forecast_route_stays_on_the_cheapest_model(monkeypatch):
+    """Рішення користувача 2026-10-05 ПІСЛЯ трьох бектестів: прогноз
+    на DeepSeek, не на Opus 5.
+
+    Спершу прогноз маршрутизували на Opus ("дорожча модель на
+    найважливіше завдання"), але три прогони на тих самих 19
+    показниках × 8 точках це не підтвердили: DeepSeek 8 перемог/4
+    поразки, Opus 7/7, Sonnet 6/5 — при десятикратній різниці в ціні
+    (PLAN.md Фаза 2). Цей тест стереже саме рішення, а не реалізацію:
+    якщо хтось поверне дорогу модель без нового бектесту, він
+    впаде."""
     monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
     route = resolve_route("metric_forecast")
-    assert route.provider == "anthropic"
-    assert route.model == config.ANTHROPIC_MODEL_FORECAST
-    assert route.effort == "high"
+    assert route.provider == "deepseek"
 
 
 def test_backtest_shares_the_forecast_route(monkeypatch):
@@ -178,6 +184,15 @@ def test_env_override_wins_over_every_route(monkeypatch):
     assert resolve_route("metric_forecast").provider == "deepseek"
 
 
+def test_synthesis_route_is_the_anthropic_one(monkeypatch):
+    """Anthropic лишається там, де якість не міряється MAE — текстові
+    висновки, які читає людина (рішення 2026-10-05)."""
+    monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
+    route = resolve_route("market_context_synthesis")
+    assert route.provider == "anthropic"
+    assert route.model == config.ANTHROPIC_MODEL_SYNTHESIS
+
+
 def test_unknown_purpose_falls_back_to_default_route(monkeypatch):
     monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)
     route = resolve_route("щось_чого_немає_в_мапі")
@@ -206,13 +221,15 @@ def test_anthropic_failure_falls_back_to_deepseek(monkeypatch):
         lambda prompt, api_key, system_prompt=None, **kwargs: json.dumps(VALID_RESPONSE),
     )
 
-    result = call_llm("prompt", "system", purpose="metric_forecast")
+    # Будь-яке призначення, маршрутизоване на Anthropic (прогноз з
+    # 2026-10-05 на DeepSeek — див. тест маршруту вище).
+    result = call_llm("prompt", "system", purpose="market_context_synthesis")
 
     assert result.text == json.dumps(VALID_RESPONSE)
     assert result.provider == "deepseek"
     # Підміна мусить бути ВИДИМОЮ — інакше "працює на дешевшій моделі"
     # виглядало б як норма (саме так тижнями не помічався мертвий GDELT).
-    assert result.fallback_from == f"anthropic/{config.ANTHROPIC_MODEL_FORECAST}"
+    assert result.fallback_from == f"anthropic/{config.ANTHROPIC_MODEL_SYNTHESIS}"
 
 
 def test_both_providers_down_raises_llm_error(monkeypatch):
@@ -227,7 +244,7 @@ def test_both_providers_down_raises_llm_error(monkeypatch):
     monkeypatch.setattr(llm_common, "call_deepseek", boom)
 
     with pytest.raises(LlmError):
-        call_llm("prompt", "system", purpose="metric_forecast")
+        call_llm("prompt", "system", purpose="market_context_synthesis")
 
 
 def test_deepseek_failure_does_not_retry_itself(monkeypatch):
@@ -268,7 +285,7 @@ def test_require_api_key_checks_the_purposes_provider(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(SystemExit):
-        require_api_key("metric_forecast")
+        require_api_key("market_context_synthesis")
 
 
 def test_require_api_key_exits_on_unsupported_provider(monkeypatch):

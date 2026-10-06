@@ -1003,3 +1003,41 @@ ALTER TABLE llm_call_log ADD COLUMN IF NOT EXISTS fallback_from TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_purpose_created
     ON llm_call_log (purpose, created_at DESC);
+
+-- 2026-10-05: ВЕРДИКТИ БЕКТЕСТУ (P0 плану покращення прогнозу).
+--
+-- До цього `backtest_llm.py` лише ДРУКУВАВ результат у лог — тож
+-- "чи варто довіряти прогнозу на цьому показнику" знала тільки
+-- людина, що читала вивід, і бойовий прогноз однаково викликав LLM
+-- для всіх 19 показників. Наслідок, зміряний живо: 4 показники
+-- стабільно надсилали в Telegram прогноз, ГІРШИЙ за безкоштовне
+-- "нічого не змінилось", а 2 ряди не рухались жодного разу.
+--
+-- Append-only журнал ПРОГОНІВ (не "поточний стан"): три прогони того
+-- самого показника різними моделями — три рядки, і саме їхнє
+-- порівняння й показало, що розкид між моделями більший за перевагу
+-- будь-якої з них. Перезатирати це означало б втратити єдиний
+-- доказ, на якому тримається вибір методу.
+--
+-- `model` обов'язковий поруч із `provider`: на одному провайдері дві
+-- моделі з різною ціною й різним результатом (Opus 5 vs Sonnet 5).
+CREATE TABLE IF NOT EXISTS backtest_verdicts (
+    id             BIGSERIAL PRIMARY KEY,
+    metric_id      TEXT NOT NULL,
+    provider       TEXT NOT NULL,
+    model          TEXT NOT NULL,
+    effort         TEXT,                -- лише Anthropic; NULL для DeepSeek
+    n_points       INTEGER NOT NULL,
+    n_skipped      INTEGER NOT NULL,
+    llm_mae        NUMERIC,
+    naive_mae      NUMERIC,
+    trend_mae      NUMERIC,
+    -- llm_wins | naive_wins | tie | flat_series | noise
+    -- (межа "перемога vs шум" — config.py:FORECAST_MEANINGFUL_EDGE_PCT)
+    verdict        TEXT NOT NULL,
+    advantage_pct  NUMERIC,             -- +27.5 = LLM на 27.5% точніший за naive
+    run_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_verdicts_metric
+    ON backtest_verdicts (metric_id, model, run_at DESC);

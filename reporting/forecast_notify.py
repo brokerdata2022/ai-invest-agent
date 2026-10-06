@@ -51,10 +51,26 @@ from telegram_notify import METRIC_LABELS  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Лише LLM-прогнози: `linear_trend` лишається в тій самій таблиці як
-# базова лінія для backtest (analysis/forecasting/trend.py) — це
-# внутрішній інструмент оцінки якості, не висновок для користувача.
-METHOD = "llm"
+# Прогнози, що йдуть користувачеві: усі, КРІМ `linear_trend` —
+# він лишається в тій самій таблиці як базова лінія для backtest
+# (analysis/forecasting/trend.py), тобто внутрішній інструмент оцінки
+# якості, не висновок.
+#
+# 2026-10-05: було `method = 'llm'` — і з появою вибору методу за
+# показником (P0) це тихо викинуло б із Telegram усі прогнози, де ШІ
+# свідомо не викликався (`naive_flat`, `naive_llm_worse`): показник
+# просто зник би зі звіту, і це читалось би як збій. Тепер він
+# приходить із явною причиною, чому без ШІ.
+EXCLUDED_METHOD = "linear_trend"
+
+# Людські підписи методів — користувач не має читати внутрішні
+# ідентифікатори.
+METHOD_LABELS = {
+    "llm": "ШІ-прогноз",
+    "llm_unvalidated": "ШІ-прогноз (бектест не проводився)",
+    "naive_flat": "без змін (ряд не рухається)",
+    "naive_llm_worse": "без змін (ШІ тут не кращий за базову лінію)",
+}
 
 
 def fetch_unnotified_forecasts(conn, limit: int = 10) -> list[dict]:
@@ -64,19 +80,20 @@ def fetch_unnotified_forecasts(conn, limit: int = 10) -> list[dict]:
     тоді, коли рядок спостереження чомусь не знайшовся."""
     query = """
         SELECT f.id, f.source, f.metric_id, f.based_on_observed_at, f.periods_ahead,
-               f.forecast_value, f.direction, f.confidence, f.summary, f.created_at,
+               f.forecast_value, f.direction, f.confidence, f.summary, f.method,
+               f.reasoning, f.created_at,
                o.value AS last_actual
         FROM metric_forecasts f
         LEFT JOIN v_observations_latest_revision o
                ON o.source = f.source
               AND o.metric_id = f.metric_id
               AND o.observed_at = f.based_on_observed_at
-        WHERE f.method = %s
+        WHERE f.method <> %s
           AND f.notified_at IS NULL
         ORDER BY f.created_at DESC
         LIMIT %s
     """
-    return fetch_dicts(conn, query, (METHOD, limit))
+    return fetch_dicts(conn, query, (EXCLUDED_METHOD, limit))
 
 
 def fetch_next_release(conn, metric_id: str):
@@ -119,6 +136,20 @@ def format_forecast_block(row: dict, next_release) -> list[str]:
     )
     forecast_text = f"{float(row['forecast_value']):.6g}"
     lines.append(f"{emoji} Наш прогноз: {bold(forecast_text)}{confidence_suffix}")
+
+    # МЕТОД обов'язково (2026-10-05): з вибором методу за показником
+    # частина прогнозів свідомо БЕЗ ШІ, і подавати їх як ШІ-висновок
+    # було б неправдою. Для звичайного llm-прогнозу підпис не
+    # додається — це дефолт, і рядок лише захаращував би звіт.
+    method = row.get("method")
+    if method and method != "llm":
+        label_method = METHOD_LABELS.get(method, method)
+        lines.append(f"<i>Метод: {escape_html(label_method)}</i>")
+        # Для не-ШІ прогнозу `reasoning` несе ПРИЧИНУ вибору методу
+        # (method_selector.MethodChoice.why) — єдине місце, де
+        # користувач дізнається, чому показник без ШІ-прогнозу.
+        if method.startswith("naive") and row.get("reasoning"):
+            lines.append(f"<i>{escape_html(row['reasoning'])}</i>")
 
     if next_release is not None:
         when = escape_html(format_local_dt(next_release["scheduled_at"]))

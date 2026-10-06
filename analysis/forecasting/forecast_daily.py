@@ -50,7 +50,7 @@ from llm_common import require_api_key  # noqa: E402
 from metric_sources import DAILY_ADAPTER_BY_METRIC  # noqa: E402
 
 from forecasting._metric_source import resolve_source  # noqa: E402
-from forecasting.forecast_metric import METHOD, run_forecast  # noqa: E402
+from forecasting.forecast_metric import run_forecast  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -60,7 +60,14 @@ def has_forecast_for_latest(conn, source: str, metric_id: str) -> bool:
     """Чи вже є прогноз, побудований на НАЙСВІЖІШОМУ спостереженні
     цього показника. Порівнюється саме `based_on_observed_at`, не дата
     створення: денна серія з лагом публікації кілька днів стоїть на
-    тому самому значенні, і прогноз на нього вже зроблений."""
+    тому самому значенні, і прогноз на нього вже зроблений.
+
+    МЕТОД у фільтрі свідомо НЕ враховується (2026-10-05): з вибором
+    методу за показником той самий прогноз може бути записаний як
+    `llm`, `llm_unvalidated`, `naive_flat` чи `naive_llm_worse`, і
+    перевірка лише по 'llm' щодня знаходила б "прогнозу нема" й
+    робила новий. Виняток — `linear_trend`: це базова лінія бектесту,
+    не висновок, і вона не має вважатись готовим прогнозом."""
     observations = fetch_recent(conn, source, metric_id, limit=1)
     if not observations:
         return False
@@ -69,10 +76,11 @@ def has_forecast_for_latest(conn, source: str, metric_id: str) -> bool:
         cur.execute(
             """
             SELECT 1 FROM metric_forecasts
-            WHERE source = %s AND metric_id = %s AND method = %s
+            WHERE source = %s AND metric_id = %s
+              AND method <> 'linear_trend'
               AND based_on_observed_at = %s
             """,
-            (source, metric_id, METHOD, latest),
+            (source, metric_id, latest),
         )
         return cur.fetchone() is not None
 

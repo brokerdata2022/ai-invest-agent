@@ -37,6 +37,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 from common.db import get_connection, fetch_recent  # noqa: E402
 from llm_common import (  # noqa: E402
     LlmError,
+    resolve_route,
     SynthesisResponseError,
     call_llm,
     log_llm_call,
@@ -53,6 +54,9 @@ from forecasting.llm_forecast import (  # noqa: E402
     parse_forecast_response,
 )
 from forecasting._db import save_forecast  # noqa: E402
+from forecasting._verdict_db import fetch_verdict  # noqa: E402
+from forecasting.method_selector import choose_method  # noqa: E402
+from forecasting.trend import naive_forecast  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -87,6 +91,49 @@ FORECASTABLE_METRICS = frozenset(ADAPTER_BY_METRIC) | frozenset(DAILY_ADAPTER_BY
 MIN_HISTORY = 5
 
 
+def _save_naive_forecast(
+    conn, source: str, metric_id: str, choice, values: list[float],
+    based_on_observed_at, periods_ahead: int,
+) -> Optional[int]:
+    """Прогноз БЕЗ виклику LLM — останнє значення без змін
+    (`trend.naive_forecast`).
+
+    Пишеться в ту саму таблицю й тим самим шляхом, що LLM-прогноз, але
+    з іншим `method` і БЕЗ `confidence`/`llm_call_id`: вигадувати
+    впевненість для арифметики було б неправдою, а `reasoning` несе
+    ПРИЧИНУ вибору методу — саме її користувач має побачити в
+    Telegram замість зниклого ШІ-прогнозу.
+
+    `direction='neutral'` — прогноз дорівнює поточному значенню, тож
+    напрямку немає за визначенням (словник напрямків —
+    llm_common.DIRECTIONS)."""
+    forecast_value = naive_forecast(values)
+    if forecast_value is None:
+        logger.warning("%s: порожня історія — naive-прогноз неможливий", metric_id)
+        return None
+
+    forecast_id = save_forecast(
+        conn,
+        source=source,
+        metric_id=metric_id,
+        method=choice.method,
+        based_on_observed_at=based_on_observed_at,
+        periods_ahead=periods_ahead,
+        forecast_value=forecast_value,
+        direction="neutral",
+        confidence=None,
+        summary=f"Без змін: {forecast_value:.6g}",
+        reasoning=choice.why,
+        llm_call_id=None,
+    )
+    logger.info(
+        "%s: прогноз БЕЗ ШІ на %d період(и) від %s = %.6g (метод %s, id=%d)",
+        metric_id, periods_ahead, based_on_observed_at, forecast_value,
+        choice.method, forecast_id,
+    )
+    return forecast_id
+
+
 def run_forecast(
     conn, metric_id: str, periods_ahead: int = 1, limit: int = 24
 ) -> Optional[int]:
@@ -108,6 +155,26 @@ def run_forecast(
     chronological = list(reversed(observations))
     values = [float(o["value"]) for o in chronological]
     based_on_observed_at = chronological[-1]["observed_at"]
+
+    # ВИБІР МЕТОДУ (P0, 2026-10-05) — до цього LLM викликався для ВСІХ
+    # 19 показників однаково, і 4 з них стабільно надсилали прогноз,
+    # гірший за безкоштовне "нічого не змінилось", а 2 ряди не
+    # рухались жодного разу. Вердикт читається для МОДЕЛІ, якою
+    # прогноз реально робиться (`config.py:LLM_ROUTES`).
+    route = resolve_route("metric_forecast")
+    stored = fetch_verdict(conn, metric_id, route.model)
+    choice = choose_method(
+        values,
+        verdict=stored["verdict"] if stored else None,
+        advantage_pct=float(stored["advantage_pct"]) if stored and stored["advantage_pct"] is not None else None,
+        verdict_model=stored["model"] if stored else None,
+    )
+    logger.info("%s: метод %s — %s", metric_id, choice.method, choice.why)
+
+    if not choice.use_llm:
+        return _save_naive_forecast(
+            conn, source, metric_id, choice, values, based_on_observed_at, periods_ahead
+        )
 
     prompt = build_prompt(metric_id, describe_metric(metric_id), chronological)
     llm = call_llm(prompt, SYSTEM_PROMPT, purpose="metric_forecast")
@@ -138,7 +205,7 @@ def run_forecast(
         conn,
         source=source,
         metric_id=metric_id,
-        method=METHOD,
+        method=choice.method,
         based_on_observed_at=based_on_observed_at,
         periods_ahead=periods_ahead,
         forecast_value=result.forecast_value,

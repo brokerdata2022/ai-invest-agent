@@ -54,6 +54,8 @@ from llm_common import (  # noqa: E402
 )
 
 from forecasting._metric_source import resolve_source  # noqa: E402
+from forecasting._verdict_db import save_verdict  # noqa: E402
+from forecasting.method_selector import classify_backtest  # noqa: E402
 from forecasting.llm_forecast import (  # noqa: E402
     SYSTEM_PROMPT,
     build_prompt,
@@ -301,15 +303,42 @@ def main() -> None:
             points=args.points,
             min_history=args.min_history,
         )
+
+        if result["n_points"] == 0:
+            logger.error(
+                "%s: жодної точки не вдалось перевірити (пропущено %d) — результату немає",
+                args.metric, result["n_skipped"],
+            )
+            sys.exit(1)
+
+        # Вердикт у БД (P0, 2026-10-05): доти результат бектесту лишався
+        # ЛИШЕ в лозі, тож бойовий прогноз не мав як дізнатись, що на
+        # цьому показнику ШІ гірший за безкоштовну базову лінію — і
+        # далі платив за виклик. Тепер `forecast_metric.py` читає саме
+        # цей рядок.
+        verdict, advantage_pct = classify_backtest(result["llm_mae"], result["naive_mae"])
+        save_verdict(
+            conn,
+            metric_id=result["metric_id"],
+            provider=route.provider,
+            model=route.model,
+            effort=route.effort,
+            n_points=result["n_points"],
+            n_skipped=result["n_skipped"],
+            llm_mae=result["llm_mae"],
+            naive_mae=result["naive_mae"],
+            trend_mae=result["trend_mae"],
+            verdict=verdict,
+            advantage_pct=advantage_pct,
+        )
+        logger.info(
+            "%s: вердикт %r (%s) збережено для %s",
+            result["metric_id"], verdict,
+            f"{advantage_pct:+.1f}%" if advantage_pct is not None else "без відсотків",
+            route.model,
+        )
     finally:
         conn.close()
-
-    if result["n_points"] == 0:
-        logger.error(
-            "%s: жодної точки не вдалось перевірити (пропущено %d) — результату немає",
-            args.metric, result["n_skipped"],
-        )
-        sys.exit(1)
 
     # Провайдер у виводі ОБОВ'ЯЗКОВО (2026-10-04, питання користувача):
     # числа в колонці LLM специфічні для конкретної МОДЕЛІ (не лише
