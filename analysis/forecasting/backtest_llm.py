@@ -65,6 +65,11 @@ from forecasting.llm_forecast import (  # noqa: E402
 )
 from forecasting.trend import linear_trend_forecast, naive_forecast  # noqa: E402
 
+from config import (  # noqa: E402
+    FORECAST_HISTORY_POINTS,
+    FORECAST_TREND_BASELINE_POINTS,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -141,7 +146,9 @@ def backtest_llm_metric(
         naive_pred = naive_forecast(history_values)
         if naive_pred is not None:
             naive_errors.append(abs(actual - naive_pred))
-        trend_pred = linear_trend_forecast(history_values)
+        trend_pred = linear_trend_forecast(
+            history_values, window=FORECAST_TREND_BASELINE_POINTS
+        )
         if trend_pred is not None:
             trend_errors.append(abs(actual - trend_pred))
 
@@ -168,7 +175,14 @@ def make_llm_forecast_fn(
     реальними при розборі постфактум."""
 
     def forecast_fn(history_rows: list[dict]) -> Optional[float]:
-        prompt = build_prompt(metric_id, describe_metric(metric_id), history_rows)
+        # ТЕ САМЕ вікно історії, що бойовий прогноз
+        # (`forecast_metric.run_forecast(limit=FORECAST_HISTORY_POINTS)`).
+        # 2026-10-06: доти сюди йшла ВСЯ історія, і після backfill
+        # (14 -> 285 точок) бектест став міряти модель на 190 рядках,
+        # тоді як продакшен давав 24 — тобто виміряна точність більше
+        # не стосувалась того, що працює.
+        windowed = history_rows[-FORECAST_HISTORY_POINTS:]
+        prompt = build_prompt(metric_id, describe_metric(metric_id), windowed)
         try:
             llm = call_llm(
                 prompt, SYSTEM_PROMPT, purpose="metric_forecast_backtest", route=route

@@ -24,13 +24,24 @@ def naive_forecast(values: list[float]) -> Optional[float]:
     return values[-1]
 
 
-def linear_trend_forecast(values: list[float], periods_ahead: int = 1) -> Optional[float]:
+def linear_trend_forecast(
+    values: list[float], periods_ahead: int = 1, window: Optional[int] = None
+) -> Optional[float]:
     """Звичайна лінійна регресія (метод найменших квадратів) значення
     від порядкового номера точки (0, 1, 2, ...), екстраполяція на
     `periods_ahead` кроків уперед. Свідомо не враховує фактичні дати
     (той самий стиль задокументованого спрощення, що
     expectations/comparison_methods.py:yoy_pct) — припускає регулярний
-    інтервал між точками. Потрібно щонайменше 2 точки."""
+    інтервал між точками. Потрібно щонайменше 2 точки.
+
+    `window` (2026-10-06) — рахувати лише по останніх N точках.
+    Без нього регресія через усю історію (після backfill це ~285
+    точок, тобто 20+ років) будує пряму, що не має нічого спільного з
+    наступним місяцем: живо MAE 28462 проти 5064 у naive. Базова
+    лінія мусить бути ЛОКАЛЬНОЮ, інакше вона не базова лінія, а
+    карикатура."""
+    if window is not None and window >= 2:
+        values = values[-window:]
     n = len(values)
     if n < 2:
         return None

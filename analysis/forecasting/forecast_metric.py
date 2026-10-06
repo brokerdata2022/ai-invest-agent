@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "monitoring"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection, fetch_recent  # noqa: E402
+from config import FORECAST_HISTORY_POINTS  # noqa: E402
 from llm_common import (  # noqa: E402
     LlmError,
     resolve_route,
@@ -135,7 +136,7 @@ def _save_naive_forecast(
 
 
 def run_forecast(
-    conn, metric_id: str, periods_ahead: int = 1, limit: int = 24
+    conn, metric_id: str, periods_ahead: int = 1, limit: int = FORECAST_HISTORY_POINTS
 ) -> Optional[int]:
     """Формує й зберігає LLM-прогноз для одного показника. Спільна
     логіка між CLI (main(), ручний прогін) і update_forecasts.py
@@ -231,7 +232,8 @@ def main() -> None:
     parser.add_argument("--metric", required=True)
     parser.add_argument("--periods-ahead", type=int, default=1)
     parser.add_argument(
-        "--limit", type=int, default=24, help="скільки останніх спостережень давати LLM"
+        "--limit", type=int, default=FORECAST_HISTORY_POINTS,
+        help="скільки останніх спостережень давати LLM (дефолт — config.py)"
     )
     args = parser.parse_args()
 

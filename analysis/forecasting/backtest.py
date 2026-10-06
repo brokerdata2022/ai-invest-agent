@@ -42,6 +42,8 @@ from common.db import get_connection, fetch_recent  # noqa: E402
 from forecasting._metric_source import resolve_source  # noqa: E402
 from forecasting.trend import linear_trend_forecast, naive_forecast  # noqa: E402
 
+from config import FORECAST_TREND_BASELINE_POINTS  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,10 @@ def backtest_metric(metric_id: str, observations_desc: list[dict], min_history: 
         history = values[:i]
         actual = values[i]
 
-        trend_pred = linear_trend_forecast(history)
+        # Локальне вікно (2026-10-06): регресія через усю історію
+        # після backfill (~285 точок) дає абсурд — та сама причина, що
+        # в backtest_llm.py.
+        trend_pred = linear_trend_forecast(history, window=FORECAST_TREND_BASELINE_POINTS)
         if trend_pred is not None:
             trend_errors.append(abs(actual - trend_pred))
 

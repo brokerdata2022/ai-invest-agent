@@ -4,6 +4,8 @@
 Той самий підхід, що test_backtest.py для лінійної моделі.
 """
 
+from types import SimpleNamespace
+
 from forecasting.backtest_llm import (
     backtest_llm_metric,
     format_verdict,
@@ -196,3 +198,62 @@ def test_provider_and_effort_flags_apply(monkeypatch):
 
     route = resolve_backtest_route(_Args(effort="low"))
     assert route.effort == "low"
+
+
+# ============================================================
+# Бектест мусить міряти ТЕ САМЕ, що працює в продакшені
+# ============================================================
+# Живий збій 2026-10-06: історію добрали з 14-30 точок до ~285, і
+# бектест почав віддавати моделі УСЮ історію (190 рядків, промпт виріс
+# у 5-6 разів), тоді як `forecast_metric.run_forecast()` і далі давав
+# 24 точки. Виміряна точність перестала стосуватись бойового
+# прогнозу — і це було невидимо, доки історія була коротка.
+
+
+def test_backtest_uses_production_history_window(monkeypatch):
+    """Промпт бектесту будується на тому самому вікні, що бойовий
+    прогноз (`config.FORECAST_HISTORY_POINTS`), а не на всій історії."""
+    import config
+    from forecasting import backtest_llm
+
+    captured = {}
+
+    def fake_build_prompt(metric_id, label, rows):
+        captured["rows"] = len(rows)
+        return "PROMPT"
+
+    monkeypatch.setattr(backtest_llm, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(backtest_llm, "describe_metric", lambda m: m)
+    monkeypatch.setattr(
+        backtest_llm, "call_llm",
+        lambda prompt, system, purpose=None, route=None: SimpleNamespace(
+            text='{"forecast_value": 1}', provider="deepseek", model="deepseek-chat",
+            fallback_from=None,
+        ),
+    )
+    monkeypatch.setattr(backtest_llm, "log_llm_call", lambda *a, **k: 1)
+    monkeypatch.setattr(backtest_llm, "parse_forecast_response", lambda raw: SimpleNamespace(forecast_value=1.0))
+    monkeypatch.setattr(backtest_llm, "is_plausible", lambda values, v: (True, ""))
+
+    # Історія ВТРИЧІ довша за продакшен-вікно.
+    long_history = [
+        {"observed_at": f"2026-01-{i:02d}", "value": float(i)}
+        for i in range(1, config.FORECAST_HISTORY_POINTS * 3)
+    ]
+    backtest_llm.make_llm_forecast_fn(conn=None, metric_id="cpi")(long_history)
+
+    assert captured["rows"] == config.FORECAST_HISTORY_POINTS, (
+        "бектест дав моделі інше вікно історії, ніж бойовий прогноз — "
+        "виміряна точність не стосуватиметься продакшену"
+    )
+
+
+def test_production_default_limit_equals_the_config_window():
+    """Друга половина тієї самої гарантії: бойовий прогноз не має
+    власного літерала вікна."""
+    import inspect
+
+    import config
+    from forecasting.forecast_metric import run_forecast
+
+    assert inspect.signature(run_forecast).parameters["limit"].default == config.FORECAST_HISTORY_POINTS
