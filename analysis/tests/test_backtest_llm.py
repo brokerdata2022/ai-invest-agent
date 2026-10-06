@@ -218,8 +218,9 @@ def test_backtest_uses_production_history_window(monkeypatch):
 
     captured = {}
 
-    def fake_build_prompt(metric_id, label, rows):
+    def fake_build_prompt(metric_id, label, rows, include_deltas=True):
         captured["rows"] = len(rows)
+        captured["include_deltas"] = include_deltas
         return "PROMPT"
 
     monkeypatch.setattr(backtest_llm, "build_prompt", fake_build_prompt)
@@ -257,3 +258,38 @@ def test_production_default_limit_equals_the_config_window():
     from forecasting.forecast_metric import run_forecast
 
     assert inspect.signature(run_forecast).parameters["limit"].default == config.FORECAST_HISTORY_POINTS
+
+
+def test_no_delta_flag_switches_the_prompt_variant(monkeypatch):
+    """Варіант промпта мусить бути ПАРАМЕТРОМ виміру, як `--model`:
+    інакше порівняти "з Δ" і "без Δ" можна лише правкою коду посеред
+    серії прогонів — а саме це двічі за 2026-10-06 зробило таблицю
+    результатів несумісною самою з собою."""
+    from forecasting import backtest_llm
+
+    captured = {}
+
+    def fake_build_prompt(metric_id, label, rows, include_deltas=True):
+        captured["include_deltas"] = include_deltas
+        return "PROMPT"
+
+    monkeypatch.setattr(backtest_llm, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(backtest_llm, "describe_metric", lambda m: m)
+    monkeypatch.setattr(
+        backtest_llm, "call_llm",
+        lambda prompt, system, purpose=None, route=None: SimpleNamespace(
+            text='{"forecast_value": 1}', provider="deepseek", model="deepseek-chat",
+            fallback_from=None,
+        ),
+    )
+    monkeypatch.setattr(backtest_llm, "log_llm_call", lambda *a, **k: 1)
+    monkeypatch.setattr(backtest_llm, "parse_forecast_response", lambda raw: SimpleNamespace(forecast_value=1.0))
+    monkeypatch.setattr(backtest_llm, "is_plausible", lambda values, v: (True, ""))
+
+    history = [{"observed_at": "2026-01-01", "value": 1.0}, {"observed_at": "2026-02-01", "value": 2.0}]
+
+    backtest_llm.make_llm_forecast_fn(None, "cpi", include_deltas=False)(history)
+    assert captured["include_deltas"] is False
+
+    backtest_llm.make_llm_forecast_fn(None, "cpi")(history)
+    assert captured["include_deltas"] is True

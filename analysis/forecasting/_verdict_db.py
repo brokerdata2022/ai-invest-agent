@@ -26,19 +26,22 @@ def save_verdict(
     trend_mae: Optional[float],
     verdict: str,
     advantage_pct: Optional[float],
+    prompt_variant: Optional[str] = None,
 ) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO backtest_verdicts
                 (metric_id, provider, model, effort, n_points, n_skipped,
-                 llm_mae, naive_mae, trend_mae, verdict, advantage_pct)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 llm_mae, naive_mae, trend_mae, verdict, advantage_pct,
+                 prompt_variant)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 metric_id, provider, model, effort, n_points, n_skipped,
                 llm_mae, naive_mae, trend_mae, verdict, advantage_pct,
+                prompt_variant,
             ),
         )
         verdict_id = cur.fetchone()[0]
@@ -56,7 +59,7 @@ def fetch_verdict(conn, metric_id: str, model: str) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT verdict, advantage_pct, model, n_points, run_at
+            SELECT verdict, advantage_pct, model, n_points, prompt_variant, run_at
             FROM backtest_verdicts
             WHERE metric_id = %s AND model = %s
             ORDER BY run_at DESC
@@ -80,7 +83,7 @@ def fetch_all_latest(conn) -> list[dict]:
             """
             SELECT DISTINCT ON (metric_id, model)
                    metric_id, model, provider, verdict, advantage_pct,
-                   llm_mae, naive_mae, n_points, run_at
+                   llm_mae, naive_mae, n_points, prompt_variant, run_at
             FROM backtest_verdicts
             ORDER BY metric_id, model, run_at DESC
             """

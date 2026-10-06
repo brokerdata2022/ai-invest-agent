@@ -46,6 +46,23 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from config import FORECAST_DELTA_WINDOWS, FORECAST_PLAUSIBILITY_FACTOR
+
+# ЯКА ВЕРСІЯ ПРОМПТА. Пишеться у `backtest_verdicts.prompt_variant`,
+# щоб результати, зміряні різними промптами, не виглядали як один
+# вимір (2026-10-06, двічі за день: спершу вікно історії, потім поява
+# Δ — обидва рази таблиця ставала несумісною сама з собою, і це було
+# видно лише за часом у лозі).
+#
+# ⚠️ ЗМІНИВ ПРОМПТ — ЗМІНИ ЦЕЙ РЯДОК. Інакше новий вимір перезапише
+# старий вердикт, не сказавши, що умови були інші.
+PROMPT_VARIANT = "levels+delta"
+
+# Назва варіанту БЕЗ таблиці Δ — щоб бектест міг зміряти обидва на тих
+# самих точках (`backtest_llm.py --no-delta`) і показати, чи Δ справді
+# допомагає, а не просто "здається кращим".
+PROMPT_VARIANT_LEVELS_ONLY = "levels"
+
 from llm_common import (
     DIRECTIONS,
     SynthesisResponseError,
@@ -55,12 +72,11 @@ from llm_common import (
 
 logger = logging.getLogger(__name__)
 
-# Скільки найбільших історичних кроків (|Δ| між сусідніми точками)
-# дозволено прогнозу відійти від останнього відомого значення, перш ніж
-# він вважається неправдоподібним. 3 — свідомо щедро: мета гейта —
-# ловити помилку ОДИНИЦЬ/порядку (320 проти 3.2), не "надто смілий, але
-# осмислений" прогноз. Калібрування — після накопичення живих відхилень.
-PLAUSIBILITY_FACTOR = 3.0
+# Поріг гейта правдоподібності — `config.py` (2026-10-06: був літералом
+# тут, що порушувало правило "один конфіг на весь агент", і саме це
+# значення відкинуло правильний за напрямком прогноз на COVID-обвалі;
+# обґрунтування нового значення — у конфігу).
+PLAUSIBILITY_FACTOR = FORECAST_PLAUSIBILITY_FACTOR
 
 # Мінімум точок історії, щоб гейт мав на чому працювати: з 2 точок є
 # лише один крок, і він же — міра "нормального" кроку, що робить
@@ -198,18 +214,63 @@ def is_plausible(values: list[float], forecast_value: float) -> tuple[bool, Opti
     return True, None
 
 
-def build_prompt(metric_id: str, label: str, observations_chronological: list[dict]) -> str:
+def mean_delta(values: list[float], window: int) -> Optional[float]:
+    """Середній КРОК (зміна до попередньої точки) за останні `window`
+    кроків. None, якщо кроків менше, ніж window.
+
+    Чиста функція — щоб зведення Δ у промпті було перевіряним без
+    мережі (P1, 2026-10-06)."""
+    if window < 1 or len(values) < window + 1:
+        return None
+    recent = values[-(window + 1):]
+    deltas = [b - a for a, b in zip(recent, recent[1:])]
+    return sum(deltas) / len(deltas)
+
+
+def build_prompt(
+    metric_id: str,
+    label: str,
+    observations_chronological: list[dict],
+    include_deltas: bool = True,
+) -> str:
     """`observations_chronological` — найстаріше перше (як trend.py), з
     ключами observed_at/value; викликач відповідає за розворот
-    fetch_recent()."""
+    fetch_recent().
+
+    КРОКИ (Δ) показуються поруч із рівнями — P1 плану покращення
+    прогнозу (2026-10-06). Причина: обидві сталі слабкості прогнозу,
+    видні в усіх прогонах, це РОЗВОРОТИ (індекс падав, модель
+    продовжувала зростання) і УСКОРЕННЯ (крок прискорився, модель
+    екстраполювала попередній, спокійніший). Обидві мають одне
+    джерело — модель бачила лише рівні й мусила віднімати сама.
+    Готові Δ плюс їхні середні за 3/6/12 кроків роблять і напрямок, і
+    швидкість явними, без жодного додаткового виклику."""
+    values = [float(obs["value"]) for obs in observations_chronological]
+
     lines = [
         f"Показник: {label} (metric_id={metric_id})",
         f"Кількість точок історії: {len(observations_chronological)}",
         "",
-        "Історія (від найстарішого до найновішого):",
+        "Історія (від найстарішого до найновішого"
+        + ("; Δ — зміна до попередньої точки):" if include_deltas else "):"),
     ]
-    for obs in observations_chronological:
-        lines.append(f"{obs['observed_at']}: {float(obs['value']):.6g}")
+    previous: Optional[float] = None
+    for obs, value in zip(observations_chronological, values):
+        if previous is None or not include_deltas:
+            lines.append(f"{obs['observed_at']}: {value:.6g}")
+        else:
+            lines.append(f"{obs['observed_at']}: {value:.6g}  (Δ {value - previous:+.6g})")
+        previous = value
+
+    summary = [] if not include_deltas else [
+        f"за {window} кроків {delta:+.4g}"
+        for window in FORECAST_DELTA_WINDOWS
+        if (delta := mean_delta(values, window)) is not None
+    ]
+    if summary:
+        lines.append("")
+        lines.append("Середній крок (Δ): " + "; ".join(summary) + ".")
+
     lines.append("")
     lines.append(
         "Спрогнозуй наступне значення цього показника (наступний період "

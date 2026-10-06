@@ -57,6 +57,8 @@ from forecasting._metric_source import resolve_source  # noqa: E402
 from forecasting._verdict_db import save_verdict  # noqa: E402
 from forecasting.method_selector import classify_backtest  # noqa: E402
 from forecasting.llm_forecast import (  # noqa: E402
+    PROMPT_VARIANT,
+    PROMPT_VARIANT_LEVELS_ONLY,
     SYSTEM_PROMPT,
     build_prompt,
     describe_metric,
@@ -163,7 +165,7 @@ def backtest_llm_metric(
 
 
 def make_llm_forecast_fn(
-    conn, metric_id: str, route: Optional[LlmRoute] = None
+    conn, metric_id: str, route: Optional[LlmRoute] = None, include_deltas: bool = True
 ) -> Callable[[list[dict]], Optional[float]]:
     """forecast_fn для backtest_llm_metric(): той САМИЙ промпт і той
     самий гейт правдоподібності, що в бойовому forecast_metric.py —
@@ -182,7 +184,9 @@ def make_llm_forecast_fn(
         # тоді як продакшен давав 24 — тобто виміряна точність більше
         # не стосувалась того, що працює.
         windowed = history_rows[-FORECAST_HISTORY_POINTS:]
-        prompt = build_prompt(metric_id, describe_metric(metric_id), windowed)
+        prompt = build_prompt(
+            metric_id, describe_metric(metric_id), windowed, include_deltas=include_deltas
+        )
         try:
             llm = call_llm(
                 prompt, SYSTEM_PROMPT, purpose="metric_forecast_backtest", route=route
@@ -280,6 +284,14 @@ def main() -> None:
     # Перекриття маршруту ЛИШЕ для цього прогону — щоб зміряти іншу
     # модель на тих самих точках, не чіпаючи бойовий прогноз
     # (config.py розділ 9).
+    # Варіант ПРОМПТА як параметр виміру — та сама логіка, що
+    # `--model` (2026-10-06): інакше порівняти "з Δ" і "без Δ" можна
+    # було б лише правкою коду посеред серії прогонів, а саме це вже
+    # двічі зробило таблицю результатів несумісною самою з собою.
+    parser.add_argument(
+        "--no-delta", action="store_true",
+        help="промпт БЕЗ таблиці кроків Δ (для порівняння варіантів промпта)",
+    )
     parser.add_argument("--provider", choices=["deepseek", "anthropic"], default=None)
     parser.add_argument("--model", default=None, help="напр. claude-sonnet-5")
     parser.add_argument(
@@ -313,7 +325,9 @@ def main() -> None:
         result = backtest_llm_metric(
             args.metric,
             observations,
-            make_llm_forecast_fn(conn, args.metric, route=route),
+            make_llm_forecast_fn(
+                conn, args.metric, route=route, include_deltas=not args.no_delta
+            ),
             points=args.points,
             min_history=args.min_history,
         )
@@ -325,49 +339,69 @@ def main() -> None:
             )
             sys.exit(1)
 
+        # ПІДСУМОК ПЕРШИМ, збереження другим (2026-10-06, живий збій:
+        # `japan_cpi` витратив 50 LLM-викликів і не лишив НІЧОГО — на
+        # той момент колонка `prompt_variant` ще не була застосована в
+        # БД, INSERT упав, і виняток забрав із собою ще й не
+        # надрукований результат). Міряння коштує грошей і часу, тож
+        # його результат мусить потрапити в лог НЕЗАЛЕЖНО від того, чи
+        # вдалось записати вердикт.
+        #
+        # Провайдер і модель у виводі обовʼязкові (2026-10-04, питання
+        # користувача): колонка LLM специфічна для конкретної МОДЕЛІ, а
+        # на Anthropic їх дві з різною ціною. naive/лінійний тренд від
+        # провайдера не залежать — чиста арифметика на самому ряді.
+        logger.info(
+            "%s [%s]: %d точок перевірено (пропущено %d), MAE LLM=%.6g, "
+            "naive=%.6g, лінійний тренд=%s — %s",
+            result["metric_id"], _route_label(route), result["n_points"],
+            result["n_skipped"], result["llm_mae"], result["naive_mae"],
+            f"{result['trend_mae']:.6g}" if result["trend_mae"] is not None else "n/a",
+            format_verdict(result),
+        )
+
         # Вердикт у БД (P0, 2026-10-05): доти результат бектесту лишався
         # ЛИШЕ в лозі, тож бойовий прогноз не мав як дізнатись, що на
         # цьому показнику ШІ гірший за безкоштовну базову лінію — і
         # далі платив за виклик. Тепер `forecast_metric.py` читає саме
         # цей рядок.
         verdict, advantage_pct = classify_backtest(result["llm_mae"], result["naive_mae"])
-        save_verdict(
-            conn,
-            metric_id=result["metric_id"],
-            provider=route.provider,
-            model=route.model,
-            effort=route.effort,
-            n_points=result["n_points"],
-            n_skipped=result["n_skipped"],
-            llm_mae=result["llm_mae"],
-            naive_mae=result["naive_mae"],
-            trend_mae=result["trend_mae"],
-            verdict=verdict,
-            advantage_pct=advantage_pct,
-        )
+        try:
+            save_verdict(
+                conn,
+                metric_id=result["metric_id"],
+                provider=route.provider,
+                model=route.model,
+                effort=route.effort,
+                n_points=result["n_points"],
+                n_skipped=result["n_skipped"],
+                llm_mae=result["llm_mae"],
+                naive_mae=result["naive_mae"],
+                trend_mae=result["trend_mae"],
+                verdict=verdict,
+                advantage_pct=advantage_pct,
+                prompt_variant=(
+                PROMPT_VARIANT_LEVELS_ONLY if args.no_delta else PROMPT_VARIANT
+            ),
+            )
+        except Exception:
+            # НЕ ковтаємо тихо: вихід із кодом 1 після вже
+            # надрукованого результату — щоб runner побачив провал, а
+            # людина не втратила виміряні числа.
+            logger.exception(
+                "%s: вердикт НЕ збережено (результат вище лишається дійсним)",
+                result["metric_id"],
+            )
+            sys.exit(1)
         logger.info(
-            "%s: вердикт %r (%s) збережено для %s",
+            "%s: вердикт %r (%s) збережено для %s, промпт %s",
             result["metric_id"], verdict,
             f"{advantage_pct:+.1f}%" if advantage_pct is not None else "без відсотків",
             route.model,
+            PROMPT_VARIANT_LEVELS_ONLY if args.no_delta else PROMPT_VARIANT,
         )
     finally:
         conn.close()
-
-    # Провайдер у виводі ОБОВ'ЯЗКОВО (2026-10-04, питання користувача):
-    # числа в колонці LLM специфічні для конкретної МОДЕЛІ (не лише
-    # провайдера — на Anthropic їх дві з різною ціною), тож у підсумок
-    # іде повний маршрут. Порівнювати колонку LLM між прогонами можна
-    # тільки за однакового маршруту. naive/лінійний тренд від
-    # провайдера не залежать — чиста арифметика на самому ряді.
-    logger.info(
-        "%s [%s]: %d точок перевірено (пропущено %d), MAE LLM=%.6g, "
-        "naive=%.6g, лінійний тренд=%s — %s",
-        result["metric_id"], _route_label(route), result["n_points"], result["n_skipped"],
-        result["llm_mae"], result["naive_mae"],
-        f"{result['trend_mae']:.6g}" if result["trend_mae"] is not None else "n/a",
-        format_verdict(result),
-    )
 
 
 if __name__ == "__main__":

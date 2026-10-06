@@ -1083,3 +1083,16 @@ WHERE search_term IS NOT NULL AND search_term_status <> 'validated';
 UPDATE watchlist_assets
 SET search_term = '"BNB crypto"', search_term_status = 'pending'
 WHERE asset_id = 'bnb' AND search_term IS NULL;
+
+-- 2026-10-06: ЯКИМ ПРОМПТОМ зміряно вердикт.
+--
+-- Двічі за один день те саме: зміна промпту/вікна посеред серії
+-- прогонів робила таблицю результатів несумісною самою з собою, і
+-- побачити це можна було лише за годинниками в лозі (спершу вікно
+-- історії 24 проти всієї, потім поява таблиці Δ). `provider`/`model`
+-- цього не описують — промпт змінюється незалежно від моделі.
+--
+-- Значення — константа `llm_forecast.PROMPT_VARIANT`: її МУСИТЬ
+-- змінити той, хто змінює промпт, інакше два різні виміри
+-- виглядатимуть як один.
+ALTER TABLE backtest_verdicts ADD COLUMN IF NOT EXISTS prompt_variant TEXT;

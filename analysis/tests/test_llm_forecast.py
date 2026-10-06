@@ -7,9 +7,12 @@
 import json
 
 import pytest
+
+import config
 from llm_common import SynthesisResponseError
 
 from forecasting.llm_forecast import (
+    mean_delta,
     PLAUSIBILITY_FACTOR,
     build_prompt,
     describe_metric,
@@ -175,3 +178,69 @@ def test_is_plausible_skips_check_on_flat_series():
     точний повтор останнього значення."""
     plausible, _ = is_plausible([2.0, 2.0, 2.0, 2.0, 2.0], 2.5)
     assert plausible
+
+
+# ============================================================
+# Кроки (Δ) у промпті — P1 плану покращення прогнозу
+# ============================================================
+# Причина (видна в усіх прогонах бектесту): обидві сталі слабкості
+# прогнозу — РОЗВОРОТИ (ряд почав падати, модель продовжувала
+# зростання) і УСКОРЕННЯ (крок прискорився, модель екстраполювала
+# попередній) — мають одне джерело: модель бачила лише РІВНІ й мусила
+# рахувати різниці сама.
+
+
+def test_mean_delta_averages_recent_steps():
+    values = [100.0, 101.0, 103.0, 106.0]  # кроки +1, +2, +3
+    assert mean_delta(values, 3) == pytest.approx(2.0)
+    assert mean_delta(values, 1) == pytest.approx(3.0)
+
+
+def test_mean_delta_none_when_not_enough_steps():
+    """Вікно 5 кроків потребує 6 точок — менше це "невідомо", не нуль."""
+    assert mean_delta([100.0, 101.0], 5) is None
+
+
+def test_mean_delta_handles_decline():
+    values = [10.0, 9.0, 7.0]
+    assert mean_delta(values, 2) == pytest.approx(-1.5)
+
+
+def test_prompt_shows_delta_per_row():
+    rows = [
+        {"observed_at": "2026-01-01", "value": 100},
+        {"observed_at": "2026-02-01", "value": 101.5},
+        {"observed_at": "2026-03-01", "value": 100.3},
+    ]
+    prompt = build_prompt("cpi", "CPI", rows)
+
+    assert "Δ +1.5" in prompt
+    # Розворот мусить бути видимим ЗНАКОМ, не вирахуваним із рівнів.
+    assert "Δ -1.2" in prompt
+
+
+def test_prompt_has_no_delta_for_the_first_point():
+    """У першої точки немає "попередньої", тож і Δ бути не може —
+    інакше модель прочитала б вигаданий крок."""
+    rows = [{"observed_at": "2026-01-01", "value": 100}]
+    prompt = build_prompt("cpi", "CPI", rows)
+    assert "(Δ" not in prompt
+
+
+def test_prompt_summarises_mean_step_per_window():
+    # Найширше вікно (12 кроків) потребує 13 точок — беремо з запасом.
+    rows = [
+        {"observed_at": f"2026-{i % 12 + 1:02d}-01", "value": 100 + i * 2}
+        for i in range(16)
+    ]
+    prompt = build_prompt("cpi", "CPI", rows)
+
+    assert "Середній крок" in prompt
+    for window in config.FORECAST_DELTA_WINDOWS:
+        assert f"за {window} кроків" in prompt
+
+
+def test_delta_windows_fit_into_the_history_window():
+    """Вікно Δ, більше за історію, яку бачить модель, рахувалось би по
+    даних, яких у промпті немає."""
+    assert max(config.FORECAST_DELTA_WINDOWS) <= config.FORECAST_HISTORY_POINTS

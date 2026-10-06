@@ -58,6 +58,13 @@ CONSUMERS = {
     "DISCOVERY_MIN_SCORE": ["discovery/run_discovery.py"],
     "DISCOVERY_MAX_ITEMS": ["discovery/run_discovery.py"],
     "DISCOVERY_MAX_PER_DETECTOR": ["discovery/run_discovery.py"],
+    # Прогнозування (2026-10-05/06, розділ 10 конфіга).
+    "FORECAST_MEANINGFUL_EDGE_PCT": ["forecasting/method_selector.py"],
+    "FORECAST_FLAT_SERIES_POINTS": ["forecasting/method_selector.py"],
+    "FORECAST_HISTORY_POINTS": ["forecasting/forecast_metric.py", "forecasting/backtest_llm.py"],
+    "FORECAST_TREND_BASELINE_POINTS": ["forecasting/backtest_llm.py", "forecasting/backtest.py"],
+    "FORECAST_DELTA_WINDOWS": ["forecasting/llm_forecast.py"],
+    "FORECAST_PLAUSIBILITY_FACTOR": ["forecasting/llm_forecast.py"],
     # Чинники фундаментального аналізу (2026-10-04).
     "ASSET_FACTORS": ["fundamental/factors.py"],
     "ASSET_FACTOR_GAPS": ["fundamental/factors.py"],
