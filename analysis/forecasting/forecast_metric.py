@@ -35,7 +35,12 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "monitoring"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection, fetch_recent  # noqa: E402
-from config import FORECAST_HISTORY_POINTS  # noqa: E402
+from config import (  # noqa: E402
+    FORECAST_HISTORY_POINTS,
+    FORECAST_YIELD_CONTEXT_METRICS,
+    FORECAST_YIELD_LONG,
+    FORECAST_YIELD_SHORT,
+)
 from llm_common import (  # noqa: E402
     LlmError,
     resolve_route,
@@ -54,8 +59,10 @@ from forecasting.llm_forecast import (  # noqa: E402
     is_plausible,
     parse_forecast_response,
 )
+from forecasting._context_db import fetch_series  # noqa: E402
 from forecasting._db import save_forecast  # noqa: E402
 from forecasting._verdict_db import fetch_verdict  # noqa: E402
+from forecasting.market_context import build_snapshot, format_snapshot  # noqa: E402
 from forecasting.method_selector import choose_method  # noqa: E402
 from forecasting.trend import naive_forecast  # noqa: E402
 
@@ -90,6 +97,26 @@ FORECASTABLE_METRICS = frozenset(ADAPTER_BY_METRIC) | frozenset(DAILY_ADAPTER_BY
 # (і гейт `is_plausible` на такій історії теж не працює,
 # llm_forecast.py:PLAUSIBILITY_MIN_HISTORY).
 MIN_HISTORY = 5
+
+
+def build_market_context(conn, metric_id: str, as_of) -> Optional[str]:
+    """Текстовий блок ринкового контексту для промпта, або None.
+
+    None — коли показника немає в переліку (більшість) чи коли
+    дохідностей на цю дату ще не зібрано: порожній блок у промпті
+    лише заплутав би модель."""
+    if metric_id not in FORECAST_YIELD_CONTEXT_METRICS:
+        return None
+
+    short = fetch_series(conn, *FORECAST_YIELD_SHORT)
+    long = fetch_series(conn, *FORECAST_YIELD_LONG)
+    if not short and not long:
+        logger.warning(
+            "%s: дохідностей для ринкового контексту ще немає — прогноз без нього",
+            metric_id,
+        )
+        return None
+    return format_snapshot(build_snapshot(short, long, as_of))
 
 
 def _save_naive_forecast(
@@ -177,7 +204,14 @@ def run_forecast(
             conn, source, metric_id, choice, values, based_on_observed_at, periods_ahead
         )
 
-    prompt = build_prompt(metric_id, describe_metric(metric_id), chronological)
+    # Ринковий контекст (дохідності 2Y/10Y + спред) — лише показникам
+    # із `config.FORECAST_YIELD_CONTEXT_METRICS`, станом на ТУ САМУ
+    # дату, що остання точка історії (2026-10-11).
+    market_context = build_market_context(conn, metric_id, based_on_observed_at)
+    prompt = build_prompt(
+        metric_id, describe_metric(metric_id), chronological,
+        market_context=market_context,
+    )
     llm = call_llm(prompt, SYSTEM_PROMPT, purpose="metric_forecast")
     raw_content = llm.text
     result = parse_forecast_response(raw_content)

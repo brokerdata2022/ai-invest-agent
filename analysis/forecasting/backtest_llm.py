@@ -32,6 +32,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import date
 from typing import Callable, Optional
 
 from dotenv import load_dotenv
@@ -54,11 +55,13 @@ from llm_common import (  # noqa: E402
 )
 
 from forecasting._metric_source import resolve_source  # noqa: E402
+from forecasting._context_db import fetch_series  # noqa: E402
 from forecasting._verdict_db import save_verdict  # noqa: E402
+from forecasting.market_context import build_snapshot, format_snapshot  # noqa: E402
 from forecasting.method_selector import classify_backtest  # noqa: E402
 from forecasting.llm_forecast import (  # noqa: E402
     PROMPT_VARIANT,
-    PROMPT_VARIANT_LEVELS_ONLY,
+    PROMPT_VARIANT_WITH_DELTA,
     SYSTEM_PROMPT,
     build_prompt,
     describe_metric,
@@ -70,6 +73,8 @@ from forecasting.trend import linear_trend_forecast, naive_forecast  # noqa: E40
 from config import (  # noqa: E402
     FORECAST_HISTORY_POINTS,
     FORECAST_TREND_BASELINE_POINTS,
+    FORECAST_YIELD_LONG,
+    FORECAST_YIELD_SHORT,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -164,8 +169,20 @@ def backtest_llm_metric(
     }
 
 
+def _as_date(value):
+    """`observed_at` приходить то як `date` (з БД), то як рядок (у
+    тестах і фікстурах) — контекст рахується по датах, тож приводимо."""
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
 def make_llm_forecast_fn(
-    conn, metric_id: str, route: Optional[LlmRoute] = None, include_deltas: bool = True
+    conn,
+    metric_id: str,
+    route: Optional[LlmRoute] = None,
+    include_deltas: bool = False,
+    yield_context: bool = False,
 ) -> Callable[[list[dict]], Optional[float]]:
     """forecast_fn для backtest_llm_metric(): той САМИЙ промпт і той
     самий гейт правдоподібності, що в бойовому forecast_metric.py —
@@ -176,6 +193,11 @@ def make_llm_forecast_fn(
     бойового 'metric_forecast', щоб backtest-прогони не змішувались з
     реальними при розборі постфактум."""
 
+    short_series = long_series = None
+    if yield_context:
+        short_series = fetch_series(conn, *FORECAST_YIELD_SHORT)
+        long_series = fetch_series(conn, *FORECAST_YIELD_LONG)
+
     def forecast_fn(history_rows: list[dict]) -> Optional[float]:
         # ТЕ САМЕ вікно історії, що бойовий прогноз
         # (`forecast_metric.run_forecast(limit=FORECAST_HISTORY_POINTS)`).
@@ -184,8 +206,17 @@ def make_llm_forecast_fn(
         # тоді як продакшен давав 24 — тобто виміряна точність більше
         # не стосувалась того, що працює.
         windowed = history_rows[-FORECAST_HISTORY_POINTS:]
+        # Контекст станом на ОСТАННЮ ТОЧКУ ІСТОРІЇ, не на "сьогодні":
+        # інакше прогноз на 2015 рік спирався б на дохідності 2026-го,
+        # і виміряна точність була б фікцією (заглядання в майбутнє).
+        context = None
+        if yield_context and short_series is not None:
+            context = format_snapshot(
+                build_snapshot(short_series, long_series, _as_date(windowed[-1]["observed_at"]))
+            )
         prompt = build_prompt(
-            metric_id, describe_metric(metric_id), windowed, include_deltas=include_deltas
+            metric_id, describe_metric(metric_id), windowed,
+            include_deltas=include_deltas, market_context=context,
         )
         try:
             llm = call_llm(
@@ -247,6 +278,15 @@ def format_verdict(result: dict) -> str:
     return f"naive кращий — LLM гірший на {abs(diff_pct):.1f}%"
 
 
+def _variant_label(args) -> str:
+    """Назва варіанту промпта для `backtest_verdicts.prompt_variant` —
+    щоб два різні виміри не виглядали як один (2026-10-06)."""
+    label = PROMPT_VARIANT_WITH_DELTA if args.delta else PROMPT_VARIANT
+    if getattr(args, "yield_context", False):
+        label += "+yields"
+    return label
+
+
 def resolve_backtest_route(args) -> LlmRoute:
     """Маршрут прогону: з конфіга, але з перекриттям із CLI.
 
@@ -289,8 +329,14 @@ def main() -> None:
     # було б лише правкою коду посеред серії прогонів, а саме це вже
     # двічі зробило таблицю результатів несумісною самою з собою.
     parser.add_argument(
-        "--no-delta", action="store_true",
-        help="промпт БЕЗ таблиці кроків Δ (для порівняння варіантів промпта)",
+        "--yield-context", action="store_true",
+        help="подати в промпт дохідності 2Y/10Y і спред 2s10s "
+             "(config.FORECAST_YIELD_CONTEXT_METRICS) — для A/B перевірки",
+    )
+    parser.add_argument(
+        "--delta", action="store_true",
+        help="промпт З таблицею кроків Δ (варіант, відкинутий A/B 2026-10-06 — "
+             "для повторної перевірки гіпотези, не для продакшену)",
     )
     parser.add_argument("--provider", choices=["deepseek", "anthropic"], default=None)
     parser.add_argument("--model", default=None, help="напр. claude-sonnet-5")
@@ -326,7 +372,8 @@ def main() -> None:
             args.metric,
             observations,
             make_llm_forecast_fn(
-                conn, args.metric, route=route, include_deltas=not args.no_delta
+                conn, args.metric, route=route, include_deltas=args.delta,
+                yield_context=args.yield_context,
             ),
             points=args.points,
             min_history=args.min_history,
@@ -380,9 +427,7 @@ def main() -> None:
                 trend_mae=result["trend_mae"],
                 verdict=verdict,
                 advantage_pct=advantage_pct,
-                prompt_variant=(
-                PROMPT_VARIANT_LEVELS_ONLY if args.no_delta else PROMPT_VARIANT
-            ),
+                prompt_variant=_variant_label(args),
             )
         except Exception:
             # НЕ ковтаємо тихо: вихід із кодом 1 після вже
@@ -398,7 +443,7 @@ def main() -> None:
             result["metric_id"], verdict,
             f"{advantage_pct:+.1f}%" if advantage_pct is not None else "без відсотків",
             route.model,
-            PROMPT_VARIANT_LEVELS_ONLY if args.no_delta else PROMPT_VARIANT,
+            _variant_label(args),
         )
     finally:
         conn.close()

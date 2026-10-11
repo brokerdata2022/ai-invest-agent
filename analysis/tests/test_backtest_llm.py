@@ -218,9 +218,10 @@ def test_backtest_uses_production_history_window(monkeypatch):
 
     captured = {}
 
-    def fake_build_prompt(metric_id, label, rows, include_deltas=True):
+    def fake_build_prompt(metric_id, label, rows, include_deltas=False, market_context=None):
         captured["rows"] = len(rows)
         captured["include_deltas"] = include_deltas
+        captured["market_context"] = market_context
         return "PROMPT"
 
     monkeypatch.setattr(backtest_llm, "build_prompt", fake_build_prompt)
@@ -260,16 +261,19 @@ def test_production_default_limit_equals_the_config_window():
     assert inspect.signature(run_forecast).parameters["limit"].default == config.FORECAST_HISTORY_POINTS
 
 
-def test_no_delta_flag_switches_the_prompt_variant(monkeypatch):
+def test_delta_flag_switches_the_prompt_variant(monkeypatch):
     """Варіант промпта мусить бути ПАРАМЕТРОМ виміру, як `--model`:
     інакше порівняти "з Δ" і "без Δ" можна лише правкою коду посеред
     серії прогонів — а саме це двічі за 2026-10-06 зробило таблицю
-    результатів несумісною самою з собою."""
+    результатів несумісною самою з собою.
+
+    Дефолт — БЕЗ Δ: A/B на 8 показниках показав, що Δ зашкодив 6 із
+    них (докладно — `llm_forecast.PROMPT_VARIANT`)."""
     from forecasting import backtest_llm
 
     captured = {}
 
-    def fake_build_prompt(metric_id, label, rows, include_deltas=True):
+    def fake_build_prompt(metric_id, label, rows, include_deltas=False, market_context=None):
         captured["include_deltas"] = include_deltas
         return "PROMPT"
 
@@ -288,8 +292,9 @@ def test_no_delta_flag_switches_the_prompt_variant(monkeypatch):
 
     history = [{"observed_at": "2026-01-01", "value": 1.0}, {"observed_at": "2026-02-01", "value": 2.0}]
 
-    backtest_llm.make_llm_forecast_fn(None, "cpi", include_deltas=False)(history)
-    assert captured["include_deltas"] is False
-
-    backtest_llm.make_llm_forecast_fn(None, "cpi")(history)
+    backtest_llm.make_llm_forecast_fn(None, "cpi", include_deltas=True)(history)
     assert captured["include_deltas"] is True
+
+    # Дефолт продакшену — рівні без Δ (зміряно A/B 2026-10-06).
+    backtest_llm.make_llm_forecast_fn(None, "cpi")(history)
+    assert captured["include_deltas"] is False

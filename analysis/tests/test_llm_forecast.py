@@ -212,7 +212,7 @@ def test_prompt_shows_delta_per_row():
         {"observed_at": "2026-02-01", "value": 101.5},
         {"observed_at": "2026-03-01", "value": 100.3},
     ]
-    prompt = build_prompt("cpi", "CPI", rows)
+    prompt = build_prompt("cpi", "CPI", rows, include_deltas=True)
 
     assert "Δ +1.5" in prompt
     # Розворот мусить бути видимим ЗНАКОМ, не вирахуваним із рівнів.
@@ -223,7 +223,7 @@ def test_prompt_has_no_delta_for_the_first_point():
     """У першої точки немає "попередньої", тож і Δ бути не може —
     інакше модель прочитала б вигаданий крок."""
     rows = [{"observed_at": "2026-01-01", "value": 100}]
-    prompt = build_prompt("cpi", "CPI", rows)
+    prompt = build_prompt("cpi", "CPI", rows, include_deltas=True)
     assert "(Δ" not in prompt
 
 
@@ -233,7 +233,7 @@ def test_prompt_summarises_mean_step_per_window():
         {"observed_at": f"2026-{i % 12 + 1:02d}-01", "value": 100 + i * 2}
         for i in range(16)
     ]
-    prompt = build_prompt("cpi", "CPI", rows)
+    prompt = build_prompt("cpi", "CPI", rows, include_deltas=True)
 
     assert "Середній крок" in prompt
     for window in config.FORECAST_DELTA_WINDOWS:
@@ -244,3 +244,16 @@ def test_delta_windows_fit_into_the_history_window():
     """Вікно Δ, більше за історію, яку бачить модель, рахувалось би по
     даних, яких у промпті немає."""
     assert max(config.FORECAST_DELTA_WINDOWS) <= config.FORECAST_HISTORY_POINTS
+
+
+def test_production_prompt_has_no_deltas_by_default():
+    """A/B 2026-10-06: Δ зашкодив 6 показникам із 8 (у середньому
+    -2.9 п.п.), тож продакшен лишається на чистих рівнях. Цей тест
+    стереже саме РІШЕННЯ: повернути Δ можна лише з новим виміром."""
+    rows = [
+        {"observed_at": "2026-01-01", "value": 100},
+        {"observed_at": "2026-02-01", "value": 102},
+    ]
+    prompt = build_prompt("cpi", "CPI", rows)
+    assert "(Δ" not in prompt
+    assert "Середній крок" not in prompt

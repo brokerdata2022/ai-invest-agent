@@ -76,3 +76,65 @@ def test_format_message_counts_forecasts_in_header():
     assert "Наш прогноз наступних значень (2)" in text
     assert "CPI (інфляція, США)" in text
     assert "Рівень безробіття (США)" in text
+
+
+# ============================================================
+# Прогнози БЕЗ ШІ не займають місце окремими блоками
+# ============================================================
+# Живий фідбек користувача 2026-10-11 ("прогнози не працюють"): у
+# Telegram прийшли три повідомлення підряд, кожне з яких казало
+# "наш прогноз: 4.77, без змін". Механізм правильний (на дохідностях
+# ШІ не побив naive у 4 незалежних замірах), але "як сьогодні" це не
+# прогноз, а шум у звіті.
+
+
+def test_naive_forecasts_are_collapsed_into_one_line():
+    rows = [
+        {**ROW, "id": 1, "metric_id": "cpi", "method": "llm"},
+        {**ROW, "id": 2, "metric_id": "treasury_2y", "method": "naive_llm_worse"},
+        {**ROW, "id": 3, "metric_id": "treasury_10y", "method": "naive_llm_worse"},
+        {**ROW, "id": 4, "metric_id": "fed_funds_rate", "method": "naive_flat"},
+    ]
+    text = format_message(rows, next_releases={})
+
+    # Заголовок рахує ЛИШЕ справжні прогнози.
+    assert "(1)" in text
+    # Три показники без ШІ — один рядок, не три блоки.
+    assert text.count("Прогноз не має сенсу") == 1
+    assert "Без змін" not in text
+
+
+def test_message_counts_only_real_forecasts_in_header():
+    rows = [{**ROW, "id": 1, "metric_id": "cpi", "method": "llm"}]
+    assert "(1)" in format_message(rows, next_releases={})
+
+
+def test_naive_only_rows_are_marked_notified_without_sending(monkeypatch):
+    """Якщо нема жодного справжнього прогнозу — не надсилаємо нічого,
+    але рядки ПОЗНАЧАЄМО: інакше вони накопичаться й вивалаться гуртом
+    у наступному справжньому звіті."""
+    import forecast_notify
+
+    sent, marked = [], []
+    monkeypatch.setattr(forecast_notify, "resolve_telegram_credentials", lambda: ("t", "c"))
+    class _Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(forecast_notify, "get_connection", _Conn)
+    monkeypatch.setattr(
+        forecast_notify, "fetch_unnotified_forecasts",
+        lambda conn, limit: [
+            {**ROW, "id": 7, "metric_id": "treasury_2y", "method": "naive_llm_worse"},
+        ],
+    )
+    monkeypatch.setattr(forecast_notify, "send_telegram_message",
+                        lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(forecast_notify, "mark_notified",
+                        lambda conn, table, ids: marked.extend(ids))
+    monkeypatch.setattr("sys.argv", ["forecast_notify.py"])
+
+    forecast_notify.main()
+
+    assert sent == []
+    assert marked == [7]

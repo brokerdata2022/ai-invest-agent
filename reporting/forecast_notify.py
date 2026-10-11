@@ -168,10 +168,45 @@ def format_forecast_block(row: dict, next_release) -> list[str]:
     return lines
 
 
+# Методи, за яких ШІ не викликався: прогноз дорівнює поточному
+# значенню (`analysis/forecasting/method_selector.py`).
+NAIVE_METHODS = ("naive_flat", "naive_llm_worse")
+
+
+def is_real_forecast(row: dict) -> bool:
+    return row.get("method") not in NAIVE_METHODS
+
+
 def format_message(rows: list[dict], next_releases: dict) -> str:
-    lines = [bold(f"🔮 Наш прогноз наступних значень ({len(rows)}):"), ""]
-    for row in rows:
+    """Прогнози БЕЗ ШІ не займають окремий блок (2026-10-11, живий
+    фідбек користувача: "прогнози не працюють" — у Telegram прийшли
+    три повідомлення підряд, кожне з яких казало "без змін: 4.77").
+
+    Механізм при цьому був правильний: на дохідностях Treasury і
+    ставці Fed ШІ не побив naive НІ В ОДНІЙ конфігурації (4 заміри:
+    8/50 точок, DeepSeek/Opus/Sonnet, з Δ і без), бо точкового
+    прогнозу випадкового блукання на день уперед просто не існує.
+    Але "наш прогноз: як сьогодні" це не прогноз, а шум у звіті —
+    такі показники йдуть ОДНИМ рядком, не блоком.
+
+    Той самий принцип, що решта reporting/ (CLAUDE.md): "не
+    повторювати те, що не змінилось"."""
+    real = [row for row in rows if is_real_forecast(row)]
+    naive = [row for row in rows if not is_real_forecast(row)]
+
+    lines = [bold(f"🔮 Наш прогноз наступних значень ({len(real)}):"), ""]
+    for row in real:
         lines.extend(format_forecast_block(row, next_releases.get(row["metric_id"])))
+
+    if naive:
+        names = ", ".join(
+            METRIC_LABELS.get(row["metric_id"], row["metric_id"]) for row in naive
+        )
+        lines.append(
+            "<i>ℹ️ Прогноз не має сенсу (найкраща оцінка — поточне значення, "
+            f"перевірено бектестом): {escape_html(names)}</i>"
+        )
+
     return "\n".join(lines).rstrip()
 
 
@@ -191,13 +226,29 @@ def main() -> None:
             logger.info("Нових прогнозів немає — сповіщення не надсилається")
             return
 
+        # Лише naive-рядки — надсилати нічого (повідомлення сказало б
+        # "без змін" і більше нічого), але ПОЗНАЧИТИ надісланими
+        # обов'язково: інакше вони накопичаться й вивалаться гуртом у
+        # наступному справжньому звіті (2026-10-11).
+        if not any(is_real_forecast(row) for row in rows):
+            mark_notified(conn, "metric_forecasts", [row["id"] for row in rows])
+            logger.info(
+                "Усі %d нових прогнозів — без ШІ (прогноз = поточне значення): "
+                "сповіщення не надсилається, рядки позначено надісланими",
+                len(rows),
+            )
+            return
+
         next_releases = {
             row["metric_id"]: fetch_next_release(conn, row["metric_id"]) for row in rows
         }
         text = format_message(rows, next_releases)
         send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "metric_forecasts", [row["id"] for row in rows])
-        logger.info("Надіслано в Telegram: %d прогноз(и)", len(rows))
+        logger.info(
+            "Надіслано в Telegram: %d прогноз(и) (з них без ШІ: %d — одним рядком)",
+            len(rows), sum(1 for row in rows if not is_real_forecast(row)),
+        )
     finally:
         conn.close()
 
