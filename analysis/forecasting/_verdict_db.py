@@ -49,23 +49,33 @@ def save_verdict(
     return verdict_id
 
 
-def fetch_verdict(conn, metric_id: str, model: str) -> Optional[dict]:
+def fetch_verdict(
+    conn, metric_id: str, model: str, prompt_variant: Optional[str] = None
+) -> Optional[dict]:
     """Останній вердикт для (показник, МОДЕЛЬ). None — не міряли.
 
     Фільтр саме за моделлю, не лише за провайдером: на Anthropic дві
     моделі з різною ціною й різним результатом, і вердикт Opus 5 нічого
     не каже про Sonnet 5 (живо: `unemployment_rate` — нічия на Sonnet,
-    −60% на Opus)."""
+    −60% на Opus).
+
+    `prompt_variant` — з тієї ж причини (2026-10-11, живий дефект):
+    `mortgage_rate_30y` на промпті `levels` дає −3.8%, а на
+    `levels+yields` — +16.0%. Без фільтра брався б просто НАЙНОВІШИЙ
+    рядок, тож експериментальний прогін іншим промптом тихо
+    перемикав би бойовий метод. None = будь-який варіант (для
+    сумісності й для оглядових запитів)."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT verdict, advantage_pct, model, n_points, prompt_variant, run_at
             FROM backtest_verdicts
             WHERE metric_id = %s AND model = %s
+              AND (%s IS NULL OR prompt_variant = %s)
             ORDER BY run_at DESC
             LIMIT 1
             """,
-            (metric_id, model),
+            (metric_id, model, prompt_variant, prompt_variant),
         )
         row = cur.fetchone()
         if row is None:

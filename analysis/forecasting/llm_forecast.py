@@ -46,7 +46,11 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from config import FORECAST_DELTA_WINDOWS, FORECAST_PLAUSIBILITY_FACTOR
+from config import (
+    FORECAST_DELTA_WINDOWS,
+    FORECAST_PLAUSIBILITY_FACTOR,
+    FORECAST_YIELD_CONTEXT_METRICS,
+)
 
 # ЯКА ВЕРСІЯ ПРОМПТА — у продакшені БЕЗ таблиці Δ.
 #
@@ -227,6 +231,21 @@ def is_plausible(values: list[float], forecast_value: float) -> tuple[bool, Opti
             f"одиниць/порядку, не на прогноз"
         )
     return True, None
+
+
+def production_prompt_variant(metric_id: str) -> str:
+    """Який варіант промпта використовує БОЙОВИЙ прогноз для цього
+    показника.
+
+    Потрібен, щоб вибір методу читав вердикт ТІЄЇ САМОЇ конфігурації
+    (2026-10-11, живий дефект): `mortgage_rate_30y` на промпті
+    `levels` дає −3.8% (ШІ гірший), а на `levels+yields` — +16.0%
+    (ШІ кращий). Продакшен подає цьому показнику контекст дохідностей,
+    тож читати вердикт без контексту означало б вимкнути ШІ на
+    підставі виміру конфігурації, якої в продакшені немає."""
+    if metric_id in FORECAST_YIELD_CONTEXT_METRICS:
+        return f"{PROMPT_VARIANT}+yields"
+    return PROMPT_VARIANT
 
 
 def mean_delta(values: list[float], window: int) -> Optional[float]:

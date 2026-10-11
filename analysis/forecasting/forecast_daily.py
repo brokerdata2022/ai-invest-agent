@@ -49,6 +49,8 @@ from common.db import get_connection, fetch_recent  # noqa: E402
 from llm_common import require_api_key  # noqa: E402
 from metric_sources import DAILY_ADAPTER_BY_METRIC  # noqa: E402
 
+from config import FORECAST_POLICY_RATE_METRICS  # noqa: E402
+
 from forecasting._metric_source import resolve_source  # noqa: E402
 from forecasting.forecast_metric import run_forecast  # noqa: E402
 
@@ -90,6 +92,19 @@ def forecast_daily_cycle(conn, skip_existing: bool = True) -> dict:
     result: dict[str, list[str]] = {"forecasted": [], "skipped": [], "failed": []}
 
     for metric_id in sorted(DAILY_ADAPTER_BY_METRIC):
+        # Ставки центробанків прогнозуються НА ЗАСІДАННЯ, не щодня
+        # (config.py розділ 10, фідбек користувача 2026-10-11): між
+        # засіданнями щоденна ефективна ставка стоїть на місці, і
+        # денний прогноз для неї — витрата виклику на "як вчора".
+        # Їхній календарний рядок заводить refresh_calendar, а збір
+        # після рішення — check_releases.
+        if metric_id in FORECAST_POLICY_RATE_METRICS:
+            result["skipped"].append(metric_id)
+            logger.info(
+                "%s: ставка центробанку — прогноз робиться на засідання, не щодня",
+                metric_id,
+            )
+            continue
         try:
             source = resolve_source(metric_id)
             if skip_existing and has_forecast_for_latest(conn, source, metric_id):

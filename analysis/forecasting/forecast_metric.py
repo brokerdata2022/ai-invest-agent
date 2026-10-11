@@ -52,7 +52,8 @@ from llm_common import (  # noqa: E402
 from metric_sources import ADAPTER_BY_METRIC, DAILY_ADAPTER_BY_METRIC  # noqa: E402
 
 from forecasting._metric_source import resolve_source  # noqa: E402
-from forecasting.llm_forecast import (  # noqa: E402
+from forecasting.llm_forecast import (
+    production_prompt_variant,  # noqa: E402
     SYSTEM_PROMPT,
     build_prompt,
     describe_metric,
@@ -190,7 +191,9 @@ def run_forecast(
     # рухались жодного разу. Вердикт читається для МОДЕЛІ, якою
     # прогноз реально робиться (`config.py:LLM_ROUTES`).
     route = resolve_route("metric_forecast")
-    stored = fetch_verdict(conn, metric_id, route.model)
+    stored = fetch_verdict(
+        conn, metric_id, route.model, prompt_variant=production_prompt_variant(metric_id)
+    )
     choice = choose_method(
         values,
         verdict=stored["verdict"] if stored else None,

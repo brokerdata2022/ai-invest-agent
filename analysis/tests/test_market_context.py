@@ -142,3 +142,36 @@ def test_yield_series_are_not_their_own_context():
     який модель і так бачить."""
     assert "treasury_2y" not in config.FORECAST_YIELD_CONTEXT_METRICS
     assert "treasury_10y" not in config.FORECAST_YIELD_CONTEXT_METRICS
+
+
+# ============================================================
+# Вердикт мусить читатись із ТІЄЇ САМОЇ конфігурації, що в продакшені
+# ============================================================
+# Живий дефект 2026-10-11: `mortgage_rate_30y` на промпті `levels` дає
+# -3.8% (ШІ гірший), на `levels+yields` — +16.0% (ШІ кращий). Продакшен
+# подає цьому показнику контекст дохідностей, тож читати вердикт без
+# контексту означало б вимкнути ШІ на підставі виміру конфігурації,
+# якої в продакшені немає.
+
+
+def test_production_variant_includes_yields_for_context_metrics():
+    from forecasting.llm_forecast import PROMPT_VARIANT, production_prompt_variant
+
+    assert production_prompt_variant("mortgage_rate_30y") == f"{PROMPT_VARIANT}+yields"
+    assert production_prompt_variant("cpi") == f"{PROMPT_VARIANT}+yields"
+
+
+def test_production_variant_is_plain_for_metrics_without_context():
+    from forecasting.llm_forecast import PROMPT_VARIANT, production_prompt_variant
+
+    assert production_prompt_variant("japan_cpi") == PROMPT_VARIANT
+    assert production_prompt_variant("treasury_2y") == PROMPT_VARIANT
+
+
+def test_every_context_metric_has_a_production_variant_with_yields():
+    """Інакше додавання показника в перелік контексту тихо лишило б
+    його читати вердикт не своєї конфігурації."""
+    from forecasting.llm_forecast import production_prompt_variant
+
+    for metric_id in config.FORECAST_YIELD_CONTEXT_METRICS:
+        assert production_prompt_variant(metric_id).endswith("+yields")

@@ -14,7 +14,12 @@ from forecasting.forecast_daily import forecast_daily_cycle
 
 API_KEY = "fake-key"
 
-DAILY_METRICS = {"treasury_10y", "treasury_2y", "fed_funds_rate", "usdjpy_fx_rate"}
+# Денні серії, які прогнозуються ЩОДНЯ. `fed_funds_rate` свідомо НЕ
+# тут із 2026-10-11: ставка прогнозується на ЗАСІДАННЯ, не щодня
+# (config.FORECAST_POLICY_RATE_METRICS) — між засіданнями щоденна
+# ефективна ставка стоїть на місці, і денний прогноз для неї це
+# витрата виклику на "як вчора".
+DAILY_METRICS = {"treasury_10y", "treasury_2y", "usdjpy_fx_rate"}
 
 
 # --- реєстрація денних серій ----------------------------------------
@@ -69,7 +74,9 @@ def test_cycle_forecasts_every_daily_metric(monkeypatch):
     result = forecast_daily_cycle(conn=None)
 
     assert set(result["forecasted"]) == DAILY_METRICS
-    assert result["skipped"] == []
+    # Ставка центробанку пропускається завжди — вона прогнозується на
+    # засідання (2026-10-11), не денним циклом.
+    assert result["skipped"] == ["fed_funds_rate"]
     assert result["failed"] == []
     assert set(calls) == DAILY_METRICS
 
@@ -83,7 +90,9 @@ def test_cycle_skips_without_calling_llm_when_forecast_already_exists(monkeypatc
 
     result = forecast_daily_cycle(conn=None)
 
-    assert set(result["skipped"]) == DAILY_METRICS
+    # `fed_funds_rate` теж у skipped, але з ІНШОЇ причини — ставка
+    # прогнозується на засідання (2026-10-11), не через --skip-existing.
+    assert set(result["skipped"]) == DAILY_METRICS | {"fed_funds_rate"}
     assert result["forecasted"] == []
     assert calls == [], "run_forecast (а з ним LLM-виклик) не має викликатись"
 
@@ -123,7 +132,9 @@ def test_cycle_continues_after_one_metric_raises(monkeypatch):
 
     def fake_run_forecast(conn, metric_id):
         seen.append(metric_id)
-        if metric_id == "fed_funds_rate":
+        # Падаємо на одному з ДЕННИХ показників (fed_funds_rate більше
+        # не проходить через денний цикл — ставка йде на засідання).
+        if metric_id == "treasury_2y":
             raise RuntimeError("boom")
         return 1
 
@@ -133,6 +144,27 @@ def test_cycle_continues_after_one_metric_raises(monkeypatch):
 
     # Решта показників усе одно опрацьована, попри виняток на одному.
     assert set(seen) == DAILY_METRICS
-    assert result["failed"] == ["fed_funds_rate"]
-    assert set(result["forecasted"]) == DAILY_METRICS - {"fed_funds_rate"}
+    assert result["failed"] == ["treasury_2y"]
+    assert set(result["forecasted"]) == DAILY_METRICS - {"treasury_2y"}
     assert len(rollbacks) == 1
+
+
+def test_policy_rate_is_skipped_by_the_daily_cycle(monkeypatch):
+    """Прямий фідбек користувача 2026-10-11: "ставка прогнозується
+    після виходу нових макроекономічних даних + новини + виступи
+    банків та голів комісій" — тобто на ЗАСІДАННЯ. Денний цикл її не
+    чіпає, інакше кожен день витрачався б виклик на незмінне
+    значення."""
+    import config
+    from forecasting import forecast_daily as module
+
+    calls = []
+    monkeypatch.setattr(module, "run_forecast", lambda conn, metric_id: calls.append(metric_id) or 1)
+    monkeypatch.setattr(module, "has_forecast_for_latest", lambda conn, source, metric_id: False)
+    monkeypatch.setattr(module, "resolve_source", lambda metric_id: "fred")
+
+    result = module.forecast_daily_cycle(conn=None)
+
+    for metric_id in config.FORECAST_POLICY_RATE_METRICS:
+        assert metric_id not in calls
+    assert "fed_funds_rate" in result["skipped"]

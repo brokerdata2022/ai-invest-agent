@@ -34,6 +34,14 @@ ADAPTER_BY_METRIC.update({
     "eurozone_unemployment_rate": (EcbAdapter, None),
     "japan_policy_rate": (BojAdapter, None),
     "japan_cpi": (EstatAdapter, "ESTAT_APP_ID"),
+    # Рішення FOMC по ставці — ДОДАНО 2026-10-11. `fed_funds_rate`
+    # лишається й у DAILY_ADAPTER_BY_METRIC нижче (сам ряд
+    # оновлюється щодня і щодня збирається), але тепер має ще й
+    # КАЛЕНДАРНИЙ рядок: дату засідання. Доти її не було ніде, тому
+    # прогноз робився "на завтра" — а щоденна ефективна ставка між
+    # засіданнями стоїть на місці, звідси й вердикт "нічия" в
+    # бектесті: прогнозувалось не те, що змінюється.
+    "fed_funds_rate": (FredAdapter, "FRED_API_KEY"),
 })
 
 # ДЕННІ серії без жодного календаря релізів (не плутати з
@@ -54,6 +62,13 @@ DAILY_ADAPTER_BY_METRIC: dict[str, tuple[type, str | None]] = {
 # дату напряму (find_upcoming_event()), не тільки збагачує вже відому
 # FRED-дату (find_event()).
 CALENDAR_ONLY_METRICS: list[str] = [
+    # fed_funds_rate — американський показник, але календар-only
+    # СВІДОМО (2026-10-11): FRED `/release/dates` для H.15 дає
+    # ЩОДЕННІ дати публікації, а нам потрібна дата ЗАСІДАННЯ. Її знає
+    # лише фід подій ("Federal Funds Rate" у
+    # economic_calendar.TITLE_PATTERNS). Тобто FRED-якір тут не просто
+    # зайвий — він давав би хибну дату щодня.
+    "fed_funds_rate",
     "eurozone_hicp",
     "eurozone_deposit_rate",
     "eurozone_unemployment_rate",
