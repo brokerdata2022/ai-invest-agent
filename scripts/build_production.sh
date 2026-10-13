@@ -105,12 +105,28 @@ fi
 echo
 echo "→ Перевірка продакшен-копії"
 
-LEAKS="$(cd "$PROD" && find . -not -path './.git/*' \
-  \( -name 'CLAUDE.md' -o -name 'PLAN.md' -o -name '.env' \
-     -o -name 'backup.sql' -o -name '*.pyc' -o -name '__pycache__' \
-     -o -path './docs/archive*' -o -path './.vscode*' -o -path './.claude*' \) -print)"
-if [ -n "$LEAKS" ]; then
-  echo "❌ У продакшен просочилось зайве:"; echo "$LEAKS"; exit 1
+# Питання не "що лежить на диску", а "що потрапить у КОМІТ". Різниця
+# не теоретична: якщо продакшен-копію хоч раз запустити локально
+# (docker compose up у production/ — саме так перевіряється
+# розгортання), там зʼявляться .env і __pycache__. Вони в .gitignore
+# продакшену, тобто нешкідливі — а перевірка "по find" падала б на
+# них щоразу й привчала б ігнорувати власний ❌.
+LEAKS=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  git -C "$PROD" check-ignore -q "$f" 2>/dev/null && continue  # у .gitignore — ок
+  LEAKS="$LEAKS$f"$'\n'
+done <<EOF
+$(cd "$PROD" && find . -not -path './.git/*' \
+  \( -name 'CLAUDE.md' -o -name 'PLAN.md' -o -name '.env' -o -name '*.key' \
+     -o -name 'backup.sql' -o -name 'backup_*.sql' -o -name '*.pyc' \
+     -o -name '__pycache__' -o -path './docs/archive*' \
+     -o -path './.vscode*' -o -path './.claude*' \) -print)
+EOF
+if [ -n "${LEAKS//[$'\n']/}" ]; then
+  echo "❌ У продакшен-КОМІТ потрапило б зайве (і це НЕ в .gitignore):"
+  printf '%s' "$LEAKS" | sed 's/^/     /'
+  exit 1
 fi
 echo "  · дев-артефактів і секретів немає"
 
