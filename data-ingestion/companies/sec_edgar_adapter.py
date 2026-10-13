@@ -85,7 +85,31 @@ METRICS: dict[str, list[tuple[str, str]]] = {
     ],
     "net_income": [("us-gaap", "NetIncomeLoss")],
     "eps_diluted": [("us-gaap", "EarningsPerShareDiluted")],
-    "shares_outstanding": [("dei", "EntityCommonStockSharesOutstanding")],
+    # Резервні теги додані 2026-10-13. Живий замір: 69 тикерів із 512
+    # (COIN, DDOG, APP, CVNA, DELL, ABNB, BIIB, DASH, CTSH, EL…) мовчки
+    # випадали з воронки Tier A, бо не мають `shares_outstanding` — а
+    # без нього не рахується market cap. Перевірено прямим запитом до
+    # SEC для Coinbase (CIK 0001679788):
+    #   dei/EntityCommonStockSharesOutstanding      → HTTP 404
+    #   us-gaap/CommonStockSharesOutstanding        → HTTP 200
+    #   us-gaap/CommonStockSharesIssued             → HTTP 200
+    #   us-gaap/WeightedAverageNumberOf...Diluted   → HTTP 200
+    # Тобто дані були, адаптер просто питав єдиним тегом.
+    #
+    # Порядок = спадання точності для market cap:
+    # 1. dei — титульна сторінка звіту, найсвіжіша фактична кількість;
+    # 2. CommonStockSharesOutstanding — те саме по суті, us-gaap;
+    # 3. WeightedAverageNumberOfDilutedSharesOutstanding — СЕРЕДНЯ за
+    #    період і РОЗМИТА, тобто завищує відносно фактичної на розмір
+    #    опціонів/конвертованих; свідомо остання.
+    # `CommonStockSharesIssued` НЕ включено: вона містить викуплені
+    # (treasury) акції, тож завищувала б market cap тим сильніше, чим
+    # активніший байбек — а це рівно ті компанії, що нас цікавлять.
+    "shares_outstanding": [
+        ("dei", "EntityCommonStockSharesOutstanding"),
+        ("us-gaap", "CommonStockSharesOutstanding"),
+        ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"),
+    ],
     "assets": [("us-gaap", "Assets")],
     "liabilities": [("us-gaap", "Liabilities")],
 }

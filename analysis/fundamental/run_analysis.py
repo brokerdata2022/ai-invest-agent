@@ -49,6 +49,7 @@ from llm_common import (  # noqa: E402
 import config  # noqa: E402
 from fundamental._db import (  # noqa: E402
     fetch_fundamental_series,
+    fetch_latest_filing_insight,
     fetch_top_stocks,
     fetch_watchlist_assets,
     save_fundamental_analysis,
@@ -99,7 +100,19 @@ def analyze_stock(conn, stock: dict) -> bool:
         "revenue_growth": stock.get("revenue_growth"),
         "eps_growth": stock.get("eps_growth"),
     }
-    prompt = build_prompt(ticker, stock.get("company_name"), series, valuation)
+    # Тези з ТЕКСТУ звіту — те, чого в числах немає (2026-10-13).
+    # None, якщо `filing_insights` для тикера ще не прогонявся: аналіз
+    # тоді працює як раніше, лише без причин.
+    filing_insight = fetch_latest_filing_insight(conn, ticker)
+    if filing_insight:
+        logger.info(
+            "%s: у промпт додано тези зі звіту %s %s",
+            ticker, filing_insight["form"], filing_insight["filing_date"],
+        )
+    prompt = build_prompt(
+        ticker, stock.get("company_name"), series, valuation,
+        filing_insight=filing_insight,
+    )
     llm = call_llm(prompt, SYSTEM_PROMPT, purpose="fundamental_analysis")
     raw_content = llm.text
 

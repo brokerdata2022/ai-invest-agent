@@ -46,6 +46,12 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 sys.path.insert(0, _ANALYSIS_DIR)
 
 from common.db import get_connection  # noqa: E402
+from common.watchlist_db import fetch_price_sources  # noqa: E402
+from news_analysis.prices import (  # noqa: E402
+    fetch_all_price_changes,
+    fetch_price_history,
+    is_anomalous_move,
+)
 
 import config  # noqa: E402
 from trading_list._db import (  # noqa: E402
@@ -135,6 +141,44 @@ def _watchlist_kind(asset_id: str) -> str:
     if asset_id in _WATCHLIST_FX:
         return "fx"
     return "commodity"
+
+
+def _collect_price_anomalies(conn) -> dict[str, dict]:
+    """{asset_id: {direction, pct_change, window_days, history_points}}
+    для watchlist-активів, чий рух НЕЗВИЧНИЙ за їхньою власною
+    історією (`news_analysis/prices.py:is_anomalous_move`).
+
+    Той самий детектор, що вже використовує `synthesize.py` для
+    вирішення "чи є про що писати без новин" — тут він стає
+    каталізатором. Переюзовуємо, а не пишемо свій: один поріг
+    аномальності на весь агент."""
+    price_sources = fetch_price_sources(conn)
+    asset_ids = sorted(price_sources)
+    if not asset_ids:
+        return {}
+
+    window_days = config.CATALYST_ANOMALY_WINDOW_DAYS
+    changes = fetch_all_price_changes(
+        conn, asset_ids, days=window_days, price_sources=price_sources,
+    )
+
+    out: dict[str, dict] = {}
+    for asset_id, change in changes.items():
+        history = fetch_price_history(conn, asset_id, price_sources=price_sources)
+        if not is_anomalous_move(change.pct_change, history, window_days):
+            continue
+        out[asset_id] = {
+            "direction": "up" if change.pct_change > 0 else "down",
+            "pct_change": change.pct_change,
+            "window_days": window_days,
+            "history_points": len(history),
+        }
+    if out:
+        logger.info(
+            "Аномальні рухи (власний каталізатор): %s",
+            ", ".join(f"{a} {v['pct_change']:+.1f}%" for a, v in out.items()),
+        )
+    return out
 
 
 def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[CatalystHit]]:
@@ -245,6 +289,30 @@ def collect_catalysts(conn) -> tuple[dict[str, list[CatalystHit]], list[Catalyst
             f"синтез ціна/новини: {syn['summary'][:120]}",
             detail=syn["summary"],
         ), f"synthesis:{syn['asset_id']}")
+
+    # --- ВЛАСНИЙ аномальний рух ціни (РІЗНИТЬ активи ідеально) ---
+    #
+    # Доданий 2026-10-13. Задача була "кожен актив мусить мати власний
+    # каталізатор", і замір показав, що через новини це недосяжно: за
+    # 48 годин 0 із 196 консолідованих історій мали `asset_id` (GDELT
+    # у бані, RSS дає широкі новини, не активо-специфічні). Аномальний
+    # рух ЦІНИ активу — теж власна подія, і рахується з власної
+    # історії кожного, тож різнить активи за визначенням.
+    #
+    # Стало можливим лише зараз: `is_anomalous_move` вимагає 10 денних
+    # дохідностей, а до добору історії (yahoo_chart, 2026-10-12) у
+    # товарів було 6-7 точок — детектор завжди повертав False.
+    for asset_id, anomaly in _collect_price_anomalies(conn).items():
+        add(asset_id, CatalystHit(
+            "price_anomaly", config.CATALYST_WEIGHT_PRICE_ANOMALY,
+            anomaly["direction"],
+            f"аномальний рух: {anomaly['pct_change']:+.2f}% за {anomaly['window_days']} дн "
+            f"(незвично для цього активу за його власною історією)",
+            detail=(
+                f"{anomaly['pct_change']:+.2f}% за {anomaly['window_days']} днів; "
+                f"історія {anomaly['history_points']} точок"
+            ),
+        ), f"anomaly:{asset_id}")
 
     # --- НАШ прогноз (лише довірені показники) ---
     for forecast in fetch_trusted_forecasts(conn, config.FORECAST_TRUSTED_METRICS):

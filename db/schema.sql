@@ -223,6 +223,10 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('ecb', 'macro', 'official_primary', 'ECB Data Portal (колишній SDW), єврозона'),
     ('boj', 'macro', 'official_primary', 'Bank of Japan Time-Series Data Search API, Японія'),
     ('estat', 'macro', 'official_primary', 'e-Stat (政府統計の総合窓口) API v3.0, Японія'),
+    ('fed_speeches_rss', 'news', 'official_primary', 'Federal Reserve — RSS промов членів Правління. Доданий 2026-10-13 для повного синтезу ставки: fed_rss це press_all.xml, тобто прес-релізи БЕЗ промов, а рішення формується в публічних виступах задовго до засідання'),
+    ('fed_testimony_rss', 'news', 'official_primary', 'Federal Reserve — RSS свідчень у Конгресі (Semiannual Monetary Policy Report тощо), той самий привід, що fed_speeches_rss'),
+    ('bls', 'macro', 'official_primary', 'Bureau of Labor Statistics public API v2 — ПЕРШОДЖЕРЕЛО тих рядів, які FRED лише передруковує (CPI/Core CPI/безробіття/зайнятість). Доданий 2026-10-13 як ДРУГЕ джерело для звірки макро (common/consensus.py): після кейсу з Brent, де FRED помилявся на 33%, "з макро, напевно, все гаразд" стало припущенням, а не знанням. Усі ряди СЕЗОННО ЗГЛАДЖЕНІ (CUSR/LNS/CES) — щоб бути парою до FRED; незгладжений CUUR дає інше число на тих самих даних. Без ключа 25 запитів/добу'),
+    ('yahoo_chart', 'quotes', 'aggregator', 'Yahoo Finance chart API (query1, недокументований) — ДРУГЕ незалежне джерело ціни watchlist-товарів/форексу/крипти + ІСТОРІЯ (127-184 денні точки проти 6-7 у tradingeconomics). Доданий 2026-10-12 після того, як звірка показала: FRED дає Brent 135.51 проти справжніх 102.25 (викид 33%), а кава у FRED — з липня. Свідомо перетинається по metric_id з fred/tradingeconomics, щоб джерела можна було ЗВІРЯТИ (common/consensus.py)'),
     ('twelvedata', 'quotes', 'aggregator', 'Twelve Data — щоденні ціна/обсяг акцій, безкоштовна реєстрація без капчі (Stooq відкинуто через бот-захист, Alpaca — гео-блок; docs/decisions.md 2026-09-20)'),
     ('sec_edgar', 'companies', 'official_primary', 'SEC EDGAR XBRL (companyconcept) — фундаментальні факти компаній, без ключа, обов''язковий User-Agent'),
     ('gdelt', 'news', 'aggregator', 'GDELT DOC 2.0 API — глобальний агрегатор новин, query-фільтр на рівні запиту (watchlist/general потоки — geopolitical перенесено на широкі RSS-фіди, docs/decisions.md 2026-09-27), без ключа'),
@@ -236,7 +240,6 @@ INSERT INTO sources (name, category, source_type, notes) VALUES
     ('skynews_rss', 'news', 'aggregator', 'Sky News — RSS World, без ключа'),
     ('dw_rss', 'news', 'aggregator', 'Deutsche Welle — RSS "all" (англомовний), без ключа'),
     ('cnbc_markets_rss', 'news', 'aggregator', 'CNBC — RSS Markets, без ключа (потік general, 2026-10-05)'),
-    ('yahoo_finance_rss', 'news', 'aggregator', 'Yahoo Finance — RSS news index, без ключа (потік general)'),
     ('marketwatch_rss', 'news', 'aggregator', 'MarketWatch — RSS Top Stories (Dow Jones), без ключа (потік general)'),
     ('investing_rss', 'news', 'aggregator', 'Investing.com — RSS news, без ключа (потік general)'),
     ('bbc_business_rss', 'news', 'aggregator', 'BBC Business — RSS, без ключа (потік general)'),
@@ -317,7 +320,13 @@ CREATE TABLE IF NOT EXISTS metric_forecasts (
     based_on_observed_at  DATE NOT NULL,
     periods_ahead         INTEGER NOT NULL DEFAULT 1,
     forecast_value        NUMERIC NOT NULL,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- "На що звернути увагу при виході" (2026-10-13, постановка
+    -- користувача 2026-10-11: принцип агента цього вимагав, а в
+    -- контракті прогнозу поля не було — було ЧИСЛО й обґрунтування,
+    -- але не те, ЩО саме перевіряти в релізі). NULL для naive-методів:
+    -- вони не викликають LLM узагалі.
+    watch_on_release TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_forecasts_unique
@@ -1096,3 +1105,148 @@ WHERE asset_id = 'bnb' AND search_term IS NULL;
 -- змінити той, хто змінює промпт, інакше два різні виміри
 -- виглядатимуть як один.
 ALTER TABLE backtest_verdicts ADD COLUMN IF NOT EXISTS prompt_variant TEXT;
+
+
+-- Відпечаток останнього НАДІСЛАНОГО складу для кожного notify-скрипта
+-- (2026-10-13). Призначення: часові розсилки мусять шле лише ЗМІНУ.
+--
+-- Живий привід. Вивід за 12 жовтня: `notify_screening` надіслав
+-- ІДЕНТИЧНИЙ список із 14 тикерів 13-й день підряд (той самий склад,
+-- той самий порядок); `notify_candidates` — ті самі 6 акцій (CCI,
+-- SBAC, MRNA, AMT, HUM, VST) ТРИЧІ за добу з однаковими числами, бо
+-- ціни акцій оновлюються раз на добу о 03:00; `notify_crypto_long` і
+-- `notify_crypto_screening` — той самий 1-2 кандидати 8 разів за
+-- добу. Разом ~25 повідомлень, з яких зі справді новим змістом — 6.
+--
+-- Чому цього не вирішував наявний `notified_at` (reporting/_common.py:
+-- mark_notified): він дедупить РЯДКИ, а скринінг/новачки щопрогону
+-- створюють НОВІ рядки з новим `run_at` — технічно не надіслані,
+-- змістово ті самі. Відпечаток працює на рівні СКЛАДУ, не рядків.
+--
+-- `fingerprint` — хеш відсортованого списку ідентифікаторів (тикери/
+-- символи/asset_id). Відсортованого свідомо: зміна лише ПОРЯДКУ при
+-- тому самому складі не є новиною для читача.
+CREATE TABLE IF NOT EXISTS notify_fingerprints (
+    notifier    TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    item_count  INTEGER NOT NULL DEFAULT 0,
+    sent_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+-- Текст звітів 10-K/10-Q + витяг тез (2026-10-13).
+--
+-- ОСТАННЯ невиконана обіцянка опису агента ("збирає ... звіти
+-- компаній"): `companies/sec_edgar_adapter.py` збирав лише ЧИСЛОВІ
+-- факти XBRL, а текст звіту — ніколи. Числа кажуть ЩО сталося, MD&A
+-- каже ЧОМУ, і це єдине місце, де компанія сама називає причини.
+--
+-- Живий привід: фундаментальний аналіз 12 жовтня переказував
+-- квартальні цифри ("виручка зросла з 3.69 до 5.04 млрд") і не міг
+-- пояснити причину — у звіті вона написана словами.
+--
+-- `full_text` зберігається цілком (~92 КБ на звіт у живому замірі):
+-- критичне правило 6 — сирі дані append-only, і якщо завтра
+-- знадобиться інший розділ, перезавантажувати з SEC не доведеться.
+-- `sections` — витягнуті розділи (mdna/risk_factors) у jsonb.
+CREATE TABLE IF NOT EXISTS company_filings (
+    id           BIGSERIAL PRIMARY KEY,
+    ticker       TEXT NOT NULL,
+    cik          BIGINT NOT NULL,
+    form         TEXT NOT NULL,
+    filing_date  DATE NOT NULL,
+    accession    TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    full_text    TEXT NOT NULL,
+    sections     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (accession, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_filings_ticker_date
+    ON company_filings (ticker, filing_date DESC);
+
+-- Тези, витягнуті LLM із тексту звіту. Окрема таблиця, не стовпці в
+-- `company_filings`: сирий текст і висновок про нього — різні сорти
+-- даних із різним життєвим циклом (текст незмінний назавжди, витяг
+-- можна перегенерувати іншою моделлю чи промптом), і правило 5
+-- вимагає логувати КОЖЕН LLM-виклик окремо (`llm_call_id`).
+CREATE TABLE IF NOT EXISTS filing_insights (
+    id            BIGSERIAL PRIMARY KEY,
+    filing_id     BIGINT NOT NULL REFERENCES company_filings(id) ON DELETE CASCADE,
+    ticker        TEXT NOT NULL,
+    summary       TEXT NOT NULL,
+    drivers       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    risks         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    changes       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    direction     TEXT,
+    confidence    NUMERIC,
+    llm_call_id   BIGINT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notified_at   TIMESTAMPTZ,
+    UNIQUE (filing_id)
+);
+
+
+-- Заплановані виступи членів центробанків (2026-10-13).
+--
+-- ЧОМУ З'ЯВИЛАСЬ. Постановка користувача 2026-10-11: "ставка
+-- прогнозується після виходу нових макроекономічних даних + новини +
+-- виступи банків та голів комісій". Виступи вже ПРИХОДИЛИ у фіді
+-- подій (живий замір 13 жовтня: 31 запис із 110 — "FOMC Member Waller
+-- Speaks" із датою та impact), але нікуди не писались — пролітали
+-- мимо на кожному прогоні `refresh_calendar`.
+--
+-- Окрема таблиця, не `release_log`: виступ не є РЕЛІЗОМ ДАНИХ. У
+-- нього немає ні значення, ні очікування, ні факту для порівняння —
+-- тобто весь контракт release_log (pending→detected→processed,
+-- expected_value) до нього не застосовний. Спільне в них лише те, що
+-- обидва мають дату з того самого фіду.
+CREATE TABLE IF NOT EXISTS policy_speeches (
+    id            BIGSERIAL PRIMARY KEY,
+    source        TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    speaker       TEXT,
+    institution   TEXT,
+    scheduled_at  TIMESTAMPTZ NOT NULL,
+    impact_level  TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (title, scheduled_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_speeches_scheduled
+    ON policy_speeches (scheduled_at DESC);
+
+
+-- Повний синтез ставки: прогноз РІШЕННЯ засідання (2026-10-13).
+--
+-- Останній незакритий пункт плану (постановка користувача 2026-10-11:
+-- "ставка прогнозується після виходу нових макроекономічних даних +
+-- новини + виступи банків та голів комісій").
+--
+-- Чому ОКРЕМА таблиця, а не `metric_forecasts`: там одиниця — число
+-- на наступний період, тут — РІШЕННЯ (hold/cut/hike) на конкретну
+-- дату засідання. Це зміряно важлива різниця: точковий прогноз
+-- ставки "на завтра" давав нуль помилки і в naive, і в ШІ (ставка
+-- між засіданнями не змінюється), тобто формально ідеальний
+-- результат без жодної передбачувальної цінності.
+--
+-- `UNIQUE (bank, meeting_at)` — один синтез на засідання; повторний
+-- прогін оновлює його новішими входами (нові дані/виступи до того ж
+-- засідання) і скидає `notified_at`, щоб оновлений висновок дійшов.
+CREATE TABLE IF NOT EXISTS policy_rate_synthesis (
+    id                BIGSERIAL PRIMARY KEY,
+    bank              TEXT NOT NULL,
+    metric_id         TEXT NOT NULL,
+    meeting_at        TIMESTAMPTZ NOT NULL,
+    decision          TEXT NOT NULL,
+    expected_rate     NUMERIC,
+    confidence        NUMERIC,
+    summary           TEXT NOT NULL,
+    reasoning         TEXT,
+    watch_on_release  TEXT,
+    llm_call_id       BIGINT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notified_at       TIMESTAMPTZ,
+    UNIQUE (bank, meeting_at)
+);

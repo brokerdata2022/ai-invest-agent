@@ -10,12 +10,18 @@ from news.rss_feeds import RSS_FEEDS
 
 _GEOPOLITICAL_FEEDS = {
     "fed_rss", "ecb_rss", "boj_rss",
+    # Промови й свідчення Fed додані 2026-10-13 для повного синтезу
+    # ставки: `fed_rss` це `press_all.xml`, тобто прес-релізи БЕЗ
+    # промов, а позиція комітету формується в публічних виступах
+    # задовго до засідання (постановка користувача 2026-10-11:
+    # "+ виступи банків та голів комісій").
+    "fed_speeches_rss", "fed_testimony_rss",
     "bbc_rss", "aljazeera_rss", "guardian_rss", "npr_rss", "skynews_rss", "dw_rss",
 }
 
 # Потік `general` (ринок/бізнес) — доданий 2026-10-05, docs/decisions.md.
 _GENERAL_FEEDS = {
-    "cnbc_markets_rss", "yahoo_finance_rss", "marketwatch_rss", "investing_rss",
+    "cnbc_markets_rss", "marketwatch_rss", "investing_rss",
     "bbc_business_rss", "guardian_business_rss", "npr_business_rss", "ft_rss",
 }
 

@@ -16,6 +16,7 @@ query для GDELT-збору) — явний --tracked-assets перекрив�
 import argparse
 import logging
 import os
+import re
 import sys
 from typing import Optional
 
@@ -32,6 +33,7 @@ sys.path.insert(0, os.path.join(_ANALYSIS_DIR, "..", "data-ingestion"))
 
 from common.db import get_connection  # noqa: E402
 from common.watchlist_db import fetch_asset_ids  # noqa: E402
+from config import WATCHLIST_MATCH_TERMS  # noqa: E402
 from llm_common import LlmError, log_llm_call, require_api_key  # noqa: E402
 from news_analysis._db import fetch_unanalyzed, save_analysis  # noqa: E402
 from news_analysis.relevance_filter import analyze_article, DeepSeekResponseError  # noqa: E402
@@ -40,25 +42,57 @@ from screening._results_db import fetch_latest_tickers  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+def matched_watchlist_assets(title: str) -> list[str]:
+    """ДЕТЕРМІНОВАНИЙ пошук watchlist-активів у заголовку статті
+    (`config.WATCHLIST_MATCH_TERMS` — там же повне обґрунтування й
+    живий замір).
+
+    Це ПРЕФІЛЬТР, не призначення активу: повертає, про які активи
+    стаття МОЖЕ бути, щоб `relevance_filter.py` поставив це питання
+    DeepSeek. Остаточне рішення — за моделлю, тому хибний
+    детермінований збіг ("gold mine air strikes" → xauusd) гине на
+    LLM-кроці, а не потрапляє в БД."""
+    lowered = (title or "").lower()
+    return [
+        asset_id
+        for asset_id, patterns in WATCHLIST_MATCH_TERMS.items()
+        if any(re.search(pattern, lowered) for pattern in patterns)
+    ]
+
+
 def resolve_tracked_assets(
     article_stream: str,
     explicit: Optional[list[str]],
     screening_tickers: Optional[list[str]] = None,
     default_tracked_assets: Optional[dict[str, list[str]]] = None,
+    title: Optional[str] = None,
 ) -> Optional[list[str]]:
     """Чиста функція вибору tracked_assets для однієї статті — явний
     --tracked-assets завжди виграє, інакше дефолт per stream
-    (`default_tracked_assets` — лише watchlist його має, рахує main()
-    через `common/watchlist_db.py:fetch_asset_ids(conn)`, 2026-10-03,
-    живий редагований список, не хардкод) + тикери з останнього
-    скринінгу (docs/decisions.md, "Ціль 2" — щоб DeepSeek міг
-    проставити asset_id=тикер для акційних новин, не тільки для
-    watchlist-активів)."""
+    (`default_tracked_assets` — watchlist і general його мають, рахує
+    main() через `common/watchlist_db.py:fetch_asset_ids(conn)`,
+    2026-10-03, живий редагований список, не хардкод) + тикери з
+    останнього скринінгу (docs/decisions.md, "Ціль 2" — щоб DeepSeek
+    міг проставити asset_id=тикер для акційних новин, не тільки для
+    watchlist-активів).
+
+    **`geopolitical` — через пошук, не через дефолт (2026-10-12).**
+    Цей потік і далі НЕ отримує список активів цілком (вихідне
+    заперечення 2026-10-06 чинне: "стаття про вибори — не новина про
+    EUR/USD"), але якщо заголовок пройшов детермінований пошук
+    (`matched_watchlist_assets`), стаття таки показується моделі — зі
+    списком ТІЛЬКИ тих активів, які збіглись. Причина: 12 жовтня
+    `news_collect_watchlist` (GDELT) провалив усі 4 прогони, потік
+    watchlist дав 0 статей, а дві історії, що РЕАЛЬНО рухали Brent
+    того дня (атаки в Ормузькій протоці), лежали в `geopolitical`
+    невидимі для синтезу по активах. Тепер цей потік — резерв
+    watchlist, якого доти не існувало."""
     if explicit:
         return explicit
     default = (default_tracked_assets or {}).get(article_stream)
     if default is None:
-        return None
+        matched = matched_watchlist_assets(title or "")
+        return matched or None
     if screening_tickers:
         return default + screening_tickers
     return default
@@ -121,6 +155,7 @@ def main() -> None:
             tracked_assets = resolve_tracked_assets(
                 article["stream"], explicit_tracked_assets, screening_tickers,
                 default_tracked_assets=default_tracked_assets,
+                title=article.get("title"),
             )
             try:
                 result, prompt, llm = analyze_article(

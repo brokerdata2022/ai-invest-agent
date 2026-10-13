@@ -123,3 +123,32 @@ def save_fundamental_analysis(
         analysis_id = cur.fetchone()[0]
     conn.commit()
     return analysis_id
+
+
+def fetch_latest_filing_insight(conn, ticker: str):
+    """Тези з ТЕКСТУ останнього звіту 10-K/10-Q цього тикера
+    (`filing_insights`, 2026-10-13), або None.
+
+    Потрібно `fundamental_llm.build_prompt`, щоб аналіз міг спиратись
+    не лише на цифри: живий вивід 12 жовтня показав, що з самих чисел
+    причину вивести неможливо — для кожної з 5 акцій писались ті самі
+    чотири ризики. Причина написана словами в MD&A."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT fi.summary, fi.drivers, fi.risks, fi.changes,
+                   fi.direction, fi.confidence,
+                   cf.form, cf.filing_date
+            FROM filing_insights fi
+            JOIN company_filings cf ON cf.id = fi.filing_id
+            WHERE fi.ticker = %s
+            ORDER BY cf.filing_date DESC
+            LIMIT 1
+            """,
+            (ticker,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        columns = [c[0] for c in cur.description]
+    return dict(zip(columns, row))

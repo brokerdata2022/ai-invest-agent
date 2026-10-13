@@ -146,7 +146,7 @@ def test_forecast_route_stays_on_the_cheapest_model(monkeypatch):
     найважливіше завдання"), але три прогони на тих самих 19
     показниках × 8 точках це не підтвердили: DeepSeek 8 перемог/4
     поразки, Opus 7/7, Sonnet 6/5 — при десятикратній різниці в ціні
-    (PLAN.md Фаза 2). Цей тест стереже саме рішення, а не реалізацію:
+    (docs/archive/plan-journal-2026-10-11.md Фаза 2). Цей тест стереже саме рішення, а не реалізацію:
     якщо хтось поверне дорогу модель без нового бектесту, він
     впаде."""
     monkeypatch.delenv("SYNTHESIS_LLM_PROVIDER", raising=False)

@@ -4,7 +4,7 @@ LLM-синтез причинного висновку "факт vs очікув
 "наступний крок Фази 2"): бере вже готовий детермінований сюрприз
 (compare_releases.py:expectation_comparisons) і формує людський
 висновок "вийшло X, очікувалось Y, це означає Z" — критерій завершення
-Фази 2 (PLAN.md).
+Фази 2 (docs/archive/plan-journal-2026-10-11.md).
 
 Межа шарів (rule 1, CLAUDE.md; analysis/CLAUDE.md "детермінований vs
 LLM"): сам сюрприз (surprise/surprise_pct) уже порахований звичайним

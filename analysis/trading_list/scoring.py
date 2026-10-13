@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import Optional
 
 import config
-from trading_list.categories import STOCK_MACRO_DAMPING
+from trading_list.categories import MACRO_DAMPING
 
 # Напрямки. up/down/neutral/unclear — ті самі, що решта проєкту
 # (llm_common.py:DIRECTIONS). CONFLICTING — власне значення саме цього
@@ -208,21 +208,38 @@ def catalyst_score(hits: list[CatalystHit], is_stock: bool = False) -> tuple[Dec
     """(скор [0,1], людський підсумок причин).
 
     Нормування: сума ваг спрацьованих сигналів діленням на
-    `CATALYST_WEIGHT_RELEASE_HIGH + CATALYST_WEIGHT_NEWS` — тобто
-    "високоімпактний реліз ПЛЮС значима новина" вважається повним
-    каталізатором (1.0). Свідомо не сума ВСІХ можливих ваг: вимагати
-    одночасно релізу, новини, синтезу й прогнозу означало б, що 1.0
-    недосяжна на практиці, і поріг втратив би сенс.
+    `CATALYST_WEIGHT_RELEASE_HIGH * MACRO_DAMPING +
+    CATALYST_WEIGHT_NEWS` — тобто "високоімпактний реліз ПЛЮС значима
+    новина" і далі вважається повним каталізатором (1.0). Свідомо не
+    сума ВСІХ можливих ваг: вимагати одночасно релізу, новини,
+    синтезу й прогнозу означало б, що 1.0 недосяжна на практиці, і
+    поріг втратив би сенс.
 
-    `is_stock` — для акцій макро-сигнали приглушуються
-    (`STOCK_MACRO_DAMPING`): макро-реліз стосується всього ринку
-    одразу й НЕ різнить 215 тикерів між собою, тож місце в топі тикер
-    мусить заробити власною новиною або трендом
-    (analysis/trading_list/categories.py, розділ про обмеження)."""
+    `* MACRO_DAMPING` у знаменнику з'явився 2026-10-13 РАЗОМ із
+    приглушенням макро для всіх класів активів — інакше стеля стала б
+    недосяжною: без цієї правки реліз+новина давали (0.25+0.7)/1.7 =
+    0.56, тобто "повний каталізатор" перестав би існувати, і всі
+    пороги відбору поїхали б униз на 44%. Після правки знаменник
+    0.95: реліз+новина = 1.0 як і було, власна новина сама = 0.74,
+    голе макро = 0.26. Саме та пропорція, якої бракувало.
+
+    **Широкі макро-сигнали приглушуються для ВСІХ класів активів**
+    (`MACRO_DAMPING`, з 2026-10-13; раніше — лише для акцій).
+    Макро-реліз стосується всього ринку одразу й НЕ різнить активи
+    між собою: ні 215 тикерів, ні btc від eth від eurusd. Без
+    приглушення глобальний high-реліз (0.59 після нормування) важив
+    БІЛЬШЕ за власну новину про актив (0.41) — повна арифметика й
+    живий наслідок у `categories.py:MACRO_DAMPING`.
+
+    `is_stock` лишається параметром, бо впливає на інші частини
+    скорингу, але на приглушення макро вже не впливає."""
     if not hits:
         return _ZERO, ""
 
-    denominator = config.CATALYST_WEIGHT_RELEASE_HIGH + config.CATALYST_WEIGHT_NEWS
+    denominator = (
+        config.CATALYST_WEIGHT_RELEASE_HIGH * Decimal(str(MACRO_DAMPING))
+        + config.CATALYST_WEIGHT_NEWS
+    )
 
     weighted: list[Decimal] = []
     parts: list[str] = []
@@ -234,8 +251,8 @@ def catalyst_score(hits: list[CatalystHit], is_stock: bool = False) -> tuple[Dec
         # `in ("release", "forecast")` ТИХО перестала приглушувати
         # макро для акцій. Жива регресія: каталізатор акцій підскочив
         # 0.18 → 0.71, і 6 акцій заповнили список.
-        if is_stock and (hit.kind.startswith("release") or hit.kind == "forecast"):
-            weight = weight * Decimal(str(STOCK_MACRO_DAMPING))
+        if hit.kind.startswith("release") or hit.kind == "forecast":
+            weight = weight * Decimal(str(MACRO_DAMPING))
         weighted.append(weight)
         if hit.text:
             parts.append(hit.text)

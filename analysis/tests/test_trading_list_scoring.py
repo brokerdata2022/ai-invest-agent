@@ -186,12 +186,29 @@ def test_catalyst_summary_joins_reasons():
     assert "4 джерела" in summary
 
 
-def test_catalyst_macro_damped_for_stocks():
-    """Макро не різнить 215 тикерів між собою, тож для акцій
-    приглушене — місце в топі тикер заробляє власною новиною."""
-    plain, _ = catalyst_score([_release_high()], is_stock=False)
-    damped, _ = catalyst_score([_release_high()], is_stock=True)
-    assert damped < plain
+def test_catalyst_macro_damped_for_every_asset_class():
+    """ПЕРЕПИСАНО 2026-10-13. Раніше тест закріплював протилежне —
+    що макро приглушене ЛИШЕ для акцій. Живий вивід 12 жовтня
+    показав, чого це коштувало: `catalyst_score` = 0.647 ідентично
+    для btc/eth/sol/eurusd/xauusd, 2 унікальні значення на 10
+    активів, тобто "фільтр за каталізатором" не фільтрував нічого, а
+    ранжування зводилось до тренду. Макро не різнить ні 215 тикерів,
+    ні 11 watchlist-активів — приглушення мусить бути однакове."""
+    as_stock, _ = catalyst_score([_release_high()], is_stock=True)
+    as_other, _ = catalyst_score([_release_high()], is_stock=False)
+    assert as_stock == as_other, "макро мусить приглушуватись однаково для всіх класів"
+
+
+def test_own_news_outweighs_broad_macro():
+    """Центральна властивість усього фільтра: прицільна подія
+    (новина саме про цей актив) мусить важити БІЛЬШЕ за глобальний
+    макрорелізу, інакше в топі стоять активи, про які нічого не
+    відбувається. До 2026-10-13 було навпаки: макро 0.59 проти
+    новини 0.41."""
+    macro, _ = catalyst_score([_release_high()])
+    own, _ = catalyst_score([_news()])
+    assert own > macro
+    assert own / macro > Decimal("2"), "прицільне мусить переважати широке в рази"
 
 
 def test_catalyst_news_not_damped_for_stocks():
@@ -399,9 +416,17 @@ def test_catalyst_counts_only_strongest_hits():
     many = [_news(f"новина {i}") for i in range(6)]
     score, _ = catalyst_score(many)
 
+    # Знаменник той самий, що в scoring.py (з 2026-10-13 містить
+    # MACRO_DAMPING — інакше стеля "повного каталізатора" стала б
+    # недосяжною, див. докстрінг catalyst_score).
+    from trading_list.categories import MACRO_DAMPING
+
     expected = (
         config.CATALYST_WEIGHT_NEWS * config.CATALYST_MAX_COUNTED_HITS
-        / (config.CATALYST_WEIGHT_RELEASE_HIGH + config.CATALYST_WEIGHT_NEWS)
+        / (
+            config.CATALYST_WEIGHT_RELEASE_HIGH * Decimal(str(MACRO_DAMPING))
+            + config.CATALYST_WEIGHT_NEWS
+        )
     )
     assert score == min(expected, Decimal("1"))
 
@@ -495,14 +520,17 @@ def test_crypto_magnitude_saturates_at_one():
     assert score == Decimal("1")
 
 
-def test_stock_damping_survives_hit_kind_rename():
+def test_macro_damping_survives_hit_kind_rename():
     """Жива регресія 2026-10-04: типи хітів перейменували на
     release_upcoming/release_done, а перевірка приглушення шукала
     точний "release" — і тихо перестала працювати (каталізатор акцій
-    0.18 → 0.71, 6 акцій заповнили список). Перевіряємо КОЖЕН
-    release-тип, щоб перейменування знову не пройшло непоміченим."""
+    0.18 → 0.71, 6 акцій заповнили список).
+
+    Переписано 2026-10-13 під новий контракт: приглушення вже не
+    залежить від `is_stock`, тому порівнюємо з НЕПРИГЛУШЕНОЮ вагою
+    прицільної новини — КОЖЕН release-тип мусить важити менше за
+    неї, інакше перейменування знову пройде непоміченим."""
+    own_news, _ = catalyst_score([_news()])
     for kind in ("release_upcoming", "release_done", "forecast"):
-        hit = CatalystHit(kind, config.CATALYST_WEIGHT_RELEASE_HIGH)
-        plain, _ = catalyst_score([hit], is_stock=False)
-        damped, _ = catalyst_score([hit], is_stock=True)
-        assert damped < plain, f"{kind}: приглушення для акцій не застосувалось"
+        macro, _ = catalyst_score([CatalystHit(kind, config.CATALYST_WEIGHT_RELEASE_HIGH)])
+        assert macro < own_news, f"{kind}: приглушення макро не застосувалось"

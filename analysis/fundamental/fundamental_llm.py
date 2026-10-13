@@ -154,11 +154,24 @@ def build_prompt(
     company_name: Optional[str],
     series: dict[str, list[dict]],
     valuation: Optional[dict] = None,
+    filing_insight: Optional[dict] = None,
 ) -> str:
     """`series` — {людська назва показника: [{observed_at, value}, ...]}
     у ХРОНОЛОГІЧНОМУ порядку (найстаріше перше).
     `valuation` — уже порахований зріз зі `screening_results`
-    (pe/revenue_growth/eps_growth); None, якщо тикера там немає."""
+    (pe/revenue_growth/eps_growth); None, якщо тикера там немає.
+    `filing_insight` — тези з ТЕКСТУ останнього 10-K/10-Q
+    (`filing_insights`), додано 2026-10-13.
+
+    **Навіщо `filing_insight`.** Живий вивід 12 жовтня показав межу
+    цього аналізу: він переказував цифри ("виручка зросла з 3.69 до
+    5.04 млрд") і для кожної з 5 акцій писав ті самі чотири ризики
+    ("волатильний прибуток", "разові статті", "P/E закладає ріст"),
+    бо з самих чисел причину вивести НЕМОЖЛИВО. Причина написана
+    словами в MD&A, і тепер вона в промпті: на тому ж AAPL витяг дав
+    "зростання iPhone Pro у всіх регіонах", "повернення сплачених
+    тарифів після рішення Верховного суду", "посилення формулювання
+    про дефіцит NAND/DRAM" — те, чого в числах немає взагалі."""
     header = f"Компанія: {company_name or ticker} ({ticker})"
     lines = [header, ""]
 
@@ -185,11 +198,37 @@ def build_prompt(
         )
         lines.append(f"- {label} — {rendered}")
 
+    if filing_insight:
+        lines.append("")
+        lines.append(
+            f"Що САМА КОМПАНІЯ пише в останньому звіті "
+            f"({filing_insight.get('form', '10-K/10-Q')}, "
+            f"{filing_insight.get('filing_date', '')}):"
+        )
+        if filing_insight.get("summary"):
+            lines.append(f"- Головне: {filing_insight['summary']}")
+        for key, label in (
+            ("drivers", "Чинники, які керівництво називає причинами"),
+            ("risks", "Ризики, які компанія вважає суттєвими"),
+            ("changes", "Що ЗМІНИЛОСЬ у формулюваннях відносно попереднього звіту"),
+        ):
+            items = filing_insight.get(key) or []
+            if items:
+                lines.append(f"- {label}:")
+                lines.extend(f"  • {item}" for item in items)
+
     lines.append("")
     lines.append(
         "Проаналізуй динаміку цих показників і скажи, що вони означають "
         "для стану бізнесу."
     )
+    if filing_insight:
+        lines.append(
+            "Спирайся на формулювання зі звіту там, де вони пояснюють "
+            "цифри: саме вони відрізняють причину від збігу. Окремо "
+            "зазнач, якщо цифри й слова компанії РОЗХОДЯТЬСЯ — це "
+            "сильніший сигнал за будь-який з них окремо."
+        )
     return "\n".join(lines)
 
 

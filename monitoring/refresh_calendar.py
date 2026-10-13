@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-Наперед заводить календар релізів на найближчий цикл — тижнева
-періодичність ("щонеділі оновлюємо календар на наступний тиждень і
-зберігаємо дату+час публікацій").
+Наперед заводить календар релізів на найближчий цикл — ЩОДЕННИЙ
+прогін, горизонт `config.CALENDAR_HORIZON_DAYS` (21 день).
+
+Було: тижнево + горизонт 7 днів. Ці два числа стикались без
+перекриття, і реліз, що випадав за 8 днів від прогону, чекав до
+наступного понеділка. Живий наслідок (аудит 2026-10-11): 9
+показників із 15 за два тижні роботи ЖОДНОГО РАЗУ не потрапили в
+release_log, зокрема `cpi` і `core_cpi` — рівно ті, де бектест дає
+найбільшу перевагу ШІ. Тепер кожен реліз має ~20 спроб завестись
+замість однієї.
 
 Два шляхи визначення дати релізу:
 1. **FRED-анкоровані** (US, `release_calendar.RELEASE_IDS`) — FRED дає
@@ -40,9 +47,13 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-ingestion"))
 
+from config import CALENDAR_HORIZON_DAYS  # noqa: E402
+
 from common.db import get_connection  # noqa: E402
 from economic_calendar import fetch_calendar, find_event, find_upcoming_event  # noqa: E402
 from metric_sources import ADAPTER_BY_METRIC, CALENDAR_ONLY_METRICS  # noqa: E402
+from official_calendars import fetch_official_dates  # noqa: E402
+from speeches import save_speeches  # noqa: E402
 from release_calendar import (  # noqa: E402
     IMPACT_LEVELS,
     default_scheduled_datetime,
@@ -65,7 +76,7 @@ def _resolve_scheduled_fields(metric_id: str, event: Optional[dict], due_date: d
         impact = event["impact"].lower() if event.get("impact") in ("High", "Medium", "Low") else IMPACT_LEVELS.get(metric_id)
         expected_value = event.get("forecast") or None
         return scheduled_at, impact, expected_value
-    return default_scheduled_datetime(due_date), IMPACT_LEVELS.get(metric_id), None
+    return default_scheduled_datetime(due_date, metric_id), IMPACT_LEVELS.get(metric_id), None
 
 
 def _seed_or_enrich(conn, source: str, metric_id: str, due_date: date, event: Optional[dict]) -> None:
@@ -101,7 +112,10 @@ def refresh_fred_anchored(conn, api_key: str, metric_id: str, calendar_events) -
     dates = parse_release_dates(raw)
     due_date = next_scheduled_release(dates)
     if due_date is None:
-        logger.info("%s: наступний реліз ще не в межах горизонту (7 днів) — пропущено, спробуємо наступного тижня", metric_id)
+        logger.info(
+            "%s: наступний реліз ще не в межах горизонту (%d днів) — пропущено, спробуємо наступного прогону",
+            metric_id, CALENDAR_HORIZON_DAYS,
+        )
         return
 
     event = find_event(metric_id, calendar_events, due_date)
@@ -110,13 +124,59 @@ def refresh_fred_anchored(conn, api_key: str, metric_id: str, calendar_events) -
 
 
 def refresh_calendar_only(conn, metric_id: str, calendar_events) -> None:
+    """Показники без FRED-календаря (єврозона/Японія).
+
+    **Порядок джерел змінено 2026-10-13.** Було: ForexFactory-фід —
+    ЄДИНЕ джерело і дати, і часу. Фід покриває лише поточний тиждень,
+    тож на практиці це означало "дати майже ніколи немає": за весь час
+    роботи агента `eurozone_deposit_rate`, `japan_cpi` і
+    `japan_policy_rate` не потрапили в `release_log` ЖОДНОГО РАЗУ.
+
+    Тепер той самий розподіл ролей, що вже був для US: ОФІЦІЙНЕ
+    джерело дає ДАТУ (`official_calendars.py` — статистичний календар
+    ECB, календар засідань Ради ECB, розклад засідань BOJ, розклад
+    публікацій CPI Японії), ForexFactory ЗБАГАЧУЄ часом/impact/
+    forecast, якщо збіг знайдеться.
+
+    ForexFactory лишається РЕЗЕРВОМ дати: якщо офіційна сторінка
+    зламалась (це HTML-скрейпінг, не API) — працює старий шлях."""
+    source = ADAPTER_BY_METRIC[metric_id][0].source
+
+    official_due_date = None
+    try:
+        official_dates = fetch_official_dates(metric_id)
+    except Exception:
+        # Зламана сторінка ОДНОГО джерела не повинна зупиняти решту
+        # показників — тому лог і перехід на резерв, а не підняття.
+        logger.error(
+            "%s: офіційний календар недоступний/змінив формат — пробуємо ForexFactory",
+            metric_id, exc_info=True,
+        )
+        official_dates = None
+
+    if official_dates:
+        official_due_date = next_scheduled_release(official_dates)
+
+    if official_due_date is not None:
+        event = find_event(metric_id, calendar_events, official_due_date)
+        logger.info(
+            "%s: дата з офіційного календаря — %s%s",
+            metric_id, official_due_date,
+            " (+ збагачення з economic_calendar)" if event else " (без збігу у фіді: час/impact — fallback)",
+        )
+        _seed_or_enrich(conn, source, metric_id, official_due_date, event)
+        return
+
     event = find_upcoming_event(metric_id, calendar_events)
     if event is None:
-        logger.info("%s: немає збігу в economic_calendar у межах горизонту — пропущено (немає іншого джерела дати)", metric_id)
+        logger.info(
+            "%s: ні офіційного календаря, ні збігу в economic_calendar у межах "
+            "горизонту — пропущено", metric_id,
+        )
         return
 
     due_date = datetime.fromisoformat(event["date"]).date()
-    source = ADAPTER_BY_METRIC[metric_id][0].source
+    logger.info("%s: дата з ForexFactory-фіду (резерв) — %s", metric_id, due_date)
     _seed_or_enrich(conn, source, metric_id, due_date, event)
 
 
@@ -147,6 +207,18 @@ def main() -> None:
 
     conn = get_connection()
     try:
+        # Виступи членів ЦБ із того самого фіду (2026-10-13). Доти
+        # вони приходили й ПРОЛІТАЛИ МИМО: цикл нижче шукає у фіді
+        # лише збіги з нашими 15 показниками, а виступи — не релізи
+        # даних, тож відкидались. Живий замір: 31 виступ зі 110 подій.
+        # Потрібні для повного синтезу ставки (постановка користувача
+        # 2026-10-11: "+ виступи банків та голів комісій").
+        try:
+            save_speeches(conn, calendar_events)
+        except Exception:
+            logger.error("Збереження виступів провалилось — календар релізів це не блокує", exc_info=True)
+            conn.rollback()
+
         for metric_id in metric_ids:
             try:
                 if metric_id in CALENDAR_ONLY_METRICS:

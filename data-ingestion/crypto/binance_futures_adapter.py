@@ -2,7 +2,7 @@
 Адаптер Binance USDⓈ-M Futures public API — широкий ринок безстрокових
 ф'ючерсів (НЕ закритий watchlist `crypto/binance_adapter.py`,
 docs/watchlist.md) для крипто-скринінгу лонг/шорт/спостереження
-(PLAN.md, Фаза 4; методологія узгоджена з користувачем — докладніше
+(docs/archive/plan-journal-2026-10-11.md, Фаза 4; методологія узгоджена з користувачем — докладніше
 docs/decisions.md, 2026-09-27).
 https://binance-docs.github.io/apidocs/futures/en/
 

@@ -57,7 +57,7 @@ def _crypto_prices() -> None:
 def _crypto_derivatives_collect() -> None:
     """Щоденний bulk-знімок 3 бірж ф'ючерсів (обсяг/funding/OI, де
     доступно bulk) — для крипто-скринінгу лонг/шорт/спостереження
-    (analysis/crypto_screening/, PLAN.md Фаза 4, крок 4.5). Той самий
+    (analysis/crypto_screening/, docs/archive/plan-journal-2026-10-11.md Фаза 4, крок 4.5). Той самий
     підхід, що _crypto_prices(): одна біржа не валить решту.
 
     Критично для самої скринінг-логіки (не просто "збір заради збору"):
@@ -122,10 +122,13 @@ def _watchlist_prices() -> None:
     sys.path.insert(0, str(REPO_ROOT / "analysis"))
     sys.path.insert(0, str(REPO_ROOT / "data-ingestion"))
     from commodities.tradingeconomics_adapter import TradingEconomicsAdapter  # noqa: E402
+    from quotes.yahoo_chart_adapter import YahooChartAdapter  # noqa: E402
     from common.db import get_connection, insert_observations  # noqa: E402
+    from common.consensus import SourceValue, reconcile  # noqa: E402
     from common.watchlist_db import (  # noqa: E402
         SourceCandidate, choose_freshest_source, fetch_price_sources, fetch_watchlist,
     )
+    from config import CONSENSUS_TOLERANCE_PCT  # noqa: E402
     from crypto.binance_adapter import BinanceAdapter  # noqa: E402
     from macro.fred_adapter import FredAdapter  # noqa: E402
     from quotes.twelvedata_adapter import TwelveDataAdapter  # noqa: E402
@@ -143,30 +146,70 @@ def _watchlist_prices() -> None:
     # джерело, якщо треба — без ручного втручання. Перший у списку —
     # завжди бажаний (лишається активним, якщо сам свіжий).
     #
-    # coffee СВІДОМО відсутня тут — немає жодного ЩОДЕННОГО
-    # структурованого альтернативного джерела (FRED дає лише МІСЯЧНУ
-    # PCOFFOTMUSDM, марно як "резерв" для денної свіжості) — чесно,
-    # не вдаваний резерв.
+    # ⚠️ FRED ВИКИНУТО З ЛАНЦЮЖКІВ 2026-10-12. Цей механізм обирає
+    # джерело ЗА СВІЖІСТЮ (choose_freshest_source) — і це була
+    # небезпечна неповнота: свіжість нічого не каже про
+    # ПРАВИЛЬНІСТЬ. Живий замір того дня: FRED давав Brent 135.51
+    # проти справжніх 102.25 (викид 33%, правильне значення
+    # підтверджене ручною звіркою по двох сайтах), WTI 97.89 проти
+    # 91.11, газ 3.03 проти 3.14, каву 359.16 проти 287.89 (бо серія
+    # місячна, з липня). Усі ці значення СВІЖІ — тобто ланцюжок
+    # радісно перемкнувся б на них. Джерело, яке демонстровано
+    # бреше, не може бути резервом; "резерв" із хибними числами
+    # гірший за відсутність резерву.
+    #
+    # yahoo_chart — ПЕРШИЙ кандидат: у живому замірі збігся з
+    # tradingeconomics у межах 0.3-1.4% (тобто два незалежні джерела
+    # підтверджують одне одного) і додатково дає ІСТОРІЮ — 127-184
+    # денні точки проти 6-7, без якої тренд-шар торгового списку був
+    # сліпий на 7 із 10 активів.
+    #
+    # coffee ТЕПЕР ТУТ (раніше свідомо відсутня — "немає жодного
+    # щоденного структурованого альтернативного джерела, FRED дає
+    # лише МІСЯЧНУ PCOFFOTMUSDM"): Yahoo `KC=F` дає денну свічку,
+    # тобто справжній щоденний резерв, а не вдаваний.
     _FALLBACK_CHAINS: dict[str, list] = {
         "xauusd": [
+            SourceCandidate("yahoo_chart", "xauusd", None),
             SourceCandidate("tradingeconomics", "xauusd", "gold"),
             SourceCandidate("twelvedata", "xauusd", "XAU/USD"),
         ],
+        "xagusd": [
+            SourceCandidate("yahoo_chart", "xagusd", None),
+        ],
         "wti_crude": [
+            SourceCandidate("yahoo_chart", "wti_crude", None),
             SourceCandidate("tradingeconomics", "wti_crude", "crude-oil"),
-            SourceCandidate("fred", "wti_crude", None),
         ],
         "brent_crude": [
+            SourceCandidate("yahoo_chart", "brent_crude", None),
             SourceCandidate("tradingeconomics", "brent_crude", "brent-crude-oil"),
-            SourceCandidate("fred", "brent_crude", None),
         ],
         "natgas": [
+            SourceCandidate("yahoo_chart", "natgas", None),
             SourceCandidate("tradingeconomics", "natgas", "natural-gas"),
-            SourceCandidate("fred", "natgas", None),
+        ],
+        "coffee": [
+            SourceCandidate("yahoo_chart", "coffee", None),
+            SourceCandidate("tradingeconomics", "coffee", "coffee"),
+        ],
+        "eurusd": [
+            SourceCandidate("yahoo_chart", "eurusd", None),
+            SourceCandidate("twelvedata", "eurusd", "EUR/USD"),
+        ],
+        "usdjpy": [
+            SourceCandidate("yahoo_chart", "usdjpy", None),
+            SourceCandidate("twelvedata", "usdjpy", "USD/JPY"),
         ],
     }
 
     def _collect_candidate(candidate: SourceCandidate):
+        if candidate.source == "yahoo_chart":
+            # limit=130 (а не 10, як у решти): цей адаптер — єдине
+            # джерело ГЛИБИНИ для watchlist-активів, і тренд-шар
+            # вимагає config.TREND_LONG_DAYS=60 точок. Append-only
+            # дедуп робить повторний збір тих самих дат безпечним.
+            return YahooChartAdapter(metric_id=candidate.metric_id).collect(limit=130)
         if candidate.source == "tradingeconomics":
             return TradingEconomicsAdapter(metric_id=candidate.metric_id, slug=candidate.ticker).collect()
         if candidate.source == "twelvedata":
@@ -180,6 +223,43 @@ def _watchlist_prices() -> None:
                 return []
             return FredAdapter(api_key=fred_key, metric_id=candidate.metric_id).collect(limit=10)
         return []
+
+    def _exclude_outliers(conn, asset_id: str, chain: list) -> list:
+        """Кандидати без тих, чиє останнє значення розходиться з
+        рештою понад `config.CONSENSUS_TOLERANCE_PCT`.
+
+        Якщо викидів немає, менше двох джерел, або згоди взагалі
+        немає (`disagree` — двоє не згодні, переможця нічим
+        визначити) — повертаємо ланцюжок як є: тут не місце
+        відмовлятись від даних, завдання вужче — не дати ВИКИДУ
+        стати активним джерелом."""
+        values = []
+        with conn.cursor() as cur:
+            for candidate in chain:
+                cur.execute(
+                    """
+                    SELECT value FROM raw_observations
+                    WHERE source = %s AND metric_id = %s
+                    ORDER BY observed_at DESC, revision DESC
+                    LIMIT 1
+                    """,
+                    (candidate.source, candidate.metric_id),
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    values.append(SourceValue(candidate.source, row[0]))
+
+        tolerance = CONSENSUS_TOLERANCE_PCT.get(asset_id, CONSENSUS_TOLERANCE_PCT["default"])
+        verdict = reconcile(asset_id, values, tolerance)
+        if verdict.status != "outlier":
+            return chain
+
+        logger.warning(
+            "%s: звірка джерел — %s; викид(и) виключено з вибору активного джерела",
+            asset_id, verdict.detail,
+        )
+        remaining = [c for c in chain if c.source not in verdict.outliers]
+        return remaining or chain
 
     conn = get_connection()
     try:
@@ -225,6 +305,14 @@ def _watchlist_prices() -> None:
                     # прогін цієї джоби логував би хибне "невідоме
                     # джерело" на ці активи.
                     continue
+                elif source == "yahoo_chart":
+                    # Основне джерело watchlist-товарів/форексу з
+                    # 2026-10-12: єдине, що дає і денну свіжість, і
+                    # ГЛИБИНУ (limit=130 проти 10 у решти — тренд-шар
+                    # вимагає config.TREND_LONG_DAYS=60 точок, і без
+                    # цього список торгів друкував "історії недосить"
+                    # на 7 із 10 активів).
+                    records = YahooChartAdapter(metric_id=metric_id).collect(limit=130)
                 elif source == "tradingeconomics":
                     # coffee/wti_crude/brent_crude/natgas (2026-10-04,
                     # critical rule 7) — справжній автоматизований
@@ -257,6 +345,8 @@ def _watchlist_prices() -> None:
         # Тут пробуємо КОЖНОГО кандидата в ланцюжку (включно з тим, що
         # вже зібраний вище, — повторний виклик нешкідливий,
         # insert_observation ідемпотентний) і обираємо найсвіжіший.
+
+
         for asset_id, chain in _FALLBACK_CHAINS.items():
             try:
                 for candidate in chain:
@@ -270,7 +360,15 @@ def _watchlist_prices() -> None:
                         )
                         conn.rollback()
 
-                chosen = choose_freshest_source(conn, asset_id, chain)
+                # ЗВІРКА ДЖЕРЕЛ перед вибором (2026-10-13). Свіжість
+                # не каже нічого про правильність: усі хибні значення
+                # FRED (Brent 135.51 проти справжніх 102.25) були
+                # СВІЖІ, тож вибір "за свіжістю" радісно перемкнувся б
+                # на брехню. Тепер звірка вирішує, КОМУ взагалі можна
+                # вірити, і лише потім свіжість вибирає серед
+                # довірених. Повне обґрунтування — common/consensus.py.
+                trusted = _exclude_outliers(conn, asset_id, chain)
+                chosen = choose_freshest_source(conn, asset_id, trusted)
                 logger.info("%s: активне джерело -> %s", asset_id, chosen.source)
             except Exception:
                 logger.error("%s: вибір резервного джерела провалився", asset_id, exc_info=True)
@@ -344,9 +442,11 @@ def _macro_daily_series() -> None:
 def _prune_logs() -> None:
     """Видаляє файли logs/*.log, старші за LOG_RETENTION_DAYS.
 
-    Кожен запуск джоби пише окремий файл (runner.py:_log_path) — за
-    поточним розкладом це ~150 файлів на добу (лише check_releases —
-    96), тобто десятки тисяч за місяць безперервної роботи на VPS.
+    Один файл на джобу за добу (runner.py:_log_path, 2026-10-11) — за
+    поточним розкладом це 54 файли на добу, тобто ~750 за вікно
+    зберігання. До добового групування було по файлу на ВИКЛИК, і
+    8 щохвилинних джоб давали ~12 000 файлів/добу (живий стан перед
+    фіксом — 96 364 файли / 384 МБ).
     Логи — не джерело істини (rule 6 захищає сирі ДАНІ в БД, не
     раннтайм-вивід джоб; logs/ тому й у .gitignore), тож їх можна
     прибирати. 14 днів — достатньо, щоб розібрати будь-який провал
@@ -422,8 +522,20 @@ def _prune_raw_news() -> None:
 
 
 JOBS = {
-    "check_releases": {
-        "subprocess": _py(str(REPO_ROOT / "monitoring" / "check_releases.py")),
+    # ОДИН конвеєр замість СЕМИ щохвилинних джоб (злито 2026-10-13):
+    # check_releases → update_forecasts → compare_expectations →
+    # synthesize_expectations → notify_expectations /
+    # notify_release_impact / notify_forecasts.
+    #
+    # Було 7 × 1440 = 10 080 запусків Python-інтерпретера на добу, з
+    # яких ~99.9% закінчувались "нічого робити" (релізів ~10 за 15
+    # днів). Тепер один процес робить ОДИН дешевий SQL-запит "чи є
+    # робота" і виходить, якщо її немає.
+    #
+    # Порядок кроків і контракт провалу не змінились — див.
+    # orchestration/release_pipeline.py.
+    "release_pipeline": {
+        "subprocess": _py(str(REPO_ROOT / "orchestration" / "release_pipeline.py")),
     },
     "telegram_commands": {
         "subprocess": _py(str(REPO_ROOT / "orchestration" / "telegram_commands.py")),
@@ -436,24 +548,6 @@ JOBS = {
     },
     "notify_calendar_outlook": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "calendar_notify.py")),
-    },
-    "update_forecasts": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "update_forecasts.py")),
-    },
-    "notify_forecasts": {
-        "subprocess": _py(str(REPO_ROOT / "reporting" / "forecast_notify.py")),
-    },
-    "compare_expectations": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "compare_releases.py")),
-    },
-    "synthesize_expectations": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "expectations" / "synthesize.py")),
-    },
-    "notify_expectations": {
-        "subprocess": _py(str(REPO_ROOT / "reporting" / "expectations_notify.py")),
-    },
-    "notify_release_impact": {
-        "subprocess": _py(str(REPO_ROOT / "reporting" / "release_impact_notify.py")),
     },
     "news_collect_watchlist": {
         # retries=3 СКАСОВАНО 2026-10-05 (повернуто до дефолтного 1).
@@ -483,23 +577,23 @@ JOBS = {
         # на прогін), тому ретраї тут шкодили найдужче.
         "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "collect_stock_news.py")),
     },
-    "news_analysis_watchlist": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "watchlist"),
+    # ОДНА джоба замість трьох (`news_analysis_watchlist`/`_geopolitical`/
+    # `_general`, злито 2026-10-13). Скрипт без `--stream` сам бере
+    # непроаналізовані статті ВСІХ потоків одним запитом
+    # (`_db.py:fetch_unanalyzed(stream=None)`), а `tracked_assets`
+    # вибирається ПО СТАТТІ (`resolve_tracked_assets`), не по джобі —
+    # тобто розділення на три процеси нічого не давало, крім трьох
+    # записів у логах і трьох конекшенів до БД.
+    "news_analysis": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py")),
     },
-    "news_analysis_geopolitical": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "geopolitical"),
-    },
-    "news_analysis_general": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "run_news_analysis.py"), "--stream", "general"),
-    },
-    "news_consolidate_watchlist": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "watchlist"),
-    },
-    "news_consolidate_general": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "general"),
-    },
-    "news_consolidate_geopolitical": {
-        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py"), "--stream", "geopolitical"),
+    # ОДНА джоба замість трьох (злито 2026-10-13). Тут потоки
+    # лишаються ОКРЕМИМИ LLM-викликами (різні промпти), але цикл
+    # усередині скрипта з ізоляцією помилок по потоку
+    # (`consolidate_one_stream`) — збій на одному не забирає решту,
+    # як раніше гарантував сам факт трьох джоб.
+    "news_consolidate": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "news_analysis" / "consolidate.py")),
     },
     "news_merge_similar": {
         # Семантичне об'єднання дублів МІЖ прогонами consolidate.py
@@ -545,6 +639,19 @@ JOBS = {
     },
     "notify_market_synthesis": {
         "subprocess": _py(str(REPO_ROOT / "reporting" / "market_notify.py")),
+    },
+    "policy_rate_synthesis": {
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "synthesize_policy_rate.py")),
+    },
+    "notify_policy_rate": {
+        "subprocess": _py(str(REPO_ROOT / "reporting" / "policy_rate_notify.py")),
+    },
+    "filing_insights": {
+        # Звіти виходять раз на квартал, тож щодня тут нічого робити;
+        # але сам прогін дешевий (`already_analyzed` відсікає вже
+        # розібране до LLM-виклику), і тижневий ритм гарантує, що
+        # новий 10-Q не чекатиме на наступний квартал.
+        "subprocess": _py(str(REPO_ROOT / "analysis" / "fundamental" / "analyze_filings.py")),
     },
     "fundamental_analysis": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "fundamental" / "run_analysis.py")),
@@ -638,6 +745,11 @@ JOBS = {
     },
     "forecast_daily_series": {
         "subprocess": _py(str(REPO_ROOT / "analysis" / "forecasting" / "forecast_daily.py")),
+    },
+    "macro_crosscheck": {
+        "subprocess": _py(
+            str(REPO_ROOT / "monitoring" / "crosscheck_macro.py"), "--store", "--notify",
+        ),
     },
     "prune_logs": {
         "callable": _prune_logs,

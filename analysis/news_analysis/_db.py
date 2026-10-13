@@ -74,6 +74,55 @@ def fetch_relevant_for_aggregation(
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def fetch_consolidated_as_clusters(
+    conn,
+    streams: tuple[str, ...],
+    max_age_days: int,
+    min_sources: int,
+    limit: int,
+) -> list[dict]:
+    """Консолідовані історії як вхід для глобального синтезу.
+
+    **Чому не `aggregate.cluster_articles` (зміна 2026-10-13).** Той
+    шлях групує статті за СХОЖІСТЮ ЗАГОЛОВКІВ (SequenceMatcher), і на
+    живих даних він не знаходить ДУБЛІКАТІВ ВЗАГАЛІ: замір 13 жовтня —
+    19 geopolitical-статей дали 19 кластерів, 20 general дали 20,
+    `source_count = 1` у кожного. Через це `top_clusters(limit=8)`
+    нічого не ранжував (усі ваги однакові) і просто віддавав перші 8
+    у довільному порядку — звідси `cluster_count = 8` у ВСІХ 26
+    рядках `market_synthesis` за весь час існування, однакові
+    заголовки щодня і `confidence = 0.35` у 14 з 26.
+
+    `news_consolidated` (LLM-дедуп, джоби `news_consolidate_*` +
+    `news_merge_similar`) ті самі дублікати знаходить: той самий
+    замір дав до 19 джерел на одну історію і 40 підтверджених (2+
+    джерела) за 3 дні. Тобто шкала значущості існувала, синтез просто
+    читав не з того місця.
+
+    `min_sources` відсікає непідтверджені історії, `limit` лишається
+    захистом від роздування промпта — але тепер це СТЕЛЯ, а не
+    фіксована кількість: якщо підтверджених історій три, синтез і
+    побачить три, а `cluster_count` у БД почне відображати реальність.
+    """
+    placeholders = ", ".join(["%s"] * len(streams))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT summary, direction, source_count, source_urls,
+                   source_raw_news_ids, asset_id, created_at
+            FROM news_consolidated
+            WHERE stream IN ({placeholders})
+              AND created_at >= now() - (%s || ' days')::interval
+              AND source_count >= %s
+            ORDER BY source_count DESC, created_at DESC
+            LIMIT %s
+            """,
+            (*streams, max_age_days, min_sources, limit),
+        )
+        columns = [c[0] for c in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def save_synthesis(
     conn,
     asset_id: str,

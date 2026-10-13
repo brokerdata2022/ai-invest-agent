@@ -291,7 +291,7 @@ def main() -> None:
                 # для цього активу (prices.py:is_anomalous_move()) —
                 # інакше нема про що писати: ні новини, ні незвичного
                 # руху. Раніше такий актив НІКОЛИ навіть не перевірявся.
-                history = fetch_price_history(conn, asset_id)
+                history = fetch_price_history(conn, asset_id, price_sources=price_sources)
                 if not is_anomalous_move(price.pct_change, history, args.max_age_days):
                     logger.debug(
                         "%s: без новин і рух ціни не аномальний (%.2f%%) — пропущено",

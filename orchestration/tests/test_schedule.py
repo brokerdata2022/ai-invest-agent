@@ -30,22 +30,46 @@ def test_every_job_is_subprocess_or_callable():
         )
 
 
-def test_expectations_chain_second_offsets_preserve_order():
-    """Регресія 2026-10-02: весь ланцюжок check_releases→update_forecasts→
-    compare_expectations→synthesize_expectations→notify_expectations
-    тепер щохвилини (було: зсуви в межах 15-хв вікна) — порядок у межах
-    ОДНІЄЇ хвилини тепер тримається на "second", не "minute". Критично:
-    update_forecasts МАЄ йти перед compare_expectations (інакше
-    'detected'-рядок, який update_forecasts ще не встиг прочитати,
-    стане 'processed' і зникне з вибірки НАЗАВЖДИ — не самолікується
-    наступного тику, на відміну від решти пар)."""
-    chain = [
-        "check_releases", "update_forecasts", "compare_expectations",
-        "synthesize_expectations", "notify_expectations",
-    ]
-    seconds = [SCHEDULE[name]["trigger"].get("second", 0) for name in chain]
-    assert seconds == sorted(seconds), f"{chain} мають зростаючий 'second': {seconds}"
-    assert len(set(seconds)) == len(seconds), "кожен крок ланцюжка має власний 'second', без колізій"
+def test_release_pipeline_step_order_is_preserved():
+    """ПЕРЕПИСАНО 2026-10-13. Раніше ланцюжок був СІМОМА окремими
+    джобами на щохвилинному тригері, і порядок тримався на зсуві по
+    секундах у розкладі — цей тест його й перевіряв. Тепер це ОДИН
+    процес (`orchestration/release_pipeline.py`), тож порядок живе в
+    коді, і стерегти треба саме його.
+
+    Критично й незмінно: `update_forecasts` МАЄ йти перед
+    `compare_expectations`. Обидва читають рядки `release_log` у
+    статусі 'detected', але власником переходу в 'processed' є
+    `compare_releases.py`. При зворотному порядку рядок стане
+    'processed' раніше, ніж прогноз його побачить, і прогноз НЕ
+    ОНОВИТЬСЯ ніколи — це не самолікується наступного тику, на
+    відміну від решти пар."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from release_pipeline import STEPS
+
+    names = [name for name, _ in STEPS]
+    assert names.index("update_forecasts") < names.index("compare_expectations"), (
+        "update_forecasts мусить іти ПЕРЕД compare_expectations — інакше "
+        "'detected'-рядок стане 'processed' до оновлення прогнозу"
+    )
+    assert names.index("check_releases") == 0, "детекція релізу — перший крок"
+    assert names.index("synthesize_expectations") < names.index("notify_expectations")
+    assert names.index("synthesize_expectations") < names.index("notify_release_impact")
+
+
+def test_release_pipeline_steps_point_at_existing_scripts():
+    """Шлях, що не існує, провалився б лише в рантаймі о 3 ранку."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from release_pipeline import STEPS
+
+    for name, script in STEPS:
+        assert script.is_file(), f"{name}: немає файлу {script}"
 
 
 # ============================================================
@@ -74,7 +98,7 @@ PRODUCER_NOTIFIER_PAIRS = [
     ("fundamental_analysis", "notify_fundamental"),
     ("calendar_outlook", "notify_calendar_outlook"),
     ("discover_candidates", "notify_candidates"),
-    ("news_consolidate_watchlist", "news_notify"),
+    ("news_consolidate", "news_notify"),
 ]
 
 # Дві дати: літній і зимовий час — інверсія може зʼявитись лише в

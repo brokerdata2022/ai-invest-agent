@@ -279,3 +279,49 @@ def test_is_anomalous_move_false_when_history_is_flat():
     # порівнювати", не хибне "усе аномальне".
     history = [Decimal("100")] * (ANOMALY_MIN_HISTORY + 2)
     assert is_anomalous_move(Decimal("20"), history, window_days=7) is False
+
+
+def test_fetch_price_history_respects_live_price_sources(monkeypatch):
+    """ЛАТЕНТНИЙ БАГ, знайдений 2026-10-13. Функція викликала
+    `_resolve_price_source(asset_id)` БЕЗ живого списку, тож завжди
+    падала на хардкод `ASSET_PRICE_SOURCES`. Поки хардкод і
+    `watchlist_assets` збігались, це було непомітно. Але 2026-10-12
+    watchlist перевели на `yahoo_chart` (127-251 точка), а хардкод
+    лишився на `tradingeconomics` з 6-7 точками — тобто детектор
+    аномалій читав саме той ряд, де `ANOMALY_MIN_HISTORY`=10 ніколи не
+    виконується, і повертав False ЗАВЖДИ. Не падав, не логував —
+    просто тихо нічого не знаходив."""
+    from news_analysis import prices as prices_module
+
+    seen = {}
+
+    def fake_fetch_recent(conn, source, metric_id, limit):
+        seen["source"] = source
+        seen["metric_id"] = metric_id
+        return [{"value": Decimal("1")}]
+
+    monkeypatch.setattr(prices_module, "fetch_recent", fake_fetch_recent)
+    prices_module.fetch_price_history(
+        conn=None, asset_id="wti_crude",
+        price_sources={"wti_crude": ("yahoo_chart", "wti_crude")},
+    )
+
+    assert seen["source"] == "yahoo_chart", (
+        "живий список джерел мусить перекривати хардкод ASSET_PRICE_SOURCES"
+    )
+
+
+def test_fetch_price_history_still_falls_back_to_hardcoded_map(monkeypatch):
+    """Без живого списку поведінка лишається попередньою — щоб
+    викликачі, які його не мають, не зламались."""
+    from news_analysis import prices as prices_module
+
+    seen = {}
+
+    def fake_fetch_recent(conn, source, metric_id, limit):
+        seen["source"] = source
+        return [{"value": Decimal("1")}]
+
+    monkeypatch.setattr(prices_module, "fetch_recent", fake_fetch_recent)
+    prices_module.fetch_price_history(conn=None, asset_id="wti_crude")
+    assert seen["source"] == prices_module.ASSET_PRICE_SOURCES["wti_crude"][0]

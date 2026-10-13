@@ -2,7 +2,7 @@
 """
 Формує й зберігає LLM-прогноз наступного значення одного показника
 (llm_forecast.py) — наскрізний шлях "історія з БД → LLM → metric_forecasts"
-(PLAN.md, Фаза 2 + Фаза 5: "Прогнозування — LLM замість Python-моделі",
+(docs/archive/plan-journal-2026-10-11.md, Фаза 2 + Фаза 5: "Прогнозування — LLM замість Python-моделі",
 рішення користувача 2026-09-28).
 
 Не плутати з analysis/expectations/: там факт порівнюється з РИНКОВИМ
@@ -251,6 +251,7 @@ def run_forecast(
         confidence=result.confidence,
         summary=result.summary,
         reasoning=result.reasoning,
+        watch_on_release=result.watch_on_release,
         llm_call_id=llm_call_id,
     )
     logger.info(

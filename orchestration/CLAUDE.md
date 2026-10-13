@@ -55,10 +55,16 @@ orchestration нічого не запам'ятовує МІЖ окремими 
 (ретрай — виняток, він живе всередині одного виклику `run_job()`).
 
 ## Логи джоб
-Кожен запуск пише окремий файл `logs/<джоба>_<UTC-timestamp>.log`
-(`runner.py`). Це ~150 файлів на добу, тому є джоба `prune_logs`
-(щодня 4:30, `jobs.py:LOG_RETENTION_DAYS = 14`) — без неї диск сервера
-росте нескінченно. `logs/` у `.gitignore` і не є джерелом істини
+ОДИН файл на джобу за ДОБУ — `logs/<джоба>_<YYYYMMDD>.log`
+(`runner.py:_log_path`), прогони дописуються з заголовком-таймстемпом.
+Це ~50 файлів на добу.
+
+До 2026-10-13 файл писався на кожен ВИКЛИК, і обґрунтування "~150
+файлів на добу" стало хибним, коли ланцюжок релізу перевели на
+щохвилинний тригер: фактично ~12 000 файлів/добу, живий стан —
+96 364 файли / 384 МБ. На VPS це впирається в іноди раніше, ніж у
+диск. Джоба `prune_logs` (щодня 4:30,
+`jobs.py:LOG_RETENTION_DAYS = 14`) лишається. `logs/` у `.gitignore` і не є джерелом істини
 (критичне правило №6 про сирі ДАНІ в БД, не про раннтайм-вивід).
 
 ## Часовий пояс
@@ -83,7 +89,7 @@ orchestration нічого не запам'ятовує МІЖ окремими 
 спрацювання в UTC для літа й зими й звіряє з відкриттям ринку).
 
 ## Telegram-команди людською мовою (ручний запуск джоб)
-`telegram_commands.py` (щохвилини, той самий ритм, що `check_releases`)
+`telegram_commands.py` (щохвилини, той самий ритм, що `release_pipeline`)
 опитує Telegram `getUpdates` і запускає відповідну джобу ІМЕНЕМ
 замість `docker compose exec app python run_job.py <назва>`.
 Авторизація — лише `TELEGRAM_CHAT_ID` з `.env`. **Важливо:** запуск
@@ -95,10 +101,10 @@ orchestration нічого не запам'ятовує МІЖ окремими 
 
 **Меню звужено до "інформаційних" джоб (2026-10-03, рішення
 користувача після живого тесту):** через Telegram виконуються ЛИШЕ
-джоби з `command_descriptions.py:INFO_JOB_NAMES` (12 з 44 — ті, що
+джоби з `command_descriptions.py:INFO_JOB_NAMES` (14 з 48 — ті, що
 САМІ надсилають інформацію: `notify_*`/`daily_digest`), не будь-яка
 з `JOBS` — технічна джоба (збір даних/LLM-аналіз без доставки),
-набрана вручну, дає "Невідома команда". Решта 32 джоб і далі
+набрана вручну, дає "Невідома команда". Решта 34 джоби і далі
 виконуються за розкладом автоматично — без змін, звужено лише
 РУЧНИЙ запуск через Telegram; ручний запуск технічної джоби лишається
 через `docker compose exec app python run_job.py <назва>`.
@@ -119,7 +125,7 @@ docker compose logs -f scheduler
 docker compose exec app python orchestration/register_telegram_commands.py
 
 # ручний запуск однієї джоби негайно (для тестів) — той самий образ/код
-docker compose exec app python orchestration/run_job.py check_releases
+docker compose exec app python orchestration/run_job.py release_pipeline
 docker compose exec app python orchestration/run_job.py --list
 
 # тести

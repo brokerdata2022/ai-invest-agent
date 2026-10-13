@@ -75,3 +75,12 @@ CALENDAR_ONLY_METRICS: list[str] = [
     "japan_policy_rate",
     "japan_cpi",
 ]
+
+
+# Макропоказники, для яких існує ДРУГЕ незалежне джерело (BLS) і які
+# тому можна звіряти — `macro/bls_adapter.py:METRICS`. Решта 15
+# показників лишається без звірки: real_gdp/pce — це BEA,
+# retail_sales/housing_starts — Census, claims — DOL, і для них
+# другого джерела ще не підключено (чесна межа, задокументована в
+# docs/decisions.md 2026-10-13).
+CROSSCHECKABLE_METRICS = ("cpi", "core_cpi", "unemployment_rate", "nonfarm_payrolls")

@@ -73,6 +73,7 @@ from news_analysis._consolidated_db import (  # noqa: E402
     mark_consolidated,
     save_consolidated_item,
 )
+from common.news_adapter import STREAMS  # noqa: E402
 from news_analysis.aggregate import NewsCluster, cluster_articles  # noqa: E402
 from news_analysis.relevance_filter import extract_description  # noqa: E402
 from screening._results_db import fetch_latest_tickers  # noqa: E402
@@ -265,11 +266,75 @@ def consolidate_stream(
     return saved
 
 
+def consolidate_one_stream(conn, stream: str, max_age_days: int, limit: int) -> int:
+    """Консолідація ОДНОГО потоку. Повертає скільки історій збережено.
+
+    Винесено з `main()` 2026-10-13, коли три джоби
+    (`news_consolidate_watchlist`/`_general`/`_geopolitical`) злили в
+    одну: цикл по потоках потребує, щоб збій на одному потоці НЕ
+    зупиняв решту — раніше цю ізоляцію давав сам факт трьох окремих
+    джоб, тепер її мусить давати код."""
+    articles = fetch_unconsolidated_raw_news(
+        conn, stream=stream, max_age_days=max_age_days, limit=limit
+    )
+    if not articles:
+        logger.info("%s: немає нових сирих статей для консолідації", stream)
+        return 0
+
+    logger.info("%s: %d сирих статей у промпт", stream, len(articles))
+
+    # Живий (редагований через Telegram, 2026-10-03) watchlist
+    # (commodities/FX/крипта) + тикери, що пройшли скринінг.
+    #
+    # **`general` ТЕПЕР ТЕЖ отримує список (2026-10-13)** — раніше
+    # лише `watchlist`. Це був справжній дефект, не оптимізація:
+    # замір показав **0 із 196** консолідованих історій за 48 годин
+    # із заповненим `asset_id`, а без `asset_id` вони не стають
+    # каталізатором у торговому списку (`_db.py:
+    # fetch_news_catalysts` фільтрує `asset_id IS NOT NULL`). Потік
+    # `watchlist` при цьому стояв порожній — GDELT, його єдине
+    # джерело з цільовим запитом, у тривалому бані. Тобто список
+    # активів передавався рівно в той потік, де статей не було.
+    # Та сама правка, що вже зроблена для `run_news_analysis.py`
+    # 2026-10-06 із тієї самої причини.
+    #
+    # `geopolitical` свідомо БЕЗ списку: широкі редакційні стрічки про
+    # події, не про активи, і тегування там дало б хибні привʼязки
+    # (стаття про вибори — не новина про EUR/USD). Активо-специфічні
+    # історії з цього потоку підхоплює детермінований префільтр у
+    # `run_news_analysis.py:matched_watchlist_assets`.
+    tracked_assets = None
+    if stream in ("watchlist", "general"):
+        tracked_assets = fetch_asset_ids(conn) + fetch_latest_tickers(conn)
+
+    try:
+        saved = consolidate_stream(conn, stream, articles, tracked_assets=tracked_assets)
+    except ConsolidationResponseError:
+        logger.exception("%s: некоректна відповідь LLM — потік пропущено", stream)
+        return 0
+    except LlmError:
+        logger.exception("%s: збій виклику LLM — потік пропущено", stream)
+        return 0
+
+    # Позначаємо ВСІ вхідні статті як враховані (навіть ті, що LLM
+    # відкинув як шум) — інакше вони пережовувались би щоразу.
+    mark_consolidated(conn, [a["id"] for a in articles])
+    # `consolidate_stream` повертає СПИСОК збережених історій, не
+    # кількість — лічильник тут мусить брати len() (жива помилка
+    # першого прогону після злиття джоб: "+=: 'int' and 'list'").
+    logger.info("%s: збережено %d консолідованих історій", stream, len(saved))
+    return len(saved)
+
+
 def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stream", choices=["watchlist", "general", "geopolitical"], required=True)
+    parser.add_argument(
+        "--stream", choices=["watchlist", "general", "geopolitical"], default=None,
+        help="конкретний потік; БЕЗ цього прапорця обробляються ВСІ три "
+             "(так ходить джоба news_consolidate з 2026-10-13)",
+    )
     parser.add_argument(
         "--max-age-days", type=int, default=2,
         help="2 (48г) узгоджено з common/news_db.py:RETENTION_HOURS — старіше все одно не зберігається",
@@ -279,49 +344,33 @@ def main() -> None:
 
     require_api_key("news_consolidation")
 
+    streams = [args.stream] if args.stream else list(STREAMS)
+
     conn = get_connection()
     try:
-        articles = fetch_unconsolidated_raw_news(
-            conn, stream=args.stream, max_age_days=args.max_age_days, limit=args.limit
-        )
-        if not articles:
-            logger.info("%s: немає нових сирих статей для консолідації", args.stream)
-            return
-
-        logger.info("%s: %d сирих статей у промпт", args.stream, len(articles))
-
-        tracked_assets = None
-        if args.stream == "watchlist":
-            # Живий (редагований через Telegram, 2026-10-03) watchlist
-            # (commodities/FX/крипта) + тикери, що пройшли скринінг
-            # (collect_stock_news.py пише статті про них у той самий
-            # stream="watchlist") — без цього акції зі скринінгу в
-            # промпті були відомі DeepSeek лише як "щось про watchlist",
-            # без явного tracked_assets-підказки.
-            tracked_assets = fetch_asset_ids(conn) + fetch_latest_tickers(conn)
-
-        try:
-            saved = consolidate_stream(conn, args.stream, articles, tracked_assets=tracked_assets)
-        except ConsolidationResponseError:
-            logger.exception("%s: некоректна відповідь LLM — прогін пропущено", args.stream)
-            return
-        except LlmError:
-            logger.exception("%s: збій виклику LLM — прогін пропущено", args.stream)
-            return
-
-        # Позначаємо ВСІ вхідні статті як враховані (навіть ті, що LLM
-        # відкинув як шум) — інакше вони пережовувались би щоразу.
-        mark_consolidated(conn, [a["id"] for a in articles])
-
+        total = 0
+        failed: list[str] = []
+        for stream in streams:
+            try:
+                total += consolidate_one_stream(
+                    conn, stream, args.max_age_days, args.limit,
+                )
+            except Exception:
+                # Ізоляція потоків: збій на одному не повинен забирати
+                # решту (раніше це гарантувалось трьома окремими
+                # джобами — тепер мусить гарантувати код).
+                logger.exception("%s: несподіваний збій — потік пропущено", stream)
+                failed.append(stream)
+                conn.rollback()
         logger.info(
-            "%s: %d сирих статей → %d консолідованих записів",
-            args.stream, len(articles), len(saved),
+            "Готово: %d історій по %d потоках%s",
+            total, len(streams),
+            f", провалено: {', '.join(failed)}" if failed else "",
         )
-        for item in saved:
-            logger.info(
-                "  [%s] %s (%d джерел): %s",
-                item.get("asset_id") or "—", item["direction"], item["source_count"], item["summary"],
-            )
+        if failed and len(failed) == len(streams):
+            # Усі потоки впали — це справжній провал, runner.py мусить
+            # ретраїти й сповістити.
+            sys.exit(1)
     finally:
         conn.close()
 

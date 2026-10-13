@@ -136,8 +136,23 @@ def test_composite_weights_sum_to_one():
     total = (
         config.WEIGHT_REVENUE_GROWTH + config.WEIGHT_EPS_GROWTH
         + config.WEIGHT_NEG_PE + config.WEIGHT_AVG_DOLLAR_VOLUME
+        + config.WEIGHT_MOMENTUM
     )
     assert total == 1
+
+
+def test_fundamentals_stay_majority_of_composite_score():
+    """Моментум додано 2026-10-13, бо 85% ваги на КВАРТАЛЬНИХ даних
+    тримали скринінг нерухомим 13 днів підряд. Але це лишається
+    ФУНДАМЕНТАЛЬНИЙ скринер — ціна переупорядковує всередині
+    відібраного пулу, а не визначає відбір. Якщо цінова частка колись
+    перевищить фундаментальну, це вже інший інструмент, і зміна має
+    бути свідомою, а не наслідком правки одного числа."""
+    fundamental = (
+        config.WEIGHT_REVENUE_GROWTH + config.WEIGHT_EPS_GROWTH + config.WEIGHT_NEG_PE
+    )
+    price_based = config.WEIGHT_AVG_DOLLAR_VOLUME + config.WEIGHT_MOMENTUM
+    assert fundamental > price_based
 
 
 def test_pe_range_is_ordered():

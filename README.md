@@ -3,7 +3,7 @@
 Агент, який автоматично збирає макроекономічні дані, звіти компаній,
 новини й офіційну статистику, аналізує їх відносно ринкових очікувань
 і формує короткі звіти. Детальний опис задуму — `CLAUDE.md`, поточний
-статус і план — `PLAN.md`.
+план — `PLAN.md`, перевірений стан кожної джоби — `docs/jobs.md`.
 
 ## Стек
 
@@ -104,7 +104,8 @@ bash scripts/bootstrap_2_pipeline.sh
 Календар релізів (`refresh_calendar`) — окремий перший крок: без нього
 `release_log` лишається порожнім аж до першого запланованого запуску
 (понеділок 6:00), і весь ланцюжок факт/очікування
-(`check_releases`/`compare_expectations`/`synthesize_expectations`/
+(`release_pipeline` — один процес замість семи щохвилинних джоб;
+усередині `check_releases`/`compare_expectations`/`synthesize_expectations`/
 `notify_expectations`) на свіжому розгортанні просто нічого не робить
 (жива діра, знайдена 2026-09-27) — bootstrap тепер засіює його одразу.
 
@@ -147,7 +148,7 @@ docker compose logs -f scheduler
 
 # Запустити одну джобу негайно, не чекаючи розкладу
 docker compose exec app python orchestration/run_job.py --list
-docker compose exec app python orchestration/run_job.py check_releases
+docker compose exec app python orchestration/run_job.py release_pipeline
 ```
 
 ## Перевірка даних у БД напряму
@@ -185,7 +186,8 @@ docker compose exec app pytest
 "Структура репозиторію" (тримається тільки там — щоб не розходились дві
 копії при кожній зміні структури). Кожна тека має власний `CLAUDE.md` з
 деталями саме цього домену. Повна картина потоку даних —
-`docs/architecture.md`. Поточний статус і що далі — `PLAN.md`.
+`docs/architecture.md`. Що агент фактично робить — `docs/jobs.md`,
+що далі — `PLAN.md`.
 
 ## Усунення проблем
 

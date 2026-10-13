@@ -7,7 +7,7 @@ analysis/crypto_screening/run_screening.py (денний скан, заводи�
 статусу). Тільки форматування готового результату, жодної аналітики
 (reporting/CLAUDE.md).
 
-PLAN.md, Фаза 4, Крок 5: "Telegram-сповіщення про SHORT/WATCH (зараз
+docs/archive/plan-journal-2026-10-11.md, Фаза 4, Крок 5: "Telegram-сповіщення про SHORT/WATCH (зараз
 лише лог)" — закрито тут. LONG-кандидати (той самий run_screening.py,
 широкий скан ринку) НЕ покриті — вони лише логуються, ніколи не
 персистуються в БД (окреме рішення, потребує власної таблиці — не
@@ -37,12 +37,18 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import bold, escape_html, fetch_dicts, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    bold, composition_changed, escape_html, fetch_dicts,
+    remember_composition, resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Ключ для _common.composition_changed — дорівнює назві джоби.
+NOTIFIER = "notify_crypto_screening"
 
 # Тон: описові характеристики (напрямок ризику, рівень уваги), не
 # прямі інструкції "шорти/купуй" (analysis/CLAUDE.md "Заборонені
@@ -105,8 +111,24 @@ def main() -> None:
             logger.info("Активних крипто-кандидатів немає — сповіщення не надсилається")
             return
 
+        # Цей скрипт СВІДОМО не має дедупу по рядках — шле повний
+        # активний список щоразу (рішення 2026-10-03). Рішення
+        # лишається чинним: перелік має бути повним. Але повторювати
+        # НЕЗМІННИЙ перелік 4 рази на добу (джоба о 0/6/12/18) — це
+        # шум; живий вивід 12 жовтня показав той самий 1 кандидат
+        # чотири рази. Тепер повний перелік ідe лише тоді, коли його
+        # СКЛАД змінився: з'явився новий кандидат або закрився старий.
+        symbols = [f'{row["symbol"]}:{row["status"]}' for row in rows]
+        if not composition_changed(conn, NOTIFIER, symbols):
+            logger.info(
+                "Склад активних крипто-кандидатів не змінився (%d) — не надсилаємо",
+                len(symbols),
+            )
+            return
+
         text = format_message(rows)
         send_telegram_message(token, chat_id, text, parse_mode="HTML")
+        remember_composition(conn, NOTIFIER, symbols)
         logger.info("Надіслано в Telegram: %d крипто-кандидатів", len(rows))
     finally:
         conn.close()

@@ -170,15 +170,21 @@ class _FakeConn:
         (fetch_recent_candidates, ()),
     ],
 )
-def test_fetch_functions_filter_out_already_notified_rows(fetch_fn, extra_args):
-    """Реальний SQL, не мокнутий: доводить, що кожне з 4 джерел
-    daily_digest тепер виключає рядки, які вже надіслала окрема
-    notify_*-джоба, а не тільки бере "усе за --hours"."""
+def test_fetch_functions_read_whole_window_regardless_of_notified(fetch_fn, extra_args):
+    """ПЕРЕПИСАНО 2026-10-13. Раніше тест закріплював протилежне — що
+    кожне з 4 джерел виключає вже надіслані рядки. На живих даних це
+    означало, що дайджест не бачить НІЧОГО: десять окремих notify-джоб
+    проходять раніше й позначають усе надісланим. Вивід 12 жовтня —
+    о 20:00 надіслано "Сьогодні суттєвих подій не було" в день, коли
+    Brent зробив +5% на ракетному удару по Ер-Ріяду.
+
+    Дайджест — ЗВЕДЕННЯ дня (Ціль 5), не черга доставки залишків,
+    тому читає все вікно."""
     conn = _FakeConn()
     fetch_fn(conn, 24, *extra_args)
     assert len(conn.executed) == 1
     query, params = conn.executed[0]
-    assert "notified_at IS NULL" in query
+    assert "notified_at IS NULL" not in query
     assert params[0] == 24
 
 
@@ -226,31 +232,54 @@ def _patch_digest_sources(monkeypatch, conn, sent, *, news=(), market=None, surp
     monkeypatch.setattr("sys.argv", ["daily_digest.py"])
 
 
-def test_main_marks_every_sent_row_notified_via_real_sql(monkeypatch):
-    """Наскрізно: fetch_* підмінені (щоб не залежати від реальної БД), а
-    mark_notified()/mark_expectations_notified() лишаються РЕАЛЬНИМИ —
-    перевіряє фактичний UPDATE SQL, виконаний після кожної відправки, а
-    не просто факт виклику мокнутої функції."""
+def test_main_sends_exactly_one_consolidated_message(monkeypatch):
+    """ПЕРЕПИСАНО 2026-10-13. Раніше дайджест слав ОКРЕМЕ повідомлення
+    на кожну позицію й позначав кожен рядок надісланим. Обидві
+    властивості виявились хибними на живих даних:
+
+    - окремі повідомлення: коли фільтр `notified_at IS NULL` прибрали
+      (бо через нього дайджест не бачив нічого), він одразу надіслав
+      **25 повідомлень** за один прогін — тобто з "порожній" став
+      "потоком", а Ціль 5 просить "кілька СПРАВДІ важливих подій";
+    - позначення надісланим: дайджест відбирав матеріал у наступних
+      прогонів окремих notify-джоб, тобто лише переносив проблему.
+
+    Тепер — ОДНЕ зведення з розділами, і нічого не споживається."""
     conn = _FakeConn()
     sent = []
     _patch_digest_sources(
         monkeypatch, conn, sent,
-        news=[_news_row(1)], market=_market_row(2), surprises=[_surprise_row(3)], candidates=[_candidate_row(4)],
+        news=[_news_row(1)], market=_market_row(2),
+        surprises=[_surprise_row(3)], candidates=[_candidate_row(4)],
     )
 
     daily_digest.main()
 
-    assert len(sent) == 4  # market іде першим повідомленням, далі news/surprises/candidates
-    update_queries = {q: p for q, p in conn.executed}
-    market_update = next(q for q, p in conn.executed if "market_synthesis" in q and "UPDATE" in q)
-    news_update = next(q for q, p in conn.executed if "news_synthesis" in q and "UPDATE" in q)
-    expectation_update = next(q for q, p in conn.executed if "expectation_comparisons" in q and "UPDATE" in q)
-    candidate_update = next(q for q, p in conn.executed if "candidate_assets" in q and "UPDATE" in q)
-    assert update_queries[market_update] == ([2],)
-    assert update_queries[news_update] == ([1],)
-    assert update_queries[expectation_update] == ([3],)
-    assert update_queries[candidate_update] == ([4],)
-    assert conn.committed == 4  # один commit на кожен mark_notified/mark_expectations_notified виклик
+    assert len(sent) == 1, "дайджест мусить бути ОДНИМ повідомленням"
+    assert conn.executed == [], "дайджест не позначає рядки надісланими"
+    assert conn.committed == 0
+
+
+def test_digest_caps_each_section(monkeypatch):
+    """Ліміт на розділ (config.DIGEST_MAX_ITEMS_PER_SECTION) — те, чого
+    бракувало, коли прогін видав 25 повідомлень. Зайві позиції не
+    зникають безслідно: показується "…ще N"."""
+    import config
+
+    many = [_news_row(i) for i in range(config.DIGEST_MAX_ITEMS_PER_SECTION + 4)]
+    text, count = daily_digest.build_digest(
+        market_row=None, news_rows=many, surprise_rows=[], candidate_rows=[], hours=24,
+    )
+
+    assert count == config.DIGEST_MAX_ITEMS_PER_SECTION
+    assert "…ще 4" in text
+
+
+def test_digest_reports_zero_items_for_empty_window():
+    text, count = daily_digest.build_digest(
+        market_row=None, news_rows=[], surprise_rows=[], candidate_rows=[], hours=24,
+    )
+    assert count == 0
 
 
 def test_main_sends_fallback_and_marks_nothing_when_all_already_notified(monkeypatch):
@@ -269,32 +298,3 @@ def test_main_sends_fallback_and_marks_nothing_when_all_already_notified(monkeyp
     assert conn.committed == 0
 
 
-def test_main_marks_earlier_rows_notified_even_if_a_later_send_fails(monkeypatch):
-    """Доводить, що позначення notified_at відбувається ОДРАЗУ після
-    кожного повідомлення (не одним батчем наприкінці) — інакше
-    мережевий збій на 2-му з 2 повідомлень змусив би наступний прогін
-    надіслати вже успішно доставлений перший рядок вдруге."""
-    conn = _FakeConn()
-    sent = []
-
-    def flaky_send(token, chat_id, text, parse_mode=None):
-        sent.append(text)
-        if len(sent) == 2:
-            raise ConnectionError("simulated Telegram outage")
-
-    monkeypatch.setattr(daily_digest, "resolve_telegram_credentials", lambda: ("token", "chat"))
-    monkeypatch.setattr(daily_digest, "get_connection", lambda: conn)
-    monkeypatch.setattr(daily_digest, "send_telegram_message", flaky_send)
-    monkeypatch.setattr(daily_digest, "fetch_recent_news_synthesis", lambda conn, hours: [_news_row(1), _news_row(5)])
-    monkeypatch.setattr(daily_digest, "fetch_recent_market_synthesis", lambda conn, hours: None)
-    monkeypatch.setattr(daily_digest, "fetch_recent_surprises", lambda conn, hours: [])
-    monkeypatch.setattr(daily_digest, "fetch_recent_candidates", lambda conn, hours: [])
-    monkeypatch.setattr("sys.argv", ["daily_digest.py"])
-
-    with pytest.raises(ConnectionError):
-        daily_digest.main()
-
-    assert len(sent) == 2  # другий виклик і кинув виняток, але це вже ПІСЛЯ send
-    news_updates = [(q, p) for q, p in conn.executed if "news_synthesis" in q]
-    assert len(news_updates) == 1  # лише перший рядок (id=1) встиг позначитись
-    assert news_updates[0][1] == ([1],)

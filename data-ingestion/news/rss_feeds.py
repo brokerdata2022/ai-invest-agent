@@ -60,16 +60,43 @@ raw_payload.
    не латаємо нескінченно. Вісім інших бізнес-фідів дають ~200
    статей на прогін, тож втрата покриття незначна.
 
-   `watchlist` (новини ПО КОНКРЕТНОМУ активу) резерву так і не має —
-   і це чесне обмеження, не недогляд: RSS не вміє запиту "лише про
-   золото", цільовий запит може зробити тільки GDELT. Натомість той
-   самий збій тепер не тихий: мʼякий троттл піднімає помилку, джоба
-   падає, runner.py бачить провал (gdelt_adapter.py, 2026-10-05).
+   `watchlist` (новини ПО КОНКРЕТНОМУ активу) **резерв отримав
+   2026-10-12**, коли GDELT провалив усі 4 прогони за добу й потік
+   дав 0 статей. Резерв — не новий фід, а ПОШУК у вже зібраному
+   корпусі цих самих фідів: `config.WATCHLIST_MATCH_TERMS` +
+   `run_news_analysis.py:matched_watchlist_assets()` показують моделі
+   geopolitical/general-статтю, заголовок якої збігся з
+   watchlist-терміном (детермінований префільтр; `asset_id` і далі
+   ставить DeepSeek, тому хибний збіг гине на LLM-кроці).
+
+   Попереднє формулювання тут було "резерву так і не має, і це чесне
+   обмеження: RSS не вміє запиту 'лише про золото'". Обмеження
+   справжнє, висновок був хибний: з того, що RSS не вміє ЗАПИТУ, не
+   випливає, що в ньому НЕМА потрібних статей. Живий доказ 12
+   жовтня — дві історії про атаки в Ормузькій протоці лежали в
+   `geopolitical` невидимі для синтезу, поки Brent робив +5.07%.
+   Деталі й замір — docs/decisions.md 2026-10-12.
 """
 
 RSS_FEEDS: dict[str, dict[str, str]] = {
     "fed_rss": {
         "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "stream": "geopolitical",
+    },
+    # Промови й свідчення Fed (додано 2026-10-13). `fed_rss` вище —
+    # це `press_all.xml`, тобто ПРЕС-РЕЛІЗИ без промов, і саме цього
+    # бракувало повному синтезу ставки: рішення ЦБ формується в
+    # публічних виступах членів комітету задовго до засідання, а ми
+    # бачили лише кінцевий реліз. Обидва фіди перевірені живо
+    # (HTTP 200, 15 items кожен): speeches дає "Waller, The Signaling
+    # Value of the Summary of Economic Projections", testimony —
+    # "Warsh, Semiannual Monetary Policy Report to the Congress".
+    "fed_speeches_rss": {
+        "url": "https://www.federalreserve.gov/feeds/speeches.xml",
+        "stream": "geopolitical",
+    },
+    "fed_testimony_rss": {
+        "url": "https://www.federalreserve.gov/feeds/testimony.xml",
         "stream": "geopolitical",
     },
     "ecb_rss": {
@@ -107,10 +134,6 @@ RSS_FEEDS: dict[str, dict[str, str]] = {
     # ---- Ринкові/бізнес-фіди, потік general (2026-10-05) ----
     "cnbc_markets_rss": {
         "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
-        "stream": "general",
-    },
-    "yahoo_finance_rss": {
-        "url": "https://finance.yahoo.com/news/rssindex",
         "stream": "general",
     },
     "marketwatch_rss": {

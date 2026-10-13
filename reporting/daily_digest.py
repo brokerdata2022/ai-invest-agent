@@ -47,6 +47,10 @@ from _common import (  # noqa: E402
     resolve_telegram_credentials,
 )
 from common.db import get_connection  # noqa: E402
+from config import (  # noqa: E402
+    DIGEST_MAX_ITEMS_PER_SECTION,
+    DIGEST_SUMMARY_CHARS,
+)
 from telegram_client import send_telegram_message  # noqa: E402
 from telegram_notify import METRIC_LABELS  # noqa: E402
 
@@ -65,9 +69,21 @@ logger = logging.getLogger(__name__)
 
 
 def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
-    """Лише ще НЕ надіслані (notified_at IS NULL) — окремі notify_synthesis
-    (нижче за розкладом) уже надсилає свіжі рядки протягом дня, дайджест
-    підбирає тільки те, що вони не встигли/не покрили."""
+    """Усе за вікно, НЕЗАЛЕЖНО від notified_at (зміна 2026-10-13).
+
+    Було `AND notified_at IS NULL` — "дайджест підбирає те, що окремі
+    notify не встигли". На живих даних це означало, що він не
+    підбирає НІЧОГО: десять окремих notify-джоб проходять раніше й
+    позначають усе надісланим. Вивід 12 жовтня — о 20:00 дайджест
+    надіслав "Сьогодні суттєвих подій не було" в день, коли Brent
+    зробив +5% на ракетному удару по Ер-Ріяду, агент сам написав про
+    це 4-джерельний синтез, знайшов ризик short squeeze і завів CPI
+    на середу.
+
+    Дайджест — це ЗВЕДЕННЯ дня (Ціль 5: "раз на добу кілька СПРАВДІ
+    важливих подій"), а не черга доставки залишків. Повтор того, що
+    вже проходило вранці, у вечірньому зведенні — нормальний і
+    очікуваний; порожнє зведення в насичений день — ні."""
     return fetch_dicts(
         conn,
         """
@@ -76,7 +92,6 @@ def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
                summary, confirmation_factors
         FROM news_synthesis
         WHERE created_at >= now() - (%s || ' hours')::interval
-          AND notified_at IS NULL
         ORDER BY created_at DESC
         """,
         (hours,),
@@ -84,15 +99,14 @@ def fetch_recent_news_synthesis(conn, hours: int) -> list[dict]:
 
 
 def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
-    """Лише ще НЕ надісланий (notified_at IS NULL) — той самий принцип,
-    що fetch_recent_news_synthesis()."""
+    """Усе за вікно, незалежно від notified_at — той самий принцип,
+    що fetch_recent_news_synthesis() (2026-10-13)."""
     return fetch_one_dict(
         conn,
         """
         SELECT id, cluster_count, direction, confidence, summary
         FROM market_synthesis
         WHERE created_at >= now() - (%s || ' hours')::interval
-          AND notified_at IS NULL
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -102,8 +116,8 @@ def fetch_recent_market_synthesis(conn, hours: int) -> dict | None:
 
 def fetch_recent_surprises(conn, hours: int) -> list[dict]:
     """Тільки impact_level high/medium — той самий фільтр, що вже в
-    expectations_notify.py. `notified_at IS NULL` — той самий принцип,
-    що fetch_recent_news_synthesis()."""
+    expectations_notify.py. Незалежно від notified_at — той самий
+    принцип, що fetch_recent_news_synthesis() (2026-10-13)."""
     return fetch_dicts(
         conn,
         """
@@ -113,7 +127,6 @@ def fetch_recent_surprises(conn, hours: int) -> list[dict]:
         JOIN release_log rl ON rl.id = ec.release_log_id
         WHERE ec.created_at >= now() - (%s || ' hours')::interval
           AND rl.impact_level IN ('high', 'medium')
-          AND ec.notified_at IS NULL
         ORDER BY ec.created_at DESC
         """,
         (hours,),
@@ -123,14 +136,14 @@ def fetch_recent_surprises(conn, hours: int) -> list[dict]:
 def fetch_recent_candidates(conn, hours: int) -> list[dict]:
     """НОВІ рядки candidate_assets за вікно — не весь поточний список,
     тільки те, що з'явилось за --hours (docs/decisions.md, "Ціль 3").
-    `notified_at IS NULL` — той самий принцип, що fetch_recent_news_synthesis()."""
+    Незалежно від notified_at — той самий принцип, що
+    fetch_recent_news_synthesis() (2026-10-13)."""
     return fetch_dicts(
         conn,
         """
         SELECT id, ticker, company_name, reasoning, direction, asset_class
         FROM candidate_assets
         WHERE discovered_at >= now() - (%s || ' hours')::interval
-          AND notified_at IS NULL
         ORDER BY discovered_at DESC
         """,
         (hours,),
@@ -189,6 +202,88 @@ def format_candidate_message(row: dict) -> str:
     return f"{bold(header)}\n{escape_html(row['reasoning'])}"
 
 
+
+def _trim(value, limit: int = None) -> str:
+    """Скоротити текст до межі, не обриваючи слово посередині."""
+    limit = limit or DIGEST_SUMMARY_CHARS
+    text = (value or "").strip().replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
+def build_digest(
+    market_row,
+    news_rows: list[dict],
+    surprise_rows: list[dict],
+    candidate_rows: list[dict],
+    hours: int,
+) -> tuple[str, int]:
+    """ОДНЕ повідомлення-зведення з розділами, не потік окремих.
+
+    Ціль 5 просить "раз на добу кілька СПРАВДІ важливих подій".
+    Попередні дві реалізації промахувались в обидві сторони: спершу
+    дайджест слав "подій не було" (читав лише ненадіслане, а notify-джоби
+    забирали все раніше), потім — 25 окремих повідомлень (фільтр
+    прибрали, ліміту не було). Повне обґрунтування й живі числа —
+    config.py, розділ 15.
+
+    Повертає (текст, кількість позицій). Нуль позицій — caller шле
+    контрольне повідомлення."""
+    cap = DIGEST_MAX_ITEMS_PER_SECTION
+    lines: list[str] = [bold(f"📋 Зведення за {hours}г"), ""]
+    count = 0
+
+    if market_row is not None:
+        label = MARKET_DIRECTION_LABEL.get(market_row["direction"], market_row["direction"])
+        lines.append(f"{bold('Ринок')} — {escape_html(label)} "
+                     f"(упевненість {market_row['confidence']}, "
+                     f"історій {market_row['cluster_count']})")
+        lines.append(escape_html(_trim(market_row["summary"])))
+        lines.append("")
+        count += 1
+
+    if surprise_rows:
+        # Сюрпризи факт/очікування — ПЕРШИМИ серед списків: це єдиний
+        # розділ, що описує вже СТАЛУ подію з числом, а не оцінку.
+        lines.append(bold(f"📊 Сюрпризи факт/очікування ({len(surprise_rows)})"))
+        for row in surprise_rows[:cap]:
+            lines.append(
+                f"• {escape_html(row['metric_id'])}: факт {row['actual_value']}, "
+                f"очікували {escape_html(str(row['expected_value_raw']))}"
+            )
+            count += 1
+        if len(surprise_rows) > cap:
+            lines.append(f"  …ще {len(surprise_rows) - cap}")
+        lines.append("")
+
+    if news_rows:
+        lines.append(bold(f"🔍 Ціна↔новини ({len(news_rows)})"))
+        for row in news_rows[:cap]:
+            emoji = DIRECTION_EMOJI.get(row["direction"], "")
+            change = row.get("price_pct_change")
+            change_text = f" {change:+.2f}%" if change is not None else ""
+            lines.append(f"• {emoji} {escape_html(row['asset_id'])}{change_text} — "
+                         f"{escape_html(_trim(row['summary'], 120))}")
+            count += 1
+        if len(news_rows) > cap:
+            lines.append(f"  …ще {len(news_rows) - cap}")
+        lines.append("")
+
+    if candidate_rows:
+        lines.append(bold(f"🆕 Новачки ({len(candidate_rows)})"))
+        shown = candidate_rows[:cap]
+        lines.append("• " + ", ".join(escape_html(r["ticker"]) for r in shown))
+        count += len(shown)
+        if len(candidate_rows) > cap:
+            lines.append(f"  …ще {len(candidate_rows) - cap}")
+        lines.append("")
+
+    lines.append("ℹ️ Зведення вже надісланого за добу, не нові сигнали.")
+    return "\n".join(lines).strip(), count
+
+
 def main() -> None:
     load_dotenv()
 
@@ -205,39 +300,30 @@ def main() -> None:
         surprise_rows = fetch_recent_surprises(conn, args.hours)
         candidate_rows = fetch_recent_candidates(conn, args.hours)
 
-        # (текст, callback позначення notified_at) — маркуємо ОДРАЗУ після
-        # успішної відправки КОЖНОГО повідомлення (не одним батчем
-        # наприкінці), щоб мережевий збій на половині списку не змусив
-        # наступний прогін надіслати вже надіслані рядки вдруге.
-        items = []
-        if market_row is not None:
-            items.append((
-                format_market_synthesis_message(market_row),
-                lambda r=market_row: mark_notified(conn, "market_synthesis", [r["id"]]),
-            ))
-        items.extend(
-            (format_news_synthesis_message(r), lambda r=r: mark_notified(conn, "news_synthesis", [r["id"]]))
-            for r in news_rows
-        )
-        items.extend(
-            (format_surprise_message(r), lambda r=r: mark_expectations_notified(conn, [r["id"]]))
-            for r in surprise_rows
-        )
-        items.extend(
-            (format_candidate_message(r), lambda r=r: mark_notified(conn, "candidate_assets", [r["id"]]))
-            for r in candidate_rows
+        # Дайджест БІЛЬШЕ НЕ ПОЗНАЧАЄ рядки надісланими (2026-10-13).
+        # Раніше він це робив, бо був "чергою залишків"; тепер він
+        # ЗВЕДЕННЯ дня й нічого не споживає — інакше він відбирав би
+        # матеріал у наступних прогонів окремих notify-джоб, тобто
+        # просто переносив би проблему в інший бік.
+        text, item_count = build_digest(
+            market_row=market_row,
+            news_rows=news_rows,
+            surprise_rows=surprise_rows,
+            candidate_rows=candidate_rows,
+            hours=args.hours,
         )
 
-        if not items:
+        if item_count == 0:
             send_telegram_message(token, chat_id, "Сьогодні суттєвих подій не було.")
-            logger.info("Надіслано в Telegram: контрольне повідомлення (нового немає)")
+            logger.info("Надіслано в Telegram: контрольне повідомлення (нічого за вікно)")
             return
 
-        for text, mark_fn in items:
-            send_telegram_message(token, chat_id, text, parse_mode="HTML")
-            mark_fn()
+        send_telegram_message(token, chat_id, text, parse_mode="HTML")
+        logger.info(
+            "Надіслано в Telegram: дайджест за %dг, одне повідомлення, %d позицій",
+            args.hours, item_count,
+        )
 
-        logger.info("Надіслано в Telegram: %d повідомлень дайджесту", len(items))
     finally:
         conn.close()
 

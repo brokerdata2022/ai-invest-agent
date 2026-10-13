@@ -43,8 +43,12 @@ from llm_common import (  # noqa: E402
     parse_synthesis_response,
     require_api_key,
 )
-from news_analysis._db import fetch_relevant_for_aggregation, save_market_synthesis  # noqa: E402
-from news_analysis.aggregate import NewsCluster, cluster_articles, top_clusters  # noqa: E402
+from news_analysis._db import fetch_consolidated_as_clusters, save_market_synthesis  # noqa: E402
+from news_analysis.aggregate import NewsCluster  # noqa: E402
+from config import (  # noqa: E402
+    MARKET_SYNTHESIS_MAX_STORIES,
+    MARKET_SYNTHESIS_MIN_SOURCES,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -140,6 +144,26 @@ def fetch_macro_context(conn) -> dict[str, dict]:
     return context
 
 
+def _cluster_from_consolidated(row: dict) -> NewsCluster:
+    """Рядок `news_consolidated` → `NewsCluster`, щоб промпт і
+    збереження лишились без змін (контракт `save_market_synthesis`
+    очікує саме кластери). `summary` консолідованої історії вже є
+    представницьким текстом — окремого заголовка там немає."""
+    summary = row["summary"] or ""
+    return NewsCluster(
+        representative_title=summary,
+        source_count=row["source_count"] or 1,
+        asset_ids=[row["asset_id"]] if row.get("asset_id") else [],
+        dominant_direction=row["direction"] or "unclear",
+        direction_counts={},
+        summaries=[summary],
+        urls=list(row.get("source_urls") or []),
+        earliest_published_at=row["created_at"],
+        latest_published_at=row["created_at"],
+        raw_news_ids=list(row.get("source_raw_news_ids") or []),
+    )
+
+
 def build_prompt(
     clusters: list[NewsCluster], macro: dict, session: str = DEFAULT_SESSION
 ) -> str:
@@ -195,7 +219,16 @@ def main() -> None:
              "одноразовим розкладом)",
     )
     parser.add_argument("--max-age-days", type=int, default=7)
-    parser.add_argument("--top", type=int, default=8, help="скільки найбільш підтверджених історій урахувати")
+    parser.add_argument(
+        "--top", type=int, default=None,
+        help="СТЕЛЯ кількості історій (дефолт — config.MARKET_SYNTHESIS_MAX_STORIES); "
+             "не фіксована кількість: беруться всі підтверджені історії до цієї межі",
+    )
+    parser.add_argument(
+        "--min-sources", type=int, default=None,
+        help="скільком незалежним джерелам має підхопити історію "
+             "(дефолт — config.MARKET_SYNTHESIS_MIN_SOURCES)",
+    )
     args = parser.parse_args()
 
     session = args.session or DEFAULT_SESSION
@@ -204,17 +237,26 @@ def main() -> None:
 
     conn = get_connection()
     try:
-        articles = []
-        for stream in STREAMS:
-            articles.extend(
-                fetch_relevant_for_aggregation(conn, stream=stream, max_age_days=args.max_age_days)
-            )
-        clusters = cluster_articles(articles)
-        top = top_clusters(clusters, limit=args.top)
-        logger.info("%d кластерів усього, %d найбільш підтверджених урахуємо", len(clusters), len(top))
+        # Вхід — КОНСОЛІДОВАНІ історії, не перекластеризовані статті
+        # (2026-10-13, повне обґрунтування — `_db.py:
+        # fetch_consolidated_as_clusters` і config розділ 14).
+        min_sources = args.min_sources or MARKET_SYNTHESIS_MIN_SOURCES
+        cap = args.top or MARKET_SYNTHESIS_MAX_STORIES
+        rows = fetch_consolidated_as_clusters(
+            conn, tuple(STREAMS), args.max_age_days, min_sources, cap,
+        )
+        top = [_cluster_from_consolidated(row) for row in rows]
+        logger.info(
+            "Підтверджених історій (>=%d джерел) за %d днів: %d (стеля %d)",
+            min_sources, args.max_age_days, len(top), cap,
+        )
 
         if not top:
-            logger.info("Немає geopolitical/general кластерів за вікно — нічого синтезувати")
+            logger.info(
+                "Немає історій, підтверджених %d+ джерелами, за вікно — "
+                "нічого синтезувати (це НЕ збій: підтвердженість і є шкалою "
+                "значущості)", min_sources,
+            )
             return
 
         macro = fetch_macro_context(conn)

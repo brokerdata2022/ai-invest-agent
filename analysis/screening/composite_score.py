@@ -49,8 +49,10 @@ logger = logging.getLogger(__name__)
 # 2026-10-04: один конфіг на весь агент). Тут лишається сама
 # логіка воронки, не числа.
 from config import (  # noqa: E402
+    MOMENTUM_DAYS,
     WEIGHT_AVG_DOLLAR_VOLUME,
     WEIGHT_EPS_GROWTH,
+    WEIGHT_MOMENTUM,
     WEIGHT_NEG_PE,
     WEIGHT_REVENUE_GROWTH,
 )
@@ -68,6 +70,8 @@ class CompositeResult:
     eps_growth_pct: Decimal
     neg_pe_pct: Decimal
     avg_dollar_volume_pct: Decimal
+    momentum_pct_change: Decimal
+    momentum_pct: Decimal
     # Контекст для виводу (reporting/screening_notify.py), не впливають
     # на сам score — заповнюються ПІСЛЯ ранжування, окремим
     # enrich_with_report_context() (живий фідбек користувача: score/
@@ -124,6 +128,20 @@ def run_composite_score(
 
     passed_c = [r for r in tier_c_results if r.passed]
 
+    # Моментум — %-зміна ціни за MOMENTUM_DAYS торгових днів
+    # (2026-10-13). Один batch-запит на всі тикери, не по одному:
+    # passed_c це десятки тикерів, а `batch_series` уже вміє
+    # віддавати кілька метрик одним SELECT.
+    # Власне підключення: `run_composite_score()` історично працює
+    # без conn (tier_a/tier_b/tier_c відкривають свої) — і тести
+    # викликають її так само. Відкриваємо локально, щоб не міняти
+    # підпис публічної функції.
+    _momentum_conn = get_connection()
+    try:
+        momentum_by_ticker = _fetch_momentum(_momentum_conn, [c.ticker for c in passed_c])
+    finally:
+        _momentum_conn.close()
+
     rows = []
     skipped = []
     for c in passed_c:
@@ -155,6 +173,11 @@ def run_composite_score(
                 "eps_growth": eps_growth,
                 "pe": pe,
                 "avg_dollar_volume": avg_dollar_volume,
+                # Тикер без достатньої історії цін отримує 0% — це
+                # нейтральний моментум (не найгірший і не найкращий у
+                # перцентилі), тобто відсутність даних не викидає
+                # компанію зі скринінгу й не дає їй переваги.
+                "momentum": momentum_by_ticker.get(c.ticker, Decimal("0")),
             }
         )
 
@@ -168,16 +191,18 @@ def run_composite_score(
     eps_pcts = percentile_ranks([r["eps_growth"] for r in rows])
     neg_pe_pcts = percentile_ranks([-r["pe"] for r in rows])
     volume_pcts = percentile_ranks([r["avg_dollar_volume"] for r in rows])
+    momentum_pcts = percentile_ranks([r["momentum"] for r in rows])
 
     results = []
-    for row, rev_pct, eps_pct, negpe_pct, vol_pct in zip(
-        rows, revenue_pcts, eps_pcts, neg_pe_pcts, volume_pcts
+    for row, rev_pct, eps_pct, negpe_pct, vol_pct, mom_pct in zip(
+        rows, revenue_pcts, eps_pcts, neg_pe_pcts, volume_pcts, momentum_pcts
     ):
         score = (
             WEIGHT_REVENUE_GROWTH * rev_pct
             + WEIGHT_EPS_GROWTH * eps_pct
             + WEIGHT_NEG_PE * negpe_pct
             + WEIGHT_AVG_DOLLAR_VOLUME * vol_pct
+            + WEIGHT_MOMENTUM * mom_pct
         )
         results.append(
             CompositeResult(
@@ -191,6 +216,8 @@ def run_composite_score(
                 eps_growth_pct=eps_pct,
                 neg_pe_pct=negpe_pct,
                 avg_dollar_volume_pct=vol_pct,
+                momentum_pct_change=row["momentum"],
+                momentum_pct=mom_pct,
             )
         )
 
@@ -240,6 +267,39 @@ def _fetch_price_context(conn, tickers: list[str]) -> dict[str, dict]:
 
         context[ticker] = entry
     return context
+
+
+def _fetch_momentum(conn, tickers: list[str]) -> dict[str, Decimal]:
+    """{ticker: %-зміна ціни за `MOMENTUM_DAYS` торгових днів}.
+
+    Компонент скору з 2026-10-13: до цього 85% ваги composite score
+    стояло на КВАРТАЛЬНИХ даних SEC, і скринінг 13 днів підряд
+    віддавав той самий список із 14 тикерів у тому самому порядку
+    (обґрунтування й живі числа — config.py, WEIGHT_MOMENTUM).
+
+    Тикер без достатньої історії просто відсутній у результаті —
+    caller підставляє 0% (нейтральний моментум), щоб брак даних не
+    викидав компанію й не давав їй переваги."""
+    if not tickers:
+        return {}
+
+    close_ids = [f"{t.lower()}_close" for t in tickers]
+    # +1 точка: щоб порівняти ОСТАННЄ закриття з тим, що було
+    # MOMENTUM_DAYS тому, потрібно MOMENTUM_DAYS+1 спостережень.
+    series = batch_series(conn, "twelvedata", close_ids, limit_per_metric=MOMENTUM_DAYS + 1)
+
+    out: dict[str, Decimal] = {}
+    for ticker in tickers:
+        points = series.get(f"{ticker.lower()}_close", [])
+        if len(points) < MOMENTUM_DAYS + 1:
+            continue
+        # batch_series віддає від найновішого до найстарішого.
+        _, latest = points[0]
+        _, oldest = points[MOMENTUM_DAYS]
+        if not oldest:
+            continue
+        out[ticker] = (latest - oldest) / oldest * Decimal("100")
+    return out
 
 
 def _fetch_company_names(tickers: list[str]) -> dict[str, str]:

@@ -55,15 +55,26 @@ def test_next_scheduled_release_finds_nearest_upcoming_date_within_wide_horizon(
     assert result == date(2026, 10, 14)
 
 
-def test_next_scheduled_release_default_horizon_excludes_far_future_release(cpi_release_dates_response):
-    # Виправлення живого бага (2026-09-26): наступний CPI-реліз
-    # (2026-10-14) — за 18 днів, поза типовим 7-денним горизонтом
-    # ("щонеділі на наступний тиждень") — має повернути None, не
-    # заводити pending-рядок зарано (economic_calendar все одно не
-    # знайде збігу так далеко наперед).
+def test_next_scheduled_release_default_horizon_covers_monthly_release(cpi_release_dates_response):
+    # Переписано 2026-10-11 разом зі зміною горизонту 7 → 21
+    # (config.CALENDAR_HORIZON_DAYS). Раніше цей тест закріплював
+    # протилежне: CPI-реліз за 18 днів НЕ заводився, бо не вліз у
+    # 7-денне вікно. Живий вимір показав, чого це коштувало — за два
+    # тижні роботи 9 показників із 15 жодного разу не потрапили в
+    # release_log, зокрема cpi і core_cpi. Місячний реліз мусить
+    # влазити в горизонт, інакше його ніколи не видно наперед.
     dates = parse_release_dates(cpi_release_dates_response)
     result = next_scheduled_release(dates, today=date(2026, 9, 26))
-    assert result is None
+    assert result == date(2026, 10, 14)
+
+
+def test_next_scheduled_release_default_horizon_still_excludes_far_future(cpi_release_dates_response):
+    # Горизонт лишається РЕАЛЬНОЮ межею, не нескінченністю: від
+    # 2026-09-11 наступна дата 2026-10-14 це 33 дні — за межами 21,
+    # тож seed не йде (інакше `_seed_or_enrich` заводив би fallback-час
+    # на місяці наперед, коли ForexFactory-фід ще нічого не знає).
+    dates = parse_release_dates(cpi_release_dates_response)
+    assert next_scheduled_release(dates, today=date(2026, 9, 12)) is None
 
 
 def test_next_scheduled_release_includes_today():

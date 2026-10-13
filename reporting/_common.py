@@ -36,6 +36,7 @@ Telegram-креденшелів, словники емодзі напрямку,
   маркером (той самий принцип, що вже був у форматі повідомлень).
 """
 
+import hashlib
 import html
 import logging
 import os
@@ -106,6 +107,9 @@ _NOTIFIABLE_TABLES = frozenset({
     "news_consolidated", "screening_results", "crypto_screening_candidates",
     "crypto_long_candidates", "calendar_outlook", "metric_forecasts",
     "trading_list", "fundamental_analysis",
+    # Додані 2026-10-13: синтез рішення по ставці (останній
+    # незакритий пункт плану) і тези з тексту звітів 10-K/10-Q.
+    "policy_rate_synthesis", "filing_insights",
 })
 
 
@@ -163,3 +167,62 @@ def format_local_dt(value, fmt: str = DISPLAY_DATETIME_FORMAT) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo("UTC"))
     return value.astimezone(ZoneInfo(DISPLAY_TIMEZONE)).strftime(fmt)
+
+
+def composition_changed(conn, notifier: str, item_ids: list) -> bool:
+    """True, якщо СКЛАД того, що збираємось надіслати, відрізняється
+    від останнього надісланого цим же notify-скриптом.
+
+    **Навіщо (2026-10-13).** Наявний `mark_notified()` дедупить РЯДКИ,
+    а скринінг і пошук новачків щопрогону створюють НОВІ рядки з новим
+    `run_at` — технічно ненадіслані, змістово ті самі. Живий вивід 12
+    жовтня: `notify_screening` надіслав ідентичні 14 тикерів 13-й день
+    підряд; `notify_candidates` — ті самі 6 акцій тричі за добу з
+    однаковими числами (ціни акцій оновлюються раз на добу о 03:00);
+    `notify_crypto_long` — того самого кандидата 4 рази. З ~25
+    повідомлень за добу зі справді новим змістом було 6.
+
+    Склад порівнюється ВІДСОРТОВАНИМ: зміна лише порядку при тому
+    самому наборі — не новина для читача (а порядок у скринінгу
+    "плаває" від дрібних змін ціни).
+
+    Викликати ПЕРЕД надсиланням; `remember_composition()` — після
+    успішного. Два кроки, а не один, щоб збій надсилання не
+    "з'їв" повідомлення: відпечаток оновлюється лише після того, як
+    повідомлення справді пішло.
+
+    Подієві сповіщення (`notify_expectations`, `notify_release_impact`,
+    `notify_forecasts`) цього НЕ використовують: там кожна подія
+    унікальна й мусить дійти завжди."""
+    fingerprint = _fingerprint(item_ids)
+    row = fetch_one_dict(
+        conn,
+        "SELECT fingerprint FROM notify_fingerprints WHERE notifier = %s",
+        (notifier,),
+    )
+    if row is None:
+        return True
+    return row["fingerprint"] != fingerprint
+
+
+def remember_composition(conn, notifier: str, item_ids: list) -> None:
+    """Запам'ятати склад як надісланий (після успішного надсилання)."""
+    fingerprint = _fingerprint(item_ids)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO notify_fingerprints (notifier, fingerprint, item_count, sent_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (notifier) DO UPDATE
+               SET fingerprint = EXCLUDED.fingerprint,
+                   item_count  = EXCLUDED.item_count,
+                   sent_at     = EXCLUDED.sent_at
+            """,
+            (notifier, fingerprint, len(item_ids)),
+        )
+    conn.commit()
+
+
+def _fingerprint(item_ids: list) -> str:
+    joined = "|".join(sorted(str(i) for i in item_ids))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()

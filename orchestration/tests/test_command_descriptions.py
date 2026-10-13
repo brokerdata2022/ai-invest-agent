@@ -29,9 +29,18 @@ def test_info_job_names_are_a_subset_of_known_jobs():
 def test_info_job_names_only_contain_delivery_jobs():
     # Критерій INFO_JOB_NAMES (docs/decisions.md 2026-10-03): джоба
     # сама надсилає інформацію користувачу — notify_*/daily_digest.
+    #
+    # `release_pipeline` доданий до винятків 2026-10-13: три окремі
+    # notify-джоби (`notify_expectations`/`notify_forecasts`/
+    # `notify_release_impact`) злиті в нього, тож ВІН тепер і є тим,
+    # хто доставляє ці три звіти. Назва не починається з notify_, бо
+    # конвеєр робить і збір, і аналіз — але для користувача це
+    # залишається командою "дай мені релізні звіти".
+    DELIVERY_EXCEPTIONS = ("daily_digest", "news_notify", "release_pipeline")
     for name in INFO_JOB_NAMES:
-        assert name in ("daily_digest", "news_notify") or name.startswith("notify_"), (
-            f"{name}: не схоже на delivery-джобу (notify_*/daily_digest/news_notify)"
+        assert name in DELIVERY_EXCEPTIONS or name.startswith("notify_"), (
+            f"{name}: не схоже на delivery-джобу "
+            f"(notify_* або один із {DELIVERY_EXCEPTIONS})"
         )
 
 

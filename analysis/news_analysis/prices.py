@@ -258,12 +258,32 @@ def fetch_latest_observed_at(conn, asset_id: str, price_sources: dict[str, tuple
     return latest
 
 
-def fetch_price_history(conn, asset_id: str, limit: int = ANOMALY_HISTORY_LOOKBACK) -> list[Decimal]:
+def fetch_price_history(
+    conn,
+    asset_id: str,
+    limit: int = ANOMALY_HISTORY_LOOKBACK,
+    price_sources: dict[str, tuple[str, str]] = None,
+) -> list[Decimal]:
     """Останні `limit` значень asset_id у ХРОНОЛОГІЧНОМУ порядку
     (найстаріше перше) — вхід для is_anomalous_move(). Перевикористовує
     common.db.fetch_recent() (той самий запит, що forecasting/backtest.py
-    вже використовує для показників) замість власного SQL тут."""
-    source, metric_id = _resolve_price_source(asset_id)
+    вже використовує для показників) замість власного SQL тут.
+
+    `price_sources` додано 2026-10-13 — ЛАТЕНТНИЙ БАГ. Функція
+    викликала `_resolve_price_source(asset_id)` без цього аргументу,
+    тож завжди падала на ХАРДКОД `ASSET_PRICE_SOURCES`, ігноруючи
+    живий `watchlist_assets`. Поки обидва збігались, це було
+    непомітно. Але 2026-10-12 watchlist перевели на `yahoo_chart`
+    (127-251 точка історії), а хардкод лишився на
+    `tradingeconomics`/`coingecko` з 6-7 точками — тобто детектор
+    аномалій читав рівно той ряд, на якому `ANOMALY_MIN_HISTORY`=10
+    ніколи не виконується, і чесно повертав False ЗАВЖДИ. Той самий
+    клас помилки, що сліпий тренд-шар торгового списку: не падає, не
+    логує, просто тихо нічого не знаходить.
+
+    Викликач, що має живий список (`fetch_price_sources(conn)`), тепер
+    мусить його передавати."""
+    source, metric_id = _resolve_price_source(asset_id, price_sources)
     rows = fetch_recent(conn, source, metric_id, limit=limit)  # найновіше перше
     return [Decimal(r["value"]) for r in reversed(rows)]
 

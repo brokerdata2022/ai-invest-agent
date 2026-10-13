@@ -27,7 +27,7 @@ def test_block_shows_direction_emoji_and_confidence():
 
 
 def test_block_shows_market_expectation_next_to_ours():
-    """Третя точка зору (PLAN.md, Фаза 2) — ринкове очікування поруч із
+    """Третя точка зору (docs/archive/plan-journal-2026-10-11.md, Фаза 2) — ринкове очікування поруч із
     нашим прогнозом, сирим рядком джерела."""
     text = "\n".join(format_forecast_block(ROW, NEXT_RELEASE))
     assert "Ринкове очікування: 0.3% (реліз 2026-10-10 12:30)" in text

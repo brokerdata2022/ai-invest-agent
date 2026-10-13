@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Оркестрація крипто-скринінгу лонг/шорт/спостереження — крок 4.5 з 5
-(PLAN.md Фаза 4, докладніше docs/decisions.md 2026-09-27). Зводить усе
+(docs/archive/plan-journal-2026-10-11.md Фаза 4, докладніше docs/decisions.md 2026-09-27). Зводить усе
 докупи: 3 біржі (fetch_market_snapshot) → агрегація
 (aggregate_sources.py) → Tier A (tier_a.py) → для виживших: RSI/тренд
 (Binance klines) + памп (`pump_pct_from_aggregated()` — максимум 24h-

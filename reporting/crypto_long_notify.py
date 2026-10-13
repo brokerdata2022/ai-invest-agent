@@ -31,12 +31,18 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import bold, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    bold, composition_changed, fetch_dicts, mark_notified,
+    remember_composition, resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Ключ для _common.composition_changed — дорівнює назві джоби.
+NOTIFIER = "notify_crypto_long"
 
 
 def fetch_unnotified_long(conn) -> list[dict]:
@@ -92,9 +98,18 @@ def main() -> None:
             logger.info("Нового LONG-скринінгу немає — сповіщення не надсилається")
             return
 
+        # Живий привід (12 жовтня): той самий 1-2 кандидати
+        # надсилались 4 рази за добу (джоба о 0/6/12/18).
+        symbols = [row["symbol"] for row in rows]
+        if not composition_changed(conn, NOTIFIER, symbols):
+            mark_notified(conn, "crypto_long_candidates", [row["id"] for row in rows])
+            logger.info("Склад LONG не змінився (%d) — не надсилаємо", len(symbols))
+            return
+
         text = format_message(rows, limit=args.limit)
         send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "crypto_long_candidates", [row["id"] for row in rows])
+        remember_composition(conn, NOTIFIER, symbols)
         logger.info("Надіслано в Telegram: LONG-скринінг, %d символів", len(rows))
     finally:
         conn.close()

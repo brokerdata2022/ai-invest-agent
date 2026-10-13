@@ -45,13 +45,19 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import bold, escape_html, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    bold, composition_changed, escape_html, fetch_dicts, mark_notified,
+    remember_composition, resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from common.freshness import is_stale  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Ключ для _common.composition_changed — стабільний, дорівнює назві джоби.
+NOTIFIER = "notify_screening"
 
 
 def fetch_unnotified_screening(conn) -> list[dict]:
@@ -128,9 +134,24 @@ def main() -> None:
             logger.info("Нового скринінгу немає — сповіщення не надсилається")
             return
 
+        # Склад не змінився — не шлемо (2026-10-13). Живий привід:
+        # цей скрипт надіслав ІДЕНТИЧНІ 14 тикерів 13-й день підряд.
+        # Рядки щоразу нові (новий run_at), тому mark_notified їх не
+        # зупиняв — потрібне порівняння СКЛАДУ (_common.py:
+        # composition_changed).
+        tickers = [row["ticker"] for row in rows]
+        if not composition_changed(conn, NOTIFIER, tickers):
+            mark_notified(conn, "screening_results", [row["id"] for row in rows])
+            logger.info(
+                "Склад скринінгу не змінився (%d тикерів) — не надсилаємо, "
+                "рядки позначено надісланими", len(tickers),
+            )
+            return
+
         text = format_message(rows, limit=args.limit)
         send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "screening_results", [row["id"] for row in rows])
+        remember_composition(conn, NOTIFIER, tickers)
         logger.info("Надіслано в Telegram: скринінг S&P 500, %d тикерів", len(rows))
     finally:
         conn.close()

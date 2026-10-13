@@ -45,6 +45,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_BUFFER_MINUTES = 0
 
 
+# Наскільки дата збереженого циклу може відрізнятись від `due_date`,
+# і це все одно ТОЙ САМИЙ цикл.
+#
+# ЧОМУ НЕ НУЛЬ (виправлення 2026-10-13). Порівняння було точним
+# (`existing.date() != due_date`) і працювало, доки всі календарні
+# показники були US. Коли `official_calendars.py` додав Японію,
+# з'явився дубль: японський CPI публікується о 08:30 JST, тобто
+# 23:30 UTC ПОПЕРЕДНЬОГО дня. `due_date` — токійська дата (23
+# жовтня), а `scheduled_at.date()` при читанні з БД — UTC-дата (22
+# жовтня). Дати не збігались, тож КОЖЕН прогін заводив новий
+# 'pending' рядок. Живий наслідок: два однакові записи japan_cpi за
+# два прогони.
+#
+# Один день допуску безпечний: найчастіші наші релізи — тижневі
+# (`initial_jobless_claims`, `mortgage_rate_30y`), тобто два РІЗНІ
+# цикли не можуть опинитись у межах доби. Альтернатива — тягати
+# часовий пояс показника в порівняння — складніша й ламкіша: час
+# може прийти і з ForexFactory, і з офіційної сторінки, і з
+# fallback, у кожного свій пояс.
+SAME_CYCLE_TOLERANCE_DAYS = 1
+
+
 def should_seed_new_cycle(existing_scheduled_at: Optional[datetime], due_date: date) -> bool:
     """Чиста логіка: чи треба заводити новий 'pending' рядок для цього
     due_date (з release_calendar.next_scheduled_release()).
@@ -52,10 +74,15 @@ def should_seed_new_cycle(existing_scheduled_at: Optional[datetime], due_date: d
     Порівнюємо за ДАТОЮ (не повним datetime) — уточнення точного часу
     з economic_calendar.py на пізнішому прогоні (той самий цикл, той
     самий due_date) не повинно плодити дублікат; ідентичність циклу —
-    сама дата з FRED (авторитетне джерело), час — лише збагачення."""
+    сама дата (авторитетне джерело), час — лише збагачення.
+
+    З допуском `SAME_CYCLE_TOLERANCE_DAYS` (обґрунтування вище):
+    дата в UTC і дата в локальному поясі релізу можуть відрізнятись
+    на добу, і це не різні цикли."""
     if existing_scheduled_at is None:
         return True
-    return existing_scheduled_at.date() != due_date
+    delta = abs((existing_scheduled_at.date() - due_date).days)
+    return delta > SAME_CYCLE_TOLERANCE_DAYS
 
 
 def is_past_buffer(scheduled_at: datetime, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES) -> bool:

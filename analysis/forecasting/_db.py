@@ -20,6 +20,7 @@ def save_forecast(
     confidence: Optional[float] = None,
     summary: Optional[str] = None,
     reasoning: Optional[str] = None,
+    watch_on_release: Optional[str] = None,
     llm_call_id: Optional[int] = None,
 ) -> int:
     """UPSERT — один рядок на (source, metric_id, method,
@@ -42,8 +43,9 @@ def save_forecast(
             """
             INSERT INTO metric_forecasts
                 (source, metric_id, method, based_on_observed_at, periods_ahead,
-                 forecast_value, direction, confidence, summary, reasoning, llm_call_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 forecast_value, direction, confidence, summary, reasoning,
+                 watch_on_release, llm_call_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source, metric_id, method, based_on_observed_at) DO UPDATE SET
                 periods_ahead = EXCLUDED.periods_ahead,
                 forecast_value = EXCLUDED.forecast_value,
@@ -51,6 +53,7 @@ def save_forecast(
                 confidence = EXCLUDED.confidence,
                 summary = EXCLUDED.summary,
                 reasoning = EXCLUDED.reasoning,
+                watch_on_release = EXCLUDED.watch_on_release,
                 llm_call_id = EXCLUDED.llm_call_id,
                 notified_at = NULL,
                 created_at = now()
@@ -58,7 +61,8 @@ def save_forecast(
             """,
             (
                 source, metric_id, method, based_on_observed_at, periods_ahead,
-                forecast_value, direction, confidence, summary, reasoning, llm_call_id,
+                forecast_value, direction, confidence, summary, reasoning,
+                watch_on_release, llm_call_id,
             ),
         )
         forecast_id = cur.fetchone()[0]

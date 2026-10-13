@@ -32,13 +32,19 @@ from dotenv import load_dotenv
 
 # _common додає data-ingestion у sys.path (дефіс у назві теки —
 # не валідне ім'я Python-пакета), тому імпортується ПЕРШИМ.
-from _common import bold, escape_html, fetch_dicts, mark_notified, resolve_telegram_credentials  # noqa: E402
+from _common import (  # noqa: E402
+    bold, composition_changed, escape_html, fetch_dicts, mark_notified,
+    remember_composition, resolve_telegram_credentials,
+)
 from common.db import get_connection  # noqa: E402
 from config import DISCOVERY_MAX_ITEMS  # noqa: E402
 from telegram_client import send_telegram_message  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Ключ для _common.composition_changed — дорівнює назві джоби.
+NOTIFIER = "notify_candidates"
 
 
 def fetch_unnotified_candidates(conn, limit: int = DISCOVERY_MAX_ITEMS) -> list[dict]:
@@ -143,9 +149,23 @@ def main() -> None:
             logger.info("Нових кандидатів немає — сповіщення не надсилається")
             return
 
+        # Живий привід (12 жовтня): акційна частина списку була
+        # ІДЕНТИЧНОЮ тричі за добу — CCI/SBAC/MRNA/AMT/HUM/VST з тими
+        # самими числами, бо `quotes_universe_refresh` оновлює ціни
+        # раз на добу о 03:00. Крипта за той самий день змінювалась,
+        # тож дедуп по складу прибирає саме дублі, не живі оновлення.
+        tickers = [row["ticker"] for row in rows]
+        if not composition_changed(conn, NOTIFIER, tickers):
+            mark_notified(conn, "candidate_assets", [row["id"] for row in rows])
+            logger.info(
+                "Склад новачків не змінився (%d) — не надсилаємо", len(tickers),
+            )
+            return
+
         text = format_message(rows)
         send_telegram_message(token, chat_id, text, parse_mode="HTML")
         mark_notified(conn, "candidate_assets", [row["id"] for row in rows])
+        remember_composition(conn, NOTIFIER, tickers)
         logger.info("Надіслано в Telegram: %d кандидатів", len(rows))
     finally:
         conn.close()
