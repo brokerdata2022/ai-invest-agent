@@ -8,6 +8,44 @@
 інвестицій/спекуляцій.
 
 
+## З ЧОГО ПОЧИНАТИ НОВУ СЕСІЮ
+
+Останній великий етап закрито 2026-10-13 (коміт `db8e513`): усі пункти
+`PLAN.md` виконані, 1354 тести проходять, 48 джоб працюють за
+розкладом.
+
+**Прочитати перед будь-якою зміною — у цьому порядку:**
+1. `docs/jobs.md` — що агент РОБИТЬ: усі 48 джоб зі станом кожної,
+   перевіреним живими даними, і розклад Telegram-повідомлень. Перше,
+   куди дивитись із питанням "а що воно взагалі робить".
+2. «Стан на 2026-10-13» нижче в цьому файлі — шість дефектів, які
+   виглядали робочим кодом і тихо нічого не робили. Клас помилок, що
+   тут повторюється найчастіше.
+3. `PLAN.md`, розділ «Що чекає на живе підтвердження» — усе
+   реалізоване, що ще не бачило справжньої події. Саме там найбільша
+   ймовірність знайти реальний збій.
+4. `docs/decisions.md` — із питанням «чому так». Записи 2026-10-11…13
+   покривають останній етап.
+
+**Перше, що зробити в сесії** — перевірити, чи живі механізми
+дочекались своїх подій:
+
+```bash
+docker compose ps
+docker compose exec app pytest -q
+docker compose exec db psql -U invest_agent -d invest_agent -c \
+  "select metric_id, scheduled_at, status from release_log order by scheduled_at desc limit 12"
+```
+
+**Головне правило, виведене з цього етапу:** дефект тут майже ніколи
+не падає з трасуванням. Він тихо повертає `False`, порожній список
+або константу — і виглядає як робочий код. Тому будь-яку правку
+аналітики перевіряти ЖИВИМИ даними з БД, а не тільки тестами (це ж
+вимагає `feedback_verify_with_real_data`), і міряти ДО та ПІСЛЯ: усі
+шість дефектів цього етапу знайшлись вимірюванням виводу, а не
+читанням коду.
+
+
 ## Стек
 - Мова бекенду: **Python**
 - База даних: **PostgreSQL + TimescaleDB** (одна база для часових рядів
@@ -258,6 +296,20 @@ docker compose exec app python reporting/trading_list_notify.py
 # звітність топ-акцій. Один актив для перевірки: --asset xauusd
 docker compose exec app python analysis/fundamental/run_analysis.py
 docker compose exec app python reporting/fundamental_notify.py
+
+# ТЕКСТ звітів 10-K/10-Q (MD&A + Risk Factors) → тези: драйвери,
+# ризики, ЗМІНИ формулювань. Не цифри XBRL — ті збирає
+# companies/sec_edgar_adapter.py. --collect-only = без LLM
+docker compose exec app python analysis/fundamental/analyze_filings.py --ticker AAPL
+docker compose exec app python analysis/fundamental/analyze_filings.py --top 5 --collect-only
+
+# СИНТЕЗ РІШЕННЯ ПО СТАВЦІ — п'ять входів (макро + наші прогнози по
+# ньому + дохідності/спред + новини + виступи членів комітету) →
+# hold/cut/hike. Працює лише в межах POLICY_SYNTHESIS_HORIZON_DAYS=14
+# до засідання; --dry-run друкує промпт без виклику LLM
+docker compose exec app python analysis/forecasting/synthesize_policy_rate.py --dry-run --bank fed
+docker compose exec app python analysis/forecasting/synthesize_policy_rate.py
+docker compose exec app python reporting/policy_rate_notify.py
 
 # Сесійний ШІ-аналіз ринку (3 рази/добу за часом відкриття сесій)
 docker compose exec app python analysis/news_analysis/synthesize_market.py --session us
