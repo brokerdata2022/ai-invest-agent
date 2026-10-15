@@ -11,11 +11,11 @@
 ## З ЧОГО ПОЧИНАТИ НОВУ СЕСІЮ
 
 Останній великий етап закрито 2026-10-13 (коміт `db8e513`): усі пункти
-`PLAN.md` виконані, 1374 тести проходять, 48 джоб працюють за
+`PLAN.md` виконані, 1442 тести проходять, 54 джоби працюють за
 розкладом.
 
 **Прочитати перед будь-якою зміною — у цьому порядку:**
-1. `docs/jobs.md` — що агент РОБИТЬ: усі 48 джоб зі станом кожної,
+1. `docs/jobs.md` — що агент РОБИТЬ: усі 54 джоби зі станом кожної,
    перевіреним живими даними, і розклад Telegram-повідомлень. Перше,
    куди дивитись із питанням "а що воно взагалі робить".
 2. «Стан на 2026-10-13» нижче в цьому файлі — шість дефектів, які
@@ -168,7 +168,12 @@ analysis/         — обробка зібраних даних: прогноз
 monitoring/       — відстеження календаря релізів, тригери на нові дані;
                     official_calendars.py (ECB/BOJ/Statistics Bureau/FOMC —
                     дата-анкер там, де FRED не покриває), speeches.py
-                    (виступи членів ЦБ), crosscheck_macro.py (FRED↔BLS)
+                    (виступи членів ЦБ), crosscheck_macro.py (FRED↔BLS),
+                    crosscheck_quotes.py (акції↔Yahoo, крипта↔CoinGecko),
+                    САМОКОНТРОЛЬ: evaluate_outcomes.py+outcomes.py
+                    (журнал наслідків — чи агент був правий),
+                    output_health.py (детектор вироджених виводів —
+                    рядки є, а значення однакові)
 reporting/         — генерація коротких звітів і списків активів
                     (_common.py — спільний бойлерплейт notify-скриптів)
 orchestration/    — автозапуск усього конвеєра за розкладом (APScheduler);
@@ -361,6 +366,21 @@ docker compose exec app python reporting/candidates_notify.py
 docker compose exec app python analysis/crypto_screening/run_screening.py
 docker compose exec app python analysis/crypto_screening/monitor_candidates.py
 
+# САМОКОНТРОЛЬ (2026-10-15). Наслідки рішень: що фактично сталося
+# з тим, що агент радив подивитись (горизонт OUTCOME_HORIZON_DAYS)
+docker compose exec app python monitoring/evaluate_outcomes.py --dry-run
+docker compose exec app python reporting/outcomes_notify.py --dry-run
+
+# Чи виводи не виродились (рядки є, а значення однакові — домінантний
+# клас дефектів цього проєкту). Telegram лише при ЗМІНІ стану
+docker compose exec app python monitoring/output_health.py
+
+# Звірка котирувань із другим джерелом (акції ↔ Yahoo, крипта ↔ CoinGecko)
+docker compose exec app python monitoring/crosscheck_quotes.py
+
+# Календар звітності компаній (Nasdaq) — прицільний каталізатор акцій
+docker compose exec app python data-ingestion/run_collect_earnings.py
+
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
 
@@ -402,7 +422,7 @@ docker compose exec app python orchestration/register_telegram_commands.py
 (записи 2026-10-11 … 2026-10-13), склад джоб — docs/jobs.md.
 
 **Головні числа:** джоб 54 → **48**, щохвилинних 8 → **2**, файлів
-логів ~12 000/добу → **~50**, тестів **1374**.
+логів ~12 000/добу → **~50**, тестів **1442**.
 
 ⚠️ **ЩО ТРЕБА ЗНАТИ ПЕРЕД ЗМІНАМИ** — дефекти, знайдені вимірюванням,
 а не оглядом коду. Кожен виглядав як робочий код і тихо нічого не
