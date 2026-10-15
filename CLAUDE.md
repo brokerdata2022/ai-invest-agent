@@ -11,7 +11,7 @@
 ## З ЧОГО ПОЧИНАТИ НОВУ СЕСІЮ
 
 Останній великий етап закрито 2026-10-13 (коміт `db8e513`): усі пункти
-`PLAN.md` виконані, 1457 тестів проходять, 54 джоби працюють за
+`PLAN.md` виконані, 1483 тести проходять, 54 джоби працюють за
 розкладом.
 
 **Прочитати перед будь-якою зміною — у цьому порядку:**
@@ -381,6 +381,13 @@ docker compose exec app python monitoring/crosscheck_quotes.py
 # Календар звітності компаній (Nasdaq) — прицільний каталізатор акцій
 docker compose exec app python data-ingestion/run_collect_earnings.py
 
+# ПРЯМЕ СПІЛКУВАННЯ (2026-10-15): питання до агента з його ж даних.
+# У Telegram — /ask або просто текст; тут — вручну
+docker compose exec app python analysis/assistant/answer_question.py \
+  --question "що зараз із золотом і чому?"
+docker compose exec app python analysis/assistant/answer_question.py \
+  --question "що по BX?" --show-context
+
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
 
@@ -422,7 +429,7 @@ docker compose exec app python orchestration/register_telegram_commands.py
 (записи 2026-10-11 … 2026-10-13), склад джоб — docs/jobs.md.
 
 **Головні числа:** джоб 54 → **48**, щохвилинних 8 → **2**, файлів
-логів ~12 000/добу → **~50**, тестів **1457**.
+логів ~12 000/добу → **~50**, тестів **1483**.
 
 ⚠️ **ЩО ТРЕБА ЗНАТИ ПЕРЕД ЗМІНАМИ** — дефекти, знайдені вимірюванням,
 а не оглядом коду. Кожен виглядав як робочий код і тихо нічого не
