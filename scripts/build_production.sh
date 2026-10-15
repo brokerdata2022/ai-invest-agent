@@ -169,7 +169,7 @@ echo "  · обов'язкові файли на місці"
 
 echo
 echo "✅ Готово. Далі:"
-echo "     docker compose exec app pytest -q      # 1354 тести (той самий код)"
+echo "     docker compose exec app pytest -q      # усі тести (той самий код)"
 echo "     git -C production status"
 echo "     git -C production add -A && git -C production commit -m '…'"
 echo "     git -C production push"
