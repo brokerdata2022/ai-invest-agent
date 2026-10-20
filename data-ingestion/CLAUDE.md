@@ -15,7 +15,16 @@ commodities/ — товарні watchlist-активи БЕЗ щоденного
                газ, tradingeconomics_adapter.py — скрапінг,
                2026-10-04, critical rule 7 CLAUDE.md)
 crypto/      — крипта: спот (Binance, CoinGecko) + ф'ючерси для
-               crypto_screening (Binance/Bybit/OKX Futures adapters)
+               crypto_screening (Binance/Bybit/OKX Futures adapters) +
+               факторні ряди (2026-10-20): он-чейн (CoinMetrics,
+               звірка blockchain.info/Etherscan), потоки в ETF
+               (Farside), TVL Solana (DefiLlama)
+weather/     — прогноз погоди для товарів (Open-Meteo, звірка MET
+               Norway); indices.py — ДЕ дивитись і як згорнути добові
+               значення в індекс (HDD для газу, заморозки/опади для кави)
+factor_sources.py / run_collect_factors.py — збір усіх ФАКТОРНИХ рядів
+               (`config.FACTOR_SERIES`): специфічні дані активів разом
+               із другими джерелами для звірки (джоба factor_series)
 news/        — новинні стрічки (GDELT, RSS) + queries.py/rss_feeds.py
 common/      — спільний інтерфейс адаптера (adapter.py/news_adapter.py)
                і шар збереження (db.py/news_db.py/watchlist_db.py —
@@ -126,6 +135,20 @@ docker compose exec app pytest
 | Новини (широкий потік) | GDELT DOC 2.0 | агрегатор | `news/gdelt_adapter.py` | **найненадійніше джерело проєкту.** Регулярні 429 на спільному IP + МʼЯКИЙ троттл (HTTP 200 з тілом `{}`, який до 2026-10-05 читався як "немає новин" і тихо вбивав потік `general` на тижні). Тепер: глобальний міжпроцесний ліміт 1 запит/6с (`common/rate_limit.py`), довгі бекофи, мʼякий троттл піднімає помилку. Єдине джерело, що вміє ЦІЛЬОВИЙ запит ("лише про золото"), але з 2026-10-12 **демотоване з опори на доповнення**: провалило всі 4 прогони за добу (потік `watchlist` — 0 статей), тож `exit(1)` знято, а резервом став ПОШУК у власному RSS-корпусі (`config.WATCHLIST_MATCH_TERMS`). ⚠️ На новому IP (VPS) перевірити, чи бан діє — він за IP, не за ключем |
 | Новини (офіційні + редакційні) | RSS: Fed/ECB/BOJ + BBC/Al Jazeera/Guardian/NPR/Sky News/DW | першоджерела + агрегатори | `news/rss_adapter.py`, `news/rss_feeds.py` | найнадійніше; широкі фіди замінили курований GDELT-запит для geopolitical (docs/decisions.md 2026-09-27) |
 | Новини (ринок/бізнес, потік `general`) | RSS: CNBC/MarketWatch/Investing.com/BBC Business/Guardian Business/NPR Business/FT | агрегатори | `news/rss_adapter.py`, `news/rss_feeds.py` | **резерв потоку `general`, якого до 2026-10-05 не було взагалі** — потік стояв на одному GDELT і помер разом із ним (docs/decisions.md). ~140 статей/прогін, без лімітів запитів. Nasdaq перевірку пройшов, але в прогонах таймаутив — не включений. Yahoo Finance видалено 2026-10-11 (404 щопрогону; робоча альтернатива віддає рекламний клікбейт) |
+| Запаси нафти/газу США (факторні ряди) | EIA API v2 | офіційне першоджерело | `commodities/eia_adapter.py` | `EIA_API_KEY` обовʼязковий (DEMO_KEY вичерпується за кілька запитів). Звірка — тижнева ЗМІНА з TradingEconomics (`TradingEconomicsIndicatorAdapter`), не рівень: живо −8 557 проти −8.56 млн |
+| Золото в GLD | SPDR (архів емітента, xlsx) | першоджерело | `commodities/spdr_gld_adapter.py` | одне джерело (власна книга емітента); xlsx читається stdlib, Excel-шум float чиститься через `repr(float)` |
+| Потоки в спотові BTC/ETH-ETF | Farside (скрапінг) | неофіційне | `crypto/farside_adapter.py` | одне джерело; останній рядок із "-" там, де напередодні було число, — день не закритий, пропускається |
+| Он-чейн BTC/ETH (транзакції за добу) | CoinMetrics Community | агрегатор | `crypto/coinmetrics_adapter.py` | без ключа; для SOL мережевих метрик безкоштовно НЕМАЄ. Звірка: blockchain.info (BTC, лаг ~6 днів, розкид ≤1.8%), Etherscan CSV (ETH, точний збіг) |
+| TVL Solana | DefiLlama | агрегатор | `crypto/defillama_adapter.py` | одне джерело; поточна (незакрита) доба відкидається |
+| Погода для газу й кави | Open-Meteo + MET Norway | агрегатор + офіційна метеослужба | `weather/open_meteo_adapter.py`, `weather/met_norway_adapter.py` | MET вимагає User-Agent із контактом; розкид моделей — невизначеність прогнозу, тривоги немає (`alert=False`) |
+| Видобуток OPEC/Сауд. Аравії, газ і СПГ США | EIA STEO (той самий API) | офіційне першоджерело | `commodities/eia_adapter.py` | лише історичні місяці — прогноз STEO відкидається; Сауд. Аравія звіряється з TE (`TradingEconomicsPeriodAdapter`, розрив методик 3-5%); одна повторна спроба на зависання api.eia.gov (~1 з 5 запитів) |
+| Сертифіковані запаси кави | ICE (xls BIFF) | першоджерело (біржа) | `commodities/ice_coffee_adapter.py` | потрібен `xlrd`; у неторговий день 404 — адаптер іде назад по датах |
+| Оцінки врожаю кави | USDA FAS PSD (архів zip) | офіційне першоджерело | `commodities/usda_psd_adapter.py` | без ключа (REST API вимагає ключ USDA); переглядається двічі на рік — подієвий ряд |
+| Золото в IAU | iShares (сторінка емітента) | першоджерело | `commodities/ishares_iau_adapter.py` | JSON в атрибутах HTML, екранований; перевірка тонни ↔ унції |
+| Золоті резерви ЦБ (Китай, Польща) | TradingEconomics | агрегатор (WGC/МВФ) | `commodities/tradingeconomics_adapter.py` (`TradingEconomicsPeriodAdapter`) | щокварталу; зі сторінки дві точки (поточна й попередня) |
+| Інтервенції Японії | Мінфін Японії (CSV) | офіційне першоджерело | `macro/mof_japan_adapter.py` | CP932; рік у рядках кварталу переноситься; подієвий ряд, денні дані із запізненням до 3 міс. |
+| Стейкінг ETH | консенсусний шар Ethereum (Lighthouse, publicnode) | дані блокчейну | `crypto/beacon_staking_adapter.py` | Lighthouse-ендпоінт `validator_inclusion/{epoch}/global`; один вузол |
+| Транзакції Solana | 2 RPC-вузли (publicnode + офіційний) | дані блокчейну | `crypto/solana_rpc_adapter.py` | фіксоване вікно 240 зразків — інакше вузли не співставні (живо 12%) |
 
 **Правило:** для будь-якого джерела, позначеного "неофіційне"/"агрегатор",
 адаптер повинен явно обробляти й логувати помилки парсингу/зміни формату

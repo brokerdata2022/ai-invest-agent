@@ -88,6 +88,19 @@ docker compose exec db psql -U invest_agent -d invest_agent -c \
   crypto/bybit_futures_adapter.py, crypto/okx_futures_adapter.py) —
   ширший ринок за watchlist (не лише BTC/ETH/SOL), окремий трек від
   скринінгу акцій, деталі — `analysis/crypto_screening/`
+- **Специфічні дані активів (факторні ряди, 2026-10-20):** ✅ запаси
+  нафти й газу (EIA ↔ TradingEconomics), видобуток OPEC і Сауд. Аравії
+  (EIA STEO ↔ TE), видобуток і експорт СПГ США (STEO), потоки в
+  BTC/ETH-ETF (Farside), золото в GLD і IAU, резерви ЦБ Китаю й Польщі,
+  он-чейн BTC/ETH (CoinMetrics ↔ blockchain.info/Etherscan), стейкінг
+  ETH (Lighthouse), транзакції Solana (2 RPC-вузли), TVL Solana, запаси
+  ICE і врожай кави (USDA PSD), інтервенції Японії (Мінфін), мідь
+  (Yahoo ↔ TE), погода для газу й кави (Open-Meteo ↔ MET Norway).
+  Потрібен `EIA_API_KEY`. Реєстр —
+  `config.FACTOR_SERIES`; у промпті аналізу кожен такий чинник має
+  позначку довіри (звірено / одне джерело / розійшлись / застаріло).
+  Чек-лист активу без ручного в `ASSET_FACTORS` складає ШІ з каталогу
+  того, що є в БД (`analysis/fundamental/checklist.py`) — docs/decisions.md 2026-10-20
 - **Форекс/Товари поза watchlist-парами:** закрито як окрема задача
   (рішення користувача, 2026-09-26) — розширення переліку валютних
   пар/товарів понад watchlist (docs/watchlist.md) користувач вносить
@@ -137,6 +150,8 @@ data-ingestion/   — усе, що стосується ЗБОРУ сирих д
   companies/        — SEC EDGAR (фундаментал акцій)
   quotes/           — Twelve Data (ціни/обсяг акцій)
   crypto/           — Binance/CoinGecko (спот) + Binance/Bybit/OKX (ф'ючерси)
+                      + он-чейн, потоки в ETF, TVL (факторні ряди)
+  weather/          — прогноз погоди для газу й кави (Open-Meteo, MET Norway)
   commodities/      — TradingEconomics (товари, яким FRED не дає денної свіжості)
   reports/          — ТЕКСТ звітів 10-K/10-Q із SEC EDGAR
                       (sec_filings_adapter.py) — не цифри XBRL, а MD&A
@@ -377,6 +392,18 @@ docker compose exec app python monitoring/output_health.py
 
 # Звірка котирувань із другим джерелом (акції ↔ Yahoo, крипта ↔ CoinGecko)
 docker compose exec app python monitoring/crosscheck_quotes.py
+
+# СПЕЦИФІЧНІ ДАНІ АКТИВІВ (2026-10-20): збір факторних рядів разом із
+# джерелами звірки, потім звірка + свіжість → factor_verdicts
+docker compose exec app python data-ingestion/run_collect_factors.py --dry-run
+docker compose exec app python data-ingestion/run_collect_factors.py --limit 120
+docker compose exec app python monitoring/crosscheck_factors.py
+
+# Чек-лист чинників для активу без ручного (складає ШІ з каталогу БД,
+# код перевіряє кожен ключ). Промпт аналізу без виклику ШІ — --dry-run
+docker compose exec app python analysis/fundamental/build_checklist.py --dry-run
+docker compose exec app python analysis/fundamental/build_checklist.py --asset bnb
+docker compose exec app python analysis/fundamental/run_analysis.py --asset natgas --dry-run
 
 # Календар звітності компаній (Nasdaq) — прицільний каталізатор акцій
 docker compose exec app python data-ingestion/run_collect_earnings.py
