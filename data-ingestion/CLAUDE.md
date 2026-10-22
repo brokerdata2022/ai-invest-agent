@@ -26,7 +26,13 @@ factor_sources.py / run_collect_factors.py — збір усіх ФАКТОРН�
                (`config.FACTOR_SERIES`): специфічні дані активів разом
                із другими джерелами для звірки (джоба factor_series)
 news/        — новинні стрічки (GDELT, RSS) + queries.py/rss_feeds.py
-common/      — спільний інтерфейс адаптера (adapter.py/news_adapter.py)
+collect_watchlist.py — ціни списку обраних по `price_chain` КОЖНОГО
+               активу + звірка + вибір активного джерела (2026-10-22, було
+               в orchestration/jobs.py разом із хардкодом ланцюжків)
+common/      — спільний інтерфейс адаптера (adapter.py/news_adapter.py);
+               asset_profile.py + profile_lookup.py — ПРОФІЛЬ активу
+               (клас, назва/CIK, терміни пошуку, ланцюжок джерел) для
+               `/watchlist_add` і backfill_watchlist_profile.py (2026-10-22);
                і шар збереження (db.py/news_db.py/watchlist_db.py —
                таблиця watchlist_assets, єдине джерело істини для
                news/queries.py + analysis/news_analysis/prices.py +
@@ -132,7 +138,7 @@ docker compose exec app pytest
 | Крипта (спот, ціна/обсяг) | Binance public API | першоджерело (біржа) | `crypto/binance_adapter.py` | без ключа |
 | Крипта (market cap) + срібло | CoinGecko | агрегатор | `crypto/coingecko_adapter.py` | без ключа; срібло — проксі через kinesis-silver |
 | Крипта (ф'ючерси — universe/funding/OI/обсяг, для crypto_screening) | Binance + Bybit + OKX Futures | першоджерела (біржі) | `crypto/binance_futures_adapter.py`, `crypto/bybit_futures_adapter.py`, `crypto/okx_futures_adapter.py` | без ключа; одиниці різняться між біржами (OKX volCcy24h/oiCcy — у базовій валюті, не USDT) — 2 живі баги знайдено й виправлено, docs/decisions.md 2026-09-27 |
-| Новини (широкий потік) | GDELT DOC 2.0 | агрегатор | `news/gdelt_adapter.py` | **найненадійніше джерело проєкту.** Регулярні 429 на спільному IP + МʼЯКИЙ троттл (HTTP 200 з тілом `{}`, який до 2026-10-05 читався як "немає новин" і тихо вбивав потік `general` на тижні). Тепер: глобальний міжпроцесний ліміт 1 запит/6с (`common/rate_limit.py`), довгі бекофи, мʼякий троттл піднімає помилку. Єдине джерело, що вміє ЦІЛЬОВИЙ запит ("лише про золото"), але з 2026-10-12 **демотоване з опори на доповнення**: провалило всі 4 прогони за добу (потік `watchlist` — 0 статей), тож `exit(1)` знято, а резервом став ПОШУК у власному RSS-корпусі (`config.WATCHLIST_MATCH_TERMS`). ⚠️ На новому IP (VPS) перевірити, чи бан діє — він за IP, не за ключем |
+| Новини (широкий потік) | GDELT DOC 2.0 | агрегатор | `news/gdelt_adapter.py` | **найненадійніше джерело проєкту.** Регулярні 429 на спільному IP + МʼЯКИЙ троттл (HTTP 200 з тілом `{}`, який до 2026-10-05 читався як "немає новин" і тихо вбивав потік `general` на тижні). Тепер: глобальний міжпроцесний ліміт 1 запит/6с (`common/rate_limit.py`), довгі бекофи, мʼякий троттл піднімає помилку. Єдине джерело, що вміє ЦІЛЬОВИЙ запит ("лише про золото"), але з 2026-10-12 **демотоване з опори на доповнення**: провалило всі 4 прогони за добу (потік `watchlist` — 0 статей), тож `exit(1)` знято, а резервом став ПОШУК у власному RSS-корпусі (`watchlist_assets.news_patterns`). ⚠️ На новому IP (VPS) перевірити, чи бан діє — він за IP, не за ключем |
 | Новини (офіційні + редакційні) | RSS: Fed/ECB/BOJ + BBC/Al Jazeera/Guardian/NPR/Sky News/DW | першоджерела + агрегатори | `news/rss_adapter.py`, `news/rss_feeds.py` | найнадійніше; широкі фіди замінили курований GDELT-запит для geopolitical (docs/decisions.md 2026-09-27) |
 | Новини (ринок/бізнес, потік `general`) | RSS: CNBC/MarketWatch/Investing.com/BBC Business/Guardian Business/NPR Business/FT | агрегатори | `news/rss_adapter.py`, `news/rss_feeds.py` | **резерв потоку `general`, якого до 2026-10-05 не було взагалі** — потік стояв на одному GDELT і помер разом із ним (docs/decisions.md). ~140 статей/прогін, без лімітів запитів. Nasdaq перевірку пройшов, але в прогонах таймаутив — не включений. Yahoo Finance видалено 2026-10-11 (404 щопрогону; робоча альтернатива віддає рекламний клікбейт) |
 | Запаси нафти/газу США (факторні ряди) | EIA API v2 | офіційне першоджерело | `commodities/eia_adapter.py` | `EIA_API_KEY` обовʼязковий (DEMO_KEY вичерпується за кілька запитів). Звірка — тижнева ЗМІНА з TradingEconomics (`TradingEconomicsIndicatorAdapter`), не рівень: живо −8 557 проти −8.56 млн |

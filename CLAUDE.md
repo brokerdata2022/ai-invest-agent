@@ -431,6 +431,28 @@ docker compose exec app python orchestration/run_job.py --list
 # Разово (і після кожної нової джоби) зареєструвати їх у "/"-меню бота:
 docker compose exec app python orchestration/register_telegram_commands.py
 
+# ПРОФІЛЬ АКТИВУ (2026-10-22): тип, назва/CIK, терміни пошуку й
+# ланцюжок джерел — у рядку watchlist_assets, не в коді (охоронець —
+# analysis/tests/test_no_hardcoded_assets.py). Разово для активів,
+# доданих до цієї зміни; далі /watchlist_add робить це сам
+docker compose exec app python data-ingestion/backfill_watchlist_profile.py --dry-run
+# Онбординг активу: історія цін → (акція) SEC + 10-K/10-Q → чек-лист.
+# Запускається сам після /watchlist_add; --dry-run — без ШІ
+docker compose exec app python orchestration/onboard_asset.py --asset skyd --dry-run
+
+# Дані компанії для акцій списку: 8-K, Form 4, консенсус аналітиків і
+# free float (3 джерела зі звіркою) — щодня 06:10 (джоба company_data)
+docker compose exec app python data-ingestion/collect_company_data.py --ticker SKYD
+# Звітність ЗА ПОДІЄЮ: відзвітували → 10-Q/10-K у SEC → фундаментал до
+# скринінгу (джоба earnings_filings, 04:20)
+docker compose exec app python data-ingestion/collect_reported_filings.py --dry-run
+# Чому склад скринінгу не змінюється — склад між прогонами, давність
+# звітності, "звіт вийшов, цифр немає" (лише читає БД)
+docker compose exec app python analysis/screening/diagnose_stability.py
+# Сесійний бриф (за 45 хв до відкриття): список торгів → синтез →
+# Telegram одразу. --dry-run — без ШІ, без запису, без Telegram
+docker compose exec app python orchestration/session_brief.py --session us --dry-run
+
 # Редагування watchlist через Telegram (/watchlist_list,
 # /watchlist_add GBP/USD або /watchlist_add BNB, /watchlist_remove gbpusd) —
 # пробує Twelve Data, потім Binance spot на тому самому тикері (не
