@@ -313,7 +313,10 @@ docker compose exec app python analysis/trading_list/run_trading_list.py
 docker compose exec app python reporting/trading_list_notify.py
 
 # Розгорнутий аналіз активів за ЇХНІМИ чинниками (watchlist) +
-# звітність топ-акцій. Один актив для перевірки: --asset xauusd
+# звітність топ-акцій. Один актив для перевірки: --asset xauusd.
+# З 2026-10-24 — два етапи: кожен актив DeepSeek (гейт змін: без нових
+# входів модель не викликається; --force — оминути), потім ОДИН
+# вердикт Anthropic по всіх. --dry-run показує рішення гейту по активу
 docker compose exec app python analysis/fundamental/run_analysis.py
 docker compose exec app python reporting/fundamental_notify.py
 
@@ -330,6 +333,12 @@ docker compose exec app python analysis/fundamental/analyze_filings.py --top 5 -
 docker compose exec app python analysis/forecasting/synthesize_policy_rate.py --dry-run --bank fed
 docker compose exec app python analysis/forecasting/synthesize_policy_rate.py
 docker compose exec app python reporting/policy_rate_notify.py
+
+# ПІДСУМОК ВИХІДНИХ (2026-10-24): неділя 20:30 — що може дати геп у
+# понеділок. У вихідні й свята аналізи закритих ринків не робляться
+# (common/market_hours.py, ключі markets/session/after_session у schedule.py)
+docker compose exec app python analysis/news_analysis/weekend_wrap.py --dry-run
+docker compose exec app python reporting/weekend_wrap_notify.py --dry-run
 
 # Сесійний ШІ-аналіз ринку (3 рази/добу за часом відкриття сесій)
 docker compose exec app python analysis/news_analysis/synthesize_market.py --session us
