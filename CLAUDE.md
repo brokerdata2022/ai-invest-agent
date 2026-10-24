@@ -423,6 +423,10 @@ docker compose exec app python analysis/assistant/answer_question.py \
   --question "що зараз із золотом і чому?"
 docker compose exec app python analysis/assistant/answer_question.py \
   --question "що по BX?" --show-context
+# «аналіз / розбір + актив» — повний розбір за чинниками (2026-10-24;
+# автоматично о 14:10 приходить лише загальний вердикт)
+docker compose exec app python analysis/assistant/answer_question.py \
+  --question "повний аналіз золота"
 
 # Прогнати всі тести (data-ingestion + reporting + analysis)
 docker compose exec app pytest -q
